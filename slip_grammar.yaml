@@ -1,0 +1,330 @@
+# slip.yaml (v6 - Final & Corrected)
+# This grammar now precisely adheres to the "1:1 Abstract Syntax Tree (AST)"
+# principle for SLIP, ensuring infix operators and assignments are represented
+# as flat sequences of instruction/value nodes.
+
+start_rule: program
+
+rules:
+  #-----------------------------------------------------------------------------
+  # Top-Level Structure
+  #-----------------------------------------------------------------------------
+
+  program:
+    ast: { tag: "code" }
+    sequence:
+      - { rule: _ }
+      - { rule: expression_list, ast: { name: "expressions" } }
+      - { rule: _ }
+
+  expression_list:
+    ast: { promote: true } # Produces a flat list of expressions
+    sequence:
+      - rule: expression
+      - zero_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: __ }
+            - rule: expression
+
+  expression:
+    # An expression is a flat list of nodes.
+    # It can be an assignment sequence or a simple call chain.
+    ast: { promote: true }
+    choice:
+      - rule: assignment_expression
+      - rule: call_chain
+      # A single value (e.g., just "10" on a line) is also a valid expression
+      - rule: value
+
+  #-----------------------------------------------------------------------------
+  # Call Structures - NOW FLAT
+  #-----------------------------------------------------------------------------
+
+  call_chain:
+    # A call chain produces a flat list of elements:
+    # [head, operator, next_head, operator, next_head, ...]
+    ast: { promote: true }
+    sequence:
+      - rule: chain_head
+      - zero_or_more:
+          ast: { promote: true } # Promotes the operator and next head into the parent's list
+          sequence:
+            - { rule: __ }
+            - rule: infix_operator # Now explicitly tagged as piped-path
+            - { rule: __ }
+            - rule: chain_head
+
+  chain_head:
+    # The start of a chain can be a prefix call or a simple value.
+    ast: { promote: true }
+    choice:
+      - rule: prefix_call
+      - rule: value
+
+  prefix_call:
+    # A prefix call is a structured node representing the function and its arguments.
+    ast: { tag: "call" }
+    sequence:
+      - { rule: path, ast: { name: "function" } } # Function is a structured path
+      - one_or_more:
+          ast: { name: "arguments", promote: true } # Arguments are a flat list
+          sequence:
+            - { rule: __ }
+            - { rule: value }
+
+  value:
+    # Any literal, group, block, or structured path can be a value.
+    ast: { promote: true }
+    choice:
+      - rule: literal
+      - rule: evaluation_group
+      - rule: code_block
+      - rule: list_constructor
+      - rule: dict_constructor
+      - rule: env_constructor
+      - rule: path # A structured path can also be a value
+
+  #-----------------------------------------------------------------------------
+  # Assignment Expression - NOW FLAT
+  #-----------------------------------------------------------------------------
+
+  assignment_expression:
+    # An assignment is a flat list starting with the setter instruction,
+    # followed by the entire value chain.
+    # E.g., [ {'tag': 'set-path', ...}, {value_node}, {operator_node}, {value_node}, ... ]
+    ast: { promote: true }
+    sequence:
+      - { rule: setter }
+      - { rule: __ }
+      - { rule: call_chain }
+
+  setter:
+    # This rule creates the initial instruction node (e.g., set-path, multi-set, dynamic-set).
+    ast: { promote: true }
+    sequence:
+      - { rule: assignment_target_syntax } # Match the syntax
+      - { rule: _ }
+      - { literal: ":" }
+
+  assignment_target_syntax:
+    # This rule applies the specific AST tag for the setter instruction.
+    ast: { promote: true } # Promote the actual target structure
+    choice:
+      - { rule: path, ast: { tag: "set-path" } } # Simple path: x:
+      - rule: destructuring_setter # [x, y]:
+      - rule: dynamic_setter # (get_path):
+
+  destructuring_setter:
+    ast: { tag: "multi-set" } # AST tag for destructuring assignment
+    sequence:
+      - { literal: "[" }
+      - { rule: _ }
+      - {
+          rule: comma_separated_destructuring_targets,
+          ast: { name: "targets" },
+        }
+      - { rule: _ }
+      - { literal: "]" }
+
+  comma_separated_destructuring_targets:
+    ast: { promote: true }
+    optional:
+      sequence:
+        - { rule: path, ast: { tag: "set-path" } } # Each target is a set-path instruction
+        - zero_or_more:
+            ast: { promote: true }
+            sequence:
+              - { rule: _ }
+              - { literal: "," }
+              - { rule: _ }
+              - { rule: path, ast: { tag: "set-path" } }
+
+  dynamic_setter:
+    ast: { tag: "dynamic-set" } # AST tag for dynamic assignment
+    sequence:
+      - { literal: "(" }
+      - { rule: _ }
+      - { rule: expression, ast: { name: "expression" } } # Expression to get the target path
+      - { rule: _ }
+      - { literal: ")" }
+
+  #-----------------------------------------------------------------------------
+  # Structured Path Nodes
+  #-----------------------------------------------------------------------------
+
+  path:
+    # A path is a structured node representing segments (name, dot access, index access).
+    # E.g., { tag: "path", children: [{tag: "segment", text: "user"}, {tag: "dot_access", text: "name"}] }
+    ast: { tag: "path" }
+    sequence:
+      - rule: path_segment_start # First segment (can be piped)
+      - zero_or_more:
+          ast: { promote: true } # Promotes subsequent access segments into path's children
+          choice:
+            - rule: dot_access_segment
+            - rule: index_access_segment
+            # Slice access is covered by index_access_segment (e.g., items[1:3])
+            # The regex for index_access_segment would need to allow ':'
+
+  path_segment_start:
+    # The initial name segment of a path, optionally piped.
+    ast: { tag: "segment" }
+    sequence:
+      - optional: { literal: "|", ast: { tag: "is_piped" } } # Tags if the segment is piped
+      - regex: "[a-zA-Z_][a-zA-Z0-9_]*" # The actual name part (e.g., 'user', 'my_func')
+
+  dot_access_segment:
+    ast: { tag: "segment" }
+    sequence:
+      - literal: "."
+      - regex: "[a-zA-Z_][a-zA-Z0-9_]*" # The property name (e.g., 'name' in 'user.name')
+
+  index_access_segment:
+    ast: { tag: "index_access" }
+    sequence:
+      - literal: "["
+      - { rule: _ }
+      # An index or slice value is an expression.
+      # The regex must allow for numbers and optionally a colon for slices.
+      # For now, simplifying to allow expression, full slice syntax would need more rules.
+      - { rule: expression, ast: { name: "index_value" } }
+      - { rule: _ }
+      - literal: "]"
+
+  #-----------------------------------------------------------------------------
+  # Infix Operators / Piped Path Literals
+  #-----------------------------------------------------------------------------
+
+  infix_operator:
+    # These are recognized as specific tokens that trigger "piped-path" behavior.
+    ast: { leaf: true, tag: "piped-path" }
+    choice:
+      - regex: "\\|[a-zA-Z_][a-zA-Z0-9_]*" # Explicit piped paths like |map
+      - regex: "[+\\-*<>=/]" # Common infix operators like + (will be text: "+")
+
+  #-----------------------------------------------------------------------------
+  # Grouping and Constructors (AST unchanged, rules slightly refined for consistency)
+  #-----------------------------------------------------------------------------
+
+  evaluation_group:
+    ast: { tag: "group" }
+    sequence:
+      - { literal: "(" }
+      - { rule: _ }
+      - { rule: expression_list, ast: { name: "expressions" } }
+      - { rule: _ }
+      - { literal: ")" }
+
+  code_block:
+    ast: { tag: "code" }
+    sequence:
+      - { literal: "[" }
+      - { rule: _ }
+      - { rule: expression_list, ast: { name: "expressions" } }
+      - { rule: _ }
+      - { literal: "]" }
+
+  list_constructor:
+    ast: { tag: "list" }
+    sequence:
+      - { literal: "#[" }
+      - { rule: _ }
+      - { rule: comma_separated_expressions, ast: { name: "items" } }
+      - { rule: _ }
+      - { literal: "]" }
+
+  dict_constructor:
+    ast: { tag: "dict" }
+    sequence:
+      - { literal: "{" }
+      - { rule: _ }
+      - { rule: comma_separated_pairs, ast: { name: "pairs" } }
+      - { rule: _ }
+      - { literal: "}" }
+
+  env_constructor:
+    ast: { tag: "env" }
+    sequence:
+      - { literal: "#{" }
+      - { rule: _ }
+      - { rule: comma_separated_pairs, ast: { name: "pairs" } }
+      - { rule: _ }
+      - { literal: "}" }
+
+  comma_separated_expressions:
+    ast: { promote: true }
+    optional:
+      sequence:
+        - rule: expression
+        - zero_or_more:
+            ast: { promote: true }
+            sequence:
+              - { rule: _ }
+              - { literal: "," }
+              - { rule: _ }
+              - rule: expression
+
+  comma_separated_pairs:
+    ast: { promote: true }
+    optional:
+      sequence:
+        - rule: pair
+        - zero_or_more:
+            ast: { promote: true }
+            sequence:
+              - { rule: _ }
+              - { literal: "," }
+              - { rule: _ }
+              - rule: pair
+
+  pair:
+    ast: { tag: "pair" }
+    sequence:
+      - { rule: path, ast: { name: "key" } } # Key is a structured path
+      - { rule: _ }
+      - { literal: ":" }
+      - { rule: _ }
+      - { rule: expression, ast: { name: "value" } }
+
+  #-----------------------------------------------------------------------------
+  # Literals
+  #-----------------------------------------------------------------------------
+
+  literal:
+    ast: { promote: true }
+    choice:
+      - rule: string_literal
+      - rule: number_literal
+
+  string_literal:
+    ast: { leaf: true, tag: "string" }
+    choice:
+      - regex: '"(\\\\"|[^"])*"'
+      - regex: "'(\\\\'|[^'])*'"
+
+  number_literal:
+    ast: { leaf: true, tag: "number", type: "number" }
+    regex: "-?\\d+(\\.\\d+)?"
+
+  #-----------------------------------------------------------------------------
+  # Whitespace and Comments (Unchanged)
+  #-----------------------------------------------------------------------------
+
+  _:
+    ast: { discard: true }
+    regex: "[ \\t]*"
+
+  __:
+    ast: { discard: true }
+    one_or_more:
+      choice:
+        - { regex: "[ \\t]+" }
+        - { literal: "\n" }
+        - rule: comment
+
+  comment:
+    ast: { discard: true }
+    sequence:
+      - { literal: "//" }
+      - { regex: ".*" }
