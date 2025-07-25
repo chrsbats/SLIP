@@ -1,280 +1,510 @@
-# test_parser.py
-import unittest
-import json
-from koine import Parser
+import pytest
 import yaml
+from pathlib import Path
+from koine import Parser
 
-class TestSlipParser(unittest.TestCase):
+# --- Test Setup and Fixtures ---
 
-    @classmethod
-    def setUpClass(cls):
-        grammar_path='slip_grammar.yaml'
-        """Load the grammar and instantiate the parser once for all tests."""
-        with open(grammar_path, 'r') as f:
-            grammar = yaml.safe_load(f)
-        cls.parser = Parser(grammar)
+@pytest.fixture(scope="module")
+def parser():
+    """Loads the SLIP grammar and returns a Parser instance."""
+    grammar_path = Path(__file__).parent / "slip_grammar.yaml"
+    with grammar_path.open() as f:
+        grammar_def = yaml.safe_load(f)
 
-    def _assert_parses_to(self, source, expected_ast):
-        """Helper method to parse and compare ASTs."""
-        result = self.parser.parse(source.strip())
-        self.assertEqual(result['status'], 'success', f"Parsing failed for: {source}\nMessage: {result.get('message')}")
-        
-        # The final AST is under the 'ast' key in the result
-        actual_ast = result.get('ast')
+    # Create the parser
+    p = Parser(grammar_def)
 
-        self.assertEqual(actual_ast, expected_ast, 
-                         f"\n\n--- For Input ---\n{source}"
-                         f"\n\n--- Expected AST ---\n{json.dumps(expected_ast, indent=2)}"
-                         f"\n\n--- Got AST ---\n{json.dumps(actual_ast, indent=2)}")
+    return p
 
-    def test_simple_assignment(self):
-        source = "x: 10"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [ # This is the assignment_expression (a flat list)
-                    {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'x'}]}, # 'x' is now a structured path
-                    {'tag': 'number', 'text': '10', 'value': 10}
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+def clean_ast(node):
+    """
+    Recursively removes location info ('line', 'col') and verbose text from non-leaf
+    nodes to make AST comparison in tests simpler and more focused on structure.
+    """
+    if 'ast' in node: 
+        node = node['ast']
+    if isinstance(node, list):
+        return [clean_ast(n) for n in node]
+    if not isinstance(node, dict):
+        return node
 
-    def test_prefix_call(self):
-        source = "add 1 2"
-        expected = {
-            'tag': 'code',
-            'expressions': [{
-                'tag': 'call',
-                'function': {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'add'}]}, # 'add' is a structured path
-                'arguments': [
-                    {'tag': 'number', 'text': '1', 'value': 1},
-                    {'tag': 'number', 'text': '2', 'value': 2}
-                ]
-            }]
-        }
-        self._assert_parses_to(source, expected)
+    # It's a dict (an AST node)
+    new_node = {}
+    if 'tag' in node:
+        new_node['tag'] = node['tag']
 
-    def test_infix_chain_with_pipe(self):
-        source = "data |map [x * 2]"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [ # This is the call_chain (a flat list)
-                    {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'data'}]}, # 'data' is a structured path
-                    {'tag': 'piped-path', 'text': '|map'}, # |map is now a piped-path leaf
-                    {
-                        'tag': 'code',
-                        'expressions': [
-                            [ # Inner call_chain (flat list)
-                                {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'x'}]}, # 'x' structured path
-                                {'tag': 'piped-path', 'text': '*'}, # * is now a piped-path leaf
-                                {'tag': 'number', 'text': '2', 'value': 2}
-                            ]
-                        ]
-                    }
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # For leaf nodes, capture the essential value (typed or text)
+    if 'children' not in node:
+        if 'value' in node:
+            new_node['value'] = node['value']
+        elif 'tag' in node and node.get('tag') != 'pipe': # Leaf without a type, like a 'name'
+            new_node['text'] = node['text']
 
-    def test_assignment_with_infix_chain(self):
-        source = "result: 10 + 20"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [ # The assignment_expression (flat list)
-                    {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'result'}]}, # 'result' structured path
-                    {'tag': 'number', 'text': '10', 'value': 10},
-                    {'tag': 'piped-path', 'text': '+'}, # + is now a piped-path leaf
-                    {'tag': 'number', 'text': '20', 'value': 20}
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # For branch nodes, recurse on children
+    if 'children' in node:
+        new_node['children'] = clean_ast(node['children'])
 
-    def test_destructuring_assignment(self):
-        source = "[x, y]: #[10, 20]"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [ # The assignment_expression (flat list)
-                    {
-                        'tag': 'multi-set',
-                        'targets': [
-                            {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'x'}]},
-                            {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'y'}]}
-                        ]
-                    },
-                    {
-                        'tag': 'list',
-                        'items': [
-                            {'tag': 'number', 'text': '10', 'value': 10},
-                            {'tag': 'number', 'text': '20', 'value': 20}
-                        ]
-                    }
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    return new_node
 
-    def test_function_definition_as_assignment(self):
-        source = "double: fn [x] [x * 2]"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [ # The assignment_expression (flat list)
-                    {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'double'}]},
-                    {
-                        'tag': 'call',
-                        'function': {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'fn'}]},
-                        'arguments': [
-                            {
-                                'tag': 'code',
-                                'expressions': [
-                                    {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'x'}]}
-                                ]
-                            },
-                            {
-                                'tag': 'code',
-                                'expressions': [
-                                    [ # Inner call_chain (flat list)
-                                        {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'x'}]},
-                                        {'tag': 'piped-path', 'text': '*'},
-                                        {'tag': 'number', 'text': '2', 'value': 2}
-                                    ]
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+# --- Test Cases ---
 
-    def test_path_with_segment(self):
-        source = "user.name: \"John\""
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [
-                    {
-                        'tag': 'set-path',
-                        'children': [
-                            {'tag': 'segment', 'text': 'user'},
-                            {'tag': 'segment', 'text': 'name'}
-                        ]
-                    },
-                    {'tag': 'string', 'text': 'John'}
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+# Each entry is a tuple: (test_id, source_code, expected_cleaned_ast)
+# The expected AST is what `clean_ast` should produce.
+TEST_CASES = [
+    # ----------------------------------------------------------------
+    # Basic Structure & Comments
+    # ----------------------------------------------------------------
+    ("empty_program", "", {'tag': 'code', 'children': []}),
+    ("program_with_only_comments", """
+     // line comment
+     /* block comment */
+     """, {'tag': 'code', 'children': []}),
+    ("program_with_semicolon_and_newline", "a:1; b:2\n c:3", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [{'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'a'}]}, {'tag': 'number', 'value': 1}]},
+            {'tag': 'expr', 'children': [{'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'b'}]}, {'tag': 'number', 'value': 2}]},
+            {'tag': 'expr', 'children': [{'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'c'}]}, {'tag': 'number', 'value': 3}]},
+        ]
+    }),
+    ("program_with_trailing_separator", "a:1; \n", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'a'}]},
+                {'tag': 'number', 'value': 1}
+            ]}
+        ]
+    }),
+    ("comments_inline", "x: 1 /* block */ + 2 // line", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'x'}]},
+                {'tag': 'number', 'value': 1},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': '+'}]},
+                {'tag': 'number', 'value': 2},
+            ]}
+        ]
+    }),
 
-    def test_path_with_index_access(self):
-        source = "items[0]: 100"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [
-                    {
-                        'tag': 'set-path',
-                        'children': [
-                            {'tag': 'segment', 'text': 'items'},
-                            {
-                                'tag': 'index_access',
-                                'index_value': {'tag': 'number', 'text': '0', 'value': 0}
-                            }
-                        ]
-                    },
-                    {'tag': 'number', 'text': '100', 'value': 100}
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # ----------------------------------------------------------------
+    # Expressions (Flat & Grouped)
+    # ----------------------------------------------------------------
+    ("flat_infix_expression", "10 + 5 * 2", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'number', 'value': 10},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': '+'}]},
+                {'tag': 'number', 'value': 5},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': '*'}]},
+                {'tag': 'number', 'value': 2},
+            ]}
+        ]
+    }),
+    ("grouped_expression", "10 + (5 * 2)", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'number', 'value': 10},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': '+'}]},
+                {'tag': 'expr', 'children': [
+                    {'tag': 'number', 'value': 5},
+                    {'tag': 'path', 'children': [{'tag': 'name', 'text': '*'}]},
+                    {'tag': 'number', 'value': 2},
+                ]}
+            ]}
+        ]
+    }),
+    ("chained_prefix_is_flat", "add 1 add 2", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'add'}]},
+                {'tag': 'number', 'value': 1},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'add'}]},
+                {'tag': 'number', 'value': 2},
+            ]}
+        ]
+    }),
+    ("piped_expression", "data |map [x*2]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'data'}]},
+                {'tag': 'path', 'children': [
+                    {'tag': 'pipe'},
+                    {'tag': 'name', 'text': 'map'}
+                ]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'x'}]},
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': '*'}]},
+                        {'tag': 'number', 'value': 2},
+                    ]}
+                ]}
+            ]}
+        ]
+    }),
 
-    def test_path_with_nested_access(self):
-        source = "users[idx].settings: {theme: 'dark'}"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [
-                    {
-                        'tag': 'set-path',
-                        'children': [
-                            {'tag': 'segment', 'text': 'users'},
-                            {
-                                'tag': 'index_access',
-                                'index_value': {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'idx'}]}
-                            },
-                            {'tag': 'segment', 'text': 'settings'}
-                        ]
-                    },
-                    {
-                        'tag': 'dict',
-                        'pairs': [{
-                            'tag': 'pair',
-                            'key': {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'theme'}]},
-                            'value': {'tag': 'string', 'text': 'dark'}
-                        }]
-                    }
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # ----------------------------------------------------------------
+    # Literals
+    # ----------------------------------------------------------------
+    ("all_literals", "1 -2.5 'raw' \"interp\" `a.b` true false none", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'number', 'value': 1},
+                {'tag': 'number', 'value': -2.5},
+                {'tag': 'string', 'text': 'raw'},
+                {'tag': 'i-string', 'text': 'interp'},
+                {'tag': 'path-literal', 'children': [
+                    {'tag': 'name', 'text': 'a'},
+                    {'tag': 'name', 'text': 'b'},
+                ]},
+                {'tag': 'boolean', 'value': True},
+                {'tag': 'boolean', 'value': False},
+                {'tag': 'null', 'value': None},
+            ]}
+        ]
+    }),
 
-    def test_comment_is_ignored(self):
-        source = "x: 10 // this is a comment"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [
-                    {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'x'}]},
-                    {'tag': 'number', 'text': '10', 'value': 10}
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # ----------------------------------------------------------------
+    # Containers
+    # ----------------------------------------------------------------
+    ("container_literals", "#[1,2] {a:1} #{b:2} [c:3]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'list', 'children': [{'tag': 'number', 'value': 1}, {'tag': 'number', 'value': 2}]},
+                {'tag': 'dict', 'children': [
+                    {'tag': 'expr', 'children': [{'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'a'}]}, {'tag': 'number', 'value': 1}]}
+                ]},
+                {'tag': 'env', 'children': [
+                    {'tag': 'expr', 'children': [{'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'b'}]}, {'tag': 'number', 'value': 2}]}
+                ]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [{'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'c'}]}, {'tag': 'number', 'value': 3}]}
+                ]},
+            ]}
+        ]
+    }),
+    ("empty_containers", "#[] {} #{} [] ()", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'list', 'children': []},
+                {'tag': 'dict', 'children': []},
+                {'tag': 'env', 'children': []},
+                {'tag': 'code', 'children': []},
+                {'tag': 'expr', 'children': []},
+            ]}
+        ]
+    }),
 
-    def test_multi_line_expressions(self):
-        source = """
-        x: 1
-        y: "hello"
-        """
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                [
-                    {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'x'}]},
-                    {'tag': 'number', 'text': '1', 'value': 1}
-                ],
-                [
-                    {'tag': 'set-path', 'children': [{'tag': 'segment', 'text': 'y'}]},
-                    {'tag': 'string', 'text': 'hello'}
-                ]
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # ----------------------------------------------------------------
+    # Assignment
+    # ----------------------------------------------------------------
+    ("simple_assignment", "user.name: \"John\"", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [
+                    {'tag': 'name', 'text': 'user'},
+                    {'tag': 'name', 'text': 'name'}
+                ]},
+                {'tag': 'i-string', 'text': 'John'}
+            ]}
+        ]
+    }),
+    ("multiset_assignment", "[x, y]: #[1, 2]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'multi-set', 'children': [
+                    {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'x'}]},
+                    {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'y'}]}
+                ]},
+                {'tag': 'list', 'children': [{'tag': 'number', 'value': 1}, {'tag': 'number', 'value': 2}]}
+            ]}
+        ]
+    }),
+    ("dynamic_assignment", "(get-path): 1", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'expr', 'children': [
+                    {'tag': 'path', 'children': [{'tag': 'name', 'text': 'get-path'}]}
+                ]},
+                {'tag': 'number', 'value': 1}
+            ]}
+        ]
+    }),
 
-    def test_simple_value_expression(self):
-        source = "true"
-        expected = {
-            'tag': 'code',
-            'expressions': [
-                {'tag': 'path', 'children': [{'tag': 'segment', 'text': 'true'}]}
-            ]
-        }
-        self._assert_parses_to(source, expected)
+    # ----------------------------------------------------------------
+    # Paths
+    # ----------------------------------------------------------------
+    ("complex_path", "../data[i+1].(get-key)", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [
+                    {'tag': 'parent', 'text': '../'},
+                    {'tag': 'name', 'text': 'data'},
+                    {'tag': 'index', 'children': [
+                        {'tag': 'expr', 'children': [
+                            {'tag': 'path', 'children': [{'tag': 'name', 'text': 'i'}]},
+                            {'tag': 'path', 'children': [{'tag': 'name', 'text': '+'}]},
+                            {'tag': 'number', 'value': 1}
+                        ]}
+                    ]},
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'get-key'}]}
+                    ]}
+                ]}
+            ]}
+        ]
+    }),
+    ("path_slicing", "items[1:4] items[:3] items[5:] items[:]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [
+                    {'tag': 'name', 'text': 'items'},
+                    {'tag': 'slice', 'children': [
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 1}]},
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 4}]}
+                    ]}
+                ]},
+                {'tag': 'path', 'children': [
+                    {'tag': 'name', 'text': 'items'},
+                    {'tag': 'slice', 'children': [
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 3}]}
+                    ]}
+                ]},
+                {'tag': 'path', 'children': [
+                    {'tag': 'name', 'text': 'items'},
+                    {'tag': 'slice', 'children': [
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 5}]}
+                    ]}
+                ]},
+                {'tag': 'path', 'children': [
+                    {'tag': 'name', 'text': 'items'},
+                    {'tag': 'slice', 'children': []}
+                ]}
+            ]}
+        ]
+    }),
+    ("variadic_parameter", "fn [tags...] []", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'fn'}]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'tags...'}]}
+                    ]}
+                ]},
+                {'tag': 'code', 'children': []},
+            ]}
+        ]
+    }),
+    ("operator_path", "a + b / c", { # note / must be spaced
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'a'}]},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': '+'}]},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'b'}]},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': '/'}]},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'c'}]},
+            ]}
+        ]
+    }),
 
-    def test_empty_program(self):
-        source = ""
-        expected = {
-            'tag': 'code',
-            'expressions': []
-        }
-        self._assert_parses_to(source, expected)
+    # ----------------------------------------------------------------
+    # Assignment (Advanced)
+    # ----------------------------------------------------------------
+    ("assignment_to_slice", "items[1:3]: #[99]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [
+                    {'tag': 'name', 'text': 'items'},
+                    {'tag': 'slice', 'children': [
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 1}]},
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 3}]}
+                    ]}
+                ]},
+                {'tag': 'list', 'children': [{'tag': 'number', 'value': 99}]}
+            ]}
+        ]
+    }),
+    ("vectorized_assignment", "users[:10].is-active: false", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [
+                    {'tag': 'name', 'text': 'users'},
+                    {'tag': 'slice', 'children': [
+                        {'tag': 'expr', 'children': [{'tag': 'number', 'value': 10}]}
+                    ]},
+                    {'tag': 'name', 'text': 'is-active'}
+                ]},
+                {'tag': 'boolean', 'value': False}
+            ]}
+        ]
+    }),
+    ("parent_scope_assignment", "../counter: 1", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [
+                    {'tag': 'parent', 'text': '../'},
+                    {'tag': 'name', 'text': 'counter'}
+                ]},
+                {'tag': 'number', 'value': 1}
+            ]}
+        ]
+    }),
+    ("operator_definition", "/+: |add", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [
+                    {'tag': 'root', 'text': '/'},
+                    {'tag': 'name', 'text': '+'}
+                ]},
+                {'tag': 'path', 'children': [
+                    {'tag': 'pipe'},
+                    {'tag': 'name', 'text': 'add'}
+                ]}
+            ]}
+        ]
+    }),
+    ("empty_multiset_assignment", "[]: #[]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'multi-set', 'children': []},
+                {'tag': 'list', 'children': []}
+            ]}
+        ]
+    }),
 
+    # ----------------------------------------------------------------
+    # Paths (Advanced)
+    # ----------------------------------------------------------------
+    ("root_path_read", "/config.path", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [
+                    {'tag': 'root', 'text': '/'},
+                    {'tag': 'name', 'text': 'config'},
+                    {'tag': 'name', 'text': 'path'}
+                ]}
+            ]}
+        ]
+    }),
+    ("pwd_path_read", "./file", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [
+                    {'tag': 'pwd', 'text': './'},
+                    {'tag': 'name', 'text': 'file'}
+                ]}
+            ]}
+        ]
+    }),
+    ("nestable_block_comments", "a: /* outer /* inner */ outer */ 1", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'a'}]},
+                {'tag': 'number', 'value': 1}
+            ]}
+        ]
+    }),
 
-if __name__ == '__main__':
-    # This allows running the tests directly from the command line
-    unittest.main(argv=['first-arg-is-ignored'], exit=False)
+    # ----------------------------------------------------------------
+    # Integration Tests (common constructs)
+    # ----------------------------------------------------------------
+    ("full_function_definition", "double: fn [x] [ x * 2 ]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'double'}]},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'fn'}]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'x'}]}
+                    ]}
+                ]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'x'}]},
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': '*'}]},
+                        {'tag': 'number', 'value': 2}
+                    ]}
+                ]}
+            ]}
+        ]
+    }),
+    ("if_statement", "if condition [then] [else]", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'if'}]},
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'condition'}]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'then'}]}
+                    ]}
+                ]},
+                {'tag': 'code', 'children': [
+                    {'tag': 'expr', 'children': [
+                        {'tag': 'path', 'children': [{'tag': 'name', 'text': 'else'}]}
+                    ]}
+                ]}
+            ]}
+        ]
+    }),
+
+    # ----------------------------------------------------------------
+    # Core Primitives
+    # ----------------------------------------------------------------
+    ("del_statement", "del user.profile", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'del'}]},
+                {'tag': 'path', 'children': [
+                    {'tag': 'name', 'text': 'user'},
+                    {'tag': 'name', 'text': 'profile'}
+                ]}
+            ]}
+        ]
+    }),
+    ("return_statement", "return 42", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'return'}]},
+                {'tag': 'number', 'value': 42}
+            ]}
+        ]
+    }),
+    ("return_statement_no_value", "return", {
+        'tag': 'code', 'children': [
+            {'tag': 'expr', 'children': [
+                {'tag': 'path', 'children': [{'tag': 'name', 'text': 'return'}]}
+            ]}
+        ]
+    }),
+]
+
+# --- Pytest Test Function ---
+
+@pytest.mark.parametrize("test_id, source_code, expected_ast", TEST_CASES, ids=[t[0] for t in TEST_CASES])
+def test_parsing(parser: Parser, test_id: str, source_code: str, expected_ast: dict):
+    """
+    Parses a given source code string and compares the cleaned AST
+    against the expected AST structure.
+    """
+    try:
+        # On success, parser.parse() returns the AST dictionary directly.
+        result_ast = parser.parse(source_code)
+    except Exception as e:
+        # On failure, it should raise an exception.
+        # We use pytest.fail to provide a rich error message for unexpected failures.
+        pytest.fail(f"Parsing failed unexpectedly for '{test_id}':\n{e}", pytrace=False)
+
+    # Clean the resulting AST to remove location info for stable comparison
+    cleaned_result_ast = clean_ast(result_ast)
+    if cleaned_result_ast != expected_ast:
+        # When an assertion fails, print the cleaned AST for easier debugging.
+        import json
+        print("\n" + "="*20 + " AST Diff " + "="*20)
+        print(f"Test ID: {test_id}")
+        print("----- Actual (Cleaned) -----")
+        print(json.dumps(cleaned_result_ast, indent=2))
+        print("----- Expected -----")
+        print(json.dumps(expected_ast, indent=2))
+        print("="*50)
+
+    assert cleaned_result_ast == expected_ast

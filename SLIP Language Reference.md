@@ -82,7 +82,7 @@ In short, SLIP is chosen over restricted Python because it offers a fundamentall
 
 In SLIP, the parser produces an Abstract Syntax Tree (AST) that is a direct, 1:1 representation of the source code. It performs no semantic transformations like building a precedence tree for operators or rewriting function calls into a different form. This "dumb parser" approach radically simplifies the parser's role and makes the language's structure completely transparent.
 
-- **Smart Parsing:** While the parser is "dumb" about semantic precedence, it is "smart" about syntactic structure. It enforces a `prefix_call (pipe_chain)*` grammar, which means that an expression like `add 1 add 2` is a syntax error. This catches many common errors early, before the evaluator runs.
+- **Uniform Parsing of Expressions:** The parser treats all expressions as a simple, flat list of terms. It does not know if a path like `add` will evaluate to a function or a value. Therefore, an expression like `add 1 add 2` is **not a syntax error**. It is parsed successfully into a flat list. The `prefix_call (pipe_chain)*` grammar is a pattern enforced by the **evaluator**, which will likely raise a runtime error if it encounters a function where it expects a value, which is the correct behavior. This maintains the strict separation of concerns between parsing and evaluation.
 
 - **Flat Lists for Infix Operations:** The parser's primary job is to convert each line of code into a simple, flat list of tokens. It does not create a nested tree based on operator precedence.
 
@@ -839,40 +839,40 @@ render rock     // -> "Unknown object: granite"
 
 This pattern allows for highly extensible systems, where new behaviors can be added to existing functions without modifying their original definitions. The predicate can be any code that evaluates to a boolean, allowing for dispatch based on type, value, or any other computable condition on the arguments.
 
-### Section 8.2: Interpolated and Formatted Strings
+### 8.2. Interpolated and Formatted Strings
 
-This section has been rewritten to detail the new Jinja2-based mechanism.
+SLIP leverages a Jinja2-like engine for powerful string interpolation, which is handled by the evaluator, not the parser. This keeps the parser simple and the templating features robust.
 
-- **Interpolation:** Expressions are embedded using double curly braces `{{...}}`. The expression inside the braces is evaluated within the current SLIP environment, and its result is inserted into the string.
-- **Automatic Formatting:** The de-denting and blank line trimming rules remain the same.
-- **New Example:**
+-   **Interpolation Syntax:** Expressions are embedded in double-quoted strings using double curly braces `{{...}}`. The expression inside the braces is standard SLIP syntax.
+-   **Parser Behavior:** The parser does not attempt to understand the content inside a double-quoted string. It creates a single `i-string` (interpolated string) node in the AST, containing the raw, unmodified string content.
+-   **Evaluator Behavior:** When the evaluator encounters an `i-string` node, it passes the string content and the current lexical environment to a Jinja2 rendering engine. The engine evaluates the `{{...}}` expressions and substitutes their results into the final string.
+-   **Automatic De-denting:** Like raw strings, interpolated strings are automatically de-dented, preserving relative indentation.
 
-  ```slip
-  indent_level: 4
-  formatted_text: "
-      This line is indented by {{ indent_level }} spaces.
-      The next line is also indented.
-  "
-  ```
+**Example:**
 
-- **Updated AST Explanation:** The explanation of the parsed Abstract Syntax Tree now clarifies that the parser identifies the literal string parts and the expressions to be interpolated. The evaluator is then responsible for passing this structure, along with the current environment, to a Jinja2-like rendering engine.
+```slip
+indent_level: 4
+formatted_text: "
+    This line is indented by {{ indent_level }} spaces.
+    The next line is also indented.
+"
+```
 
-  The example AST has been updated to reflect the new expression marker:
+**AST Representation:**
 
-  ```
-  [ [set-path [name 'formatted_text']],
-    [string
-      "This line is indented by ",
-      [expr [path [name 'indent_level']]],
-      " spaces.\nThe next line is also indented."
-    ]
-  ]
-  ```
+The parser generates a simple AST, creating an `i-string` node for the right-hand side of the assignment. The evaluator handles the rest.
 
-- **Final Result:** The resulting string remains the same, demonstrating that the underlying logic is preserved:
-  `"This line is indented by 4 spaces.\nThe next line is also indented."`
+```
+[expr 
+    [set-path [name 'formatted_text']],
+    [i-string "\n    This line is indented by {{ indent_level }} spaces.\n    The next line is also indented.\n"]
+]
+```
 
-These changes ensure the language reference is now consistent with your plan to use a Jinja2 engine for processing interpolated strings, leveraging its well-understood syntax and powerful features.
+**Final Result:**
+
+After the evaluator passes the `i-string` and environment to the renderer, the final string value assigned to `formatted_text` is:
+`"This line is indented by 4 spaces.\nThe next line is also indented."`
 
 ### 8.3. Configuring Objects with `with`
 

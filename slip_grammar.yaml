@@ -1,330 +1,447 @@
-# slip.yaml (v6 - Final & Corrected)
-# This grammar now precisely adheres to the "1:1 Abstract Syntax Tree (AST)"
-# principle for SLIP, ensuring infix operators and assignments are represented
-# as flat sequences of instruction/value nodes.
+# Koine grammar for the SLIP language v2
+# Rewritten to ensure correct, flat AST structures.
 
 start_rule: program
 
 rules:
-  #-----------------------------------------------------------------------------
-  # Top-Level Structure
-  #-----------------------------------------------------------------------------
+
+  # =================================================================
+  # Top Level & Whitespace
+  # =================================================================
+
+  program_padding:
+    ast: { discard: true }
+    zero_or_more:
+      choice:
+        - { regex: '\s+' }
+        - { rule: comment }
 
   program:
     ast: { tag: "code" }
     sequence:
-      - { rule: _ }
-      - { rule: expression_list, ast: { name: "expressions" } }
-      - { rule: _ }
+      - { rule: program_padding }
+      - { rule: expression_list }
+      - { rule: program_padding }
 
   expression_list:
-    ast: { promote: true } # Produces a flat list of expressions
+    ast: { promote: true }
+    choice:
+      - sequence: # one or more expressions
+          - { rule: line_expression }
+          - zero_or_more:
+              ast: { promote: true }
+              sequence:
+                - { rule: expression_separator_plus }
+                - { rule: line_expression }
+          - optional: { rule: expression_separator_plus }
+      - { rule: empty_list_producer }
+
+  empty_list_producer:
+    ast: { promote: true }
+    zero_or_more:
+      { regex: "(?!)" }
+
+  expression_separator:
+    ast: { discard: true }
+    choice:
+      - { literal: ";" }
+      - { literal: "," }
+      - { rule: NEWLINE }
+
+  expression_separator_plus:
+    ast: { discard: true }
     sequence:
-      - rule: expression
+      - { rule: WS_OPT }
+      - one_or_more:
+          sequence:
+            - { rule: expression_separator }
+            - { rule: WS_OPT }
+
+  NEWLINE:
+    ast: { discard: true }
+    regex: '[\r\n]+'
+
+  line_expression:
+    # Order is crucial: colon_expr is more specific.
+    ast: { tag: "expr" }
+    choice:
+      - { rule: colon_expr }
+      - { rule: expression_content }
+
+  expression_content:
+    ast: { promote: true }
+    sequence:
+      - { rule: term }
       - zero_or_more:
           ast: { promote: true }
           sequence:
-            - { rule: __ }
-            - rule: expression
+            - { rule: WS_OPT }
+            - { rule: term }
 
-  expression:
-    # An expression is a flat list of nodes.
-    # It can be an assignment sequence or a simple call chain.
-    ast: { promote: true }
+  WS_OPT: # Optional whitespace (includes comments)
+    ast: { discard: true }
+    zero_or_more:
+      choice:
+        - { regex: '[ \t]+' }
+        - { rule: comment }
+
+
+  comment:
+    ast: { discard: true }
     choice:
-      - rule: assignment_expression
-      - rule: call_chain
-      # A single value (e.g., just "10" on a line) is also a valid expression
-      - rule: value
+      - { rule: line_comment }
+      - { rule: block_comment }
 
-  #-----------------------------------------------------------------------------
-  # Call Structures - NOW FLAT
-  #-----------------------------------------------------------------------------
-
-  call_chain:
-    # A call chain produces a flat list of elements:
-    # [head, operator, next_head, operator, next_head, ...]
-    ast: { promote: true }
+  line_comment:
     sequence:
-      - rule: chain_head
+      - { literal: "//" }
+      - positive_lookahead:
+          choice:
+            - { regex: '\s' } # whitespace or newline
+            - { regex: '$' }  # end of input
+      - { regex: '[^\r\n]*' }
+
+  block_comment:
+    sequence:
+      - { literal: "/*" }
       - zero_or_more:
-          ast: { promote: true } # Promotes the operator and next head into the parent's list
+          choice:
+            - { rule: block_comment }
+            - { regex: '((?!/\*|\*/).)+' }
+      - { literal: "*/" }
+
+  # =================================================================
+  # Expressions (Flat List Parsing)
+  # =================================================================
+
+  term:
+    ast: { promote: true }
+    choice:
+      # Specific container literals must come before general rules like `path`
+      - { rule: list_literal }
+      - { rule: env_literal }
+      - { rule: dict_literal }
+      - { rule: code_block }
+      - { rule: group } # Must come before path to resolve ambiguity with dynamic segments
+      - { rule: literal }
+      - { rule: path }
+
+  # =================================================================
+  # Assignment / Colon Expression
+  # =================================================================
+
+  colon_expr:
+    ast: { promote: true }
+    sequence:
+      - { rule: assignment_target }
+      - { rule: WS_OPT }
+      - { literal: ":", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: expression_content }
+
+  assignment_target:
+    ast: { promote: true }
+    choice:
+      # Order is crucial: a group can be a dynamic target and must not be parsed as a set_path
+      - { rule: multi_set }
+      - { rule: group }
+      - { rule: set_path }
+
+  multi_set:
+    ast: { tag: "multi-set" }
+    sequence:
+      - { literal: "[", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - optional:
           sequence:
-            - { rule: __ }
-            - rule: infix_operator # Now explicitly tagged as piped-path
-            - { rule: __ }
-            - rule: chain_head
+            - { rule: set_path }
+            - zero_or_more:
+                ast: { promote: true }
+                sequence:
+                  - { rule: expression_separator_plus }
+                  - { rule: set_path }
+      - { rule: WS_OPT }
+      - { literal: "]", ast: { discard: true } }
 
-  chain_head:
-    # The start of a chain can be a prefix call or a simple value.
+
+  # =================================================================
+  # Literals
+  # =================================================================
+
+  literal:
+    ast: { promote: true }
+    # Order: more specific keywords first
+    choice:
+      - { rule: boolean_literal }
+      - { rule: none_literal }
+      - { rule: number_literal }
+      - { rule: string_literal }
+      - { rule: path_literal }
+
+  number_literal:
+    ast: { tag: "number", leaf: true, type: "number" }
+    regex: '-?\d+(\.\d+)?'
+
+  string_literal:
     ast: { promote: true }
     choice:
-      - rule: prefix_call
-      - rule: value
+      - { rule: raw_string }
+      - { rule: interpolated_string }
 
-  prefix_call:
-    # A prefix call is a structured node representing the function and its arguments.
-    ast: { tag: "call" }
-    sequence:
-      - { rule: path, ast: { name: "function" } } # Function is a structured path
-      - one_or_more:
-          ast: { name: "arguments", promote: true } # Arguments are a flat list
-          sequence:
-            - { rule: __ }
-            - { rule: value }
-
-  value:
-    # Any literal, group, block, or structured path can be a value.
+  raw_string:
     ast: { promote: true }
+    sequence:
+      - { literal: "'", ast: { discard: true } }
+      - { rule: raw_string_content }
+      - { literal: "'", ast: { discard: true } }
+  raw_string_content:
+    ast: { tag: "string", leaf: true }
+    regex: "([^'\\\\]|\\\\.)*"
+
+  interpolated_string:
+    ast: { promote: true }
+    sequence:
+      - { literal: '"', ast: { discard: true } }
+      - { rule: interpolated_string_content }
+      - { literal: '"', ast: { discard: true } }
+  interpolated_string_content:
+    ast: { tag: "i-string", leaf: true }
+    regex: '([^"\\]|\\.)*'
+
+  boolean_literal:
+    ast: { tag: "boolean", leaf: true, type: "bool" }
     choice:
-      - rule: literal
-      - rule: evaluation_group
-      - rule: code_block
-      - rule: list_constructor
-      - rule: dict_constructor
-      - rule: env_constructor
-      - rule: path # A structured path can also be a value
+      - { literal: "true" }
+      - { literal: "false" }
 
-  #-----------------------------------------------------------------------------
-  # Assignment Expression - NOW FLAT
-  #-----------------------------------------------------------------------------
+  none_literal:
+    ast: { tag: "null", leaf: true, type: "null" }
+    literal: "none"
 
-  assignment_expression:
-    # An assignment is a flat list starting with the setter instruction,
-    # followed by the entire value chain.
-    # E.g., [ {'tag': 'set-path', ...}, {value_node}, {operator_node}, {value_node}, ... ]
+  path_literal:
+    ast: { tag: "path-literal" }
+    sequence:
+      - { literal: "`", ast: { discard: true } }
+      - { rule: path_base }
+      - { literal: "`", ast: { discard: true } }
+
+  # =================================================================
+  # Paths
+  # =================================================================
+
+  path_base_no_prefix:
     ast: { promote: true }
     sequence:
-      - { rule: setter }
-      - { rule: __ }
-      - { rule: call_chain }
-
-  setter:
-    # This rule creates the initial instruction node (e.g., set-path, multi-set, dynamic-set).
-    ast: { promote: true }
-    sequence:
-      - { rule: assignment_target_syntax } # Match the syntax
-      - { rule: _ }
-      - { literal: ":" }
-
-  assignment_target_syntax:
-    # This rule applies the specific AST tag for the setter instruction.
-    ast: { promote: true } # Promote the actual target structure
-    choice:
-      - { rule: path, ast: { tag: "set-path" } } # Simple path: x:
-      - rule: destructuring_setter # [x, y]:
-      - rule: dynamic_setter # (get_path):
-
-  destructuring_setter:
-    ast: { tag: "multi-set" } # AST tag for destructuring assignment
-    sequence:
-      - { literal: "[" }
-      - { rule: _ }
-      - {
-          rule: comma_separated_destructuring_targets,
-          ast: { name: "targets" },
-        }
-      - { rule: _ }
-      - { literal: "]" }
-
-  comma_separated_destructuring_targets:
-    ast: { promote: true }
-    optional:
-      sequence:
-        - { rule: path, ast: { tag: "set-path" } } # Each target is a set-path instruction
-        - zero_or_more:
-            ast: { promote: true }
-            sequence:
-              - { rule: _ }
-              - { literal: "," }
-              - { rule: _ }
-              - { rule: path, ast: { tag: "set-path" } }
-
-  dynamic_setter:
-    ast: { tag: "dynamic-set" } # AST tag for dynamic assignment
-    sequence:
-      - { literal: "(" }
-      - { rule: _ }
-      - { rule: expression, ast: { name: "expression" } } # Expression to get the target path
-      - { rule: _ }
-      - { literal: ")" }
-
-  #-----------------------------------------------------------------------------
-  # Structured Path Nodes
-  #-----------------------------------------------------------------------------
+      - { rule: path_segment_no_prefix }
+      - zero_or_more:
+          ast: { promote: true }
+          choice:
+            - { rule: dotted_path_segment }
+            - { rule: path_segment_suffix }
 
   path:
-    # A path is a structured node representing segments (name, dot access, index access).
-    # E.g., { tag: "path", children: [{tag: "segment", text: "user"}, {tag: "dot_access", text: "name"}] }
     ast: { tag: "path" }
     sequence:
-      - rule: path_segment_start # First segment (can be piped)
-      - zero_or_more:
-          ast: { promote: true } # Promotes subsequent access segments into path's children
-          choice:
-            - rule: dot_access_segment
-            - rule: index_access_segment
-            # Slice access is covered by index_access_segment (e.g., items[1:3])
-            # The regex for index_access_segment would need to allow ':'
+      - optional: { rule: pipe_segment }
+      - { rule: path_base }
 
-  path_segment_start:
-    # The initial name segment of a path, optionally piped.
-    ast: { tag: "segment" }
-    sequence:
-      - optional: { literal: "|", ast: { tag: "is_piped" } } # Tags if the segment is piped
-      - regex: "[a-zA-Z_][a-zA-Z0-9_]*" # The actual name part (e.g., 'user', 'my_func')
+  set_path:
+    ast: { tag: "set-path" }
+    rule: set_path_content
 
-  dot_access_segment:
-    ast: { tag: "segment" }
-    sequence:
-      - literal: "."
-      - regex: "[a-zA-Z_][a-zA-Z0-9_]*" # The property name (e.g., 'name' in 'user.name')
-
-  index_access_segment:
-    ast: { tag: "index_access" }
-    sequence:
-      - literal: "["
-      - { rule: _ }
-      # An index or slice value is an expression.
-      # The regex must allow for numbers and optionally a colon for slices.
-      # For now, simplifying to allow expression, full slice syntax would need more rules.
-      - { rule: expression, ast: { name: "index_value" } }
-      - { rule: _ }
-      - literal: "]"
-
-  #-----------------------------------------------------------------------------
-  # Infix Operators / Piped Path Literals
-  #-----------------------------------------------------------------------------
-
-  infix_operator:
-    # These are recognized as specific tokens that trigger "piped-path" behavior.
-    ast: { leaf: true, tag: "piped-path" }
+  set_path_content:
+    ast: { promote: true }
     choice:
-      - regex: "\\|[a-zA-Z_][a-zA-Z0-9_]*" # Explicit piped paths like |map
-      - regex: "[+\\-*<>=/]" # Common infix operators like + (will be text: "+")
+      - sequence:
+          - choice:
+              - { rule: root_segment }
+              - { rule: parent_segment }
+              - { rule: pwd_segment }
+          - { rule: set_path_content }
+      - { rule: path_base_no_prefix }
 
-  #-----------------------------------------------------------------------------
-  # Grouping and Constructors (AST unchanged, rules slightly refined for consistency)
-  #-----------------------------------------------------------------------------
-
-  evaluation_group:
-    ast: { tag: "group" }
+  pipe_segment:
+    ast: { promote: true }
     sequence:
-      - { literal: "(" }
-      - { rule: _ }
-      - { rule: expression_list, ast: { name: "expressions" } }
-      - { rule: _ }
-      - { literal: ")" }
+      - { literal: "|", ast: { tag: "pipe" } }
+      - { rule: WS_OPT }
+
+  path_base:
+    ast: { promote: true }
+    choice:
+      - sequence:
+          - choice:
+              - { rule: root_segment }
+              - { rule: parent_segment }
+              - { rule: pwd_segment }
+          - { rule: path_base }
+      - { rule: path_base_no_prefix }
+
+  dotted_path_segment:
+    ast: { promote: true }
+    sequence:
+      - { rule: WS_OPT }
+      - { literal: ".", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - choice:
+          - { rule: path_segment_no_prefix }
+          - { rule: dynamic_segment }
+
+  path_segment_no_prefix:
+    ast: { promote: true }
+    choice:
+      # Segments that don't have a special prefix like `/` or `../`
+      - { rule: operator_path }
+      - { rule: name_path }
+
+  path_segment_suffix:
+    ast: { promote: true }
+    choice:
+      # Segments that can only appear after an initial segment
+      # Slice must come first to disambiguate from index
+      - { rule: slice_segment }
+      - { rule: index_segment }
+
+  root_segment:
+    ast: { tag: "root", leaf: true }
+    sequence:
+      - { literal: "/" }
+      # A root must be followed by another segment to distinguish it from the '/' operator
+      - positive_lookahead:
+          { rule: path_segment_no_prefix }
+  parent_segment: { ast: { tag: "parent", leaf: true }, literal: "../" }
+  pwd_segment: { ast: { tag: "pwd", leaf: true }, literal: "./" }
+
+  operator_path:
+    ast: { tag: "name", leaf: true }
+    choice:
+      - { regex: '[!@#$%^&*-+]+' }
+      - { literal: "/" }
+
+  name_path:
+    ast: { tag: "name", leaf: true }
+    choice:
+      - { regex: '[a-zA-Z0-9-]+\.\.\.' }
+      - { regex: '[a-zA-Z0-9-]+' }
+
+  dynamic_segment: { ast: { promote: true }, rule: group }
+
+  bracketed_expression:
+    ast: { tag: "expr" }
+    rule: expression_content
+
+  index_segment:
+    ast: { tag: "index" }
+    sequence:
+      - { literal: "[", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: bracketed_expression }
+      - { rule: WS_OPT }
+      - { literal: "]", ast: { discard: true } }
+
+  slice_segment:
+    ast: { tag: "slice" }
+    sequence:
+      - { literal: "[", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: slice_content }
+      - { rule: WS_OPT }
+      - { literal: "]", ast: { discard: true } }
+
+  slice_content:
+    ast: { promote: true }
+    sequence:
+      - optional: { rule: bracketed_expression }
+      - { literal: ":", ast: { discard: true } }
+      - optional: { rule: bracketed_expression }
+
+  # =================================================================
+  # Grouping & Container Literals
+  # =================================================================
+
+  list_line_expression:
+    # Same as line_expression, but without `ast: { tag: "expr" }` so that
+    # list items are not wrapped in an extra `expr` node.
+    ast: { promote: true }
+    choice:
+      - { rule: colon_expr }
+      - { rule: expression_content }
+
+  list_expression_list:
+    ast: { promote: true }
+    choice:
+      - sequence: # one or more expressions
+          - { rule: list_line_expression }
+          - zero_or_more:
+              ast: { promote: true }
+              sequence:
+                - { rule: expression_separator_plus }
+                - { rule: list_line_expression }
+          - optional: { rule: expression_separator_plus }
+      - { rule: empty_list_producer }
+
+  group_line_expression:
+    # Same as line_expression, but without `ast: { tag: "expr" }` so that
+    # group items are not wrapped in an extra `expr` node.
+    ast: { promote: true }
+    choice:
+      - { rule: colon_expr }
+      - { rule: expression_content }
+
+  group_expression_list:
+    ast: { promote: true }
+    choice:
+      - sequence: # one or more expressions
+          - { rule: group_line_expression }
+          - zero_or_more:
+              ast: { promote: true }
+              sequence:
+                - { rule: expression_separator_plus }
+                - { rule: group_line_expression }
+          - optional: { rule: expression_separator_plus }
+      - { rule: empty_list_producer }
+
+  group:
+    ast: { tag: "expr" }
+    sequence:
+      - { literal: "(", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: group_expression_list }
+      - { rule: WS_OPT }
+      - { literal: ")", ast: { discard: true } }
 
   code_block:
     ast: { tag: "code" }
     sequence:
-      - { literal: "[" }
-      - { rule: _ }
-      - { rule: expression_list, ast: { name: "expressions" } }
-      - { rule: _ }
-      - { literal: "]" }
+      - { literal: "[", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: expression_list }
+      - { rule: WS_OPT }
+      - { literal: "]", ast: { discard: true } }
 
-  list_constructor:
+  list_literal:
     ast: { tag: "list" }
     sequence:
-      - { literal: "#[" }
-      - { rule: _ }
-      - { rule: comma_separated_expressions, ast: { name: "items" } }
-      - { rule: _ }
-      - { literal: "]" }
+      - { literal: "#[", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: list_expression_list }
+      - { rule: WS_OPT }
+      - { literal: "]", ast: { discard: true } }
 
-  dict_constructor:
+  dict_literal:
     ast: { tag: "dict" }
     sequence:
-      - { literal: "{" }
-      - { rule: _ }
-      - { rule: comma_separated_pairs, ast: { name: "pairs" } }
-      - { rule: _ }
-      - { literal: "}" }
+      - { literal: "{", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: expression_list }
+      - { rule: WS_OPT }
+      - { literal: "}", ast: { discard: true } }
 
-  env_constructor:
+  env_literal:
     ast: { tag: "env" }
     sequence:
-      - { literal: "#{" }
-      - { rule: _ }
-      - { rule: comma_separated_pairs, ast: { name: "pairs" } }
-      - { rule: _ }
-      - { literal: "}" }
-
-  comma_separated_expressions:
-    ast: { promote: true }
-    optional:
-      sequence:
-        - rule: expression
-        - zero_or_more:
-            ast: { promote: true }
-            sequence:
-              - { rule: _ }
-              - { literal: "," }
-              - { rule: _ }
-              - rule: expression
-
-  comma_separated_pairs:
-    ast: { promote: true }
-    optional:
-      sequence:
-        - rule: pair
-        - zero_or_more:
-            ast: { promote: true }
-            sequence:
-              - { rule: _ }
-              - { literal: "," }
-              - { rule: _ }
-              - rule: pair
-
-  pair:
-    ast: { tag: "pair" }
-    sequence:
-      - { rule: path, ast: { name: "key" } } # Key is a structured path
-      - { rule: _ }
-      - { literal: ":" }
-      - { rule: _ }
-      - { rule: expression, ast: { name: "value" } }
-
-  #-----------------------------------------------------------------------------
-  # Literals
-  #-----------------------------------------------------------------------------
-
-  literal:
-    ast: { promote: true }
-    choice:
-      - rule: string_literal
-      - rule: number_literal
-
-  string_literal:
-    ast: { leaf: true, tag: "string" }
-    choice:
-      - regex: '"(\\\\"|[^"])*"'
-      - regex: "'(\\\\'|[^'])*'"
-
-  number_literal:
-    ast: { leaf: true, tag: "number", type: "number" }
-    regex: "-?\\d+(\\.\\d+)?"
-
-  #-----------------------------------------------------------------------------
-  # Whitespace and Comments (Unchanged)
-  #-----------------------------------------------------------------------------
-
-  _:
-    ast: { discard: true }
-    regex: "[ \\t]*"
-
-  __:
-    ast: { discard: true }
-    one_or_more:
-      choice:
-        - { regex: "[ \\t]+" }
-        - { literal: "\n" }
-        - rule: comment
-
-  comment:
-    ast: { discard: true }
-    sequence:
-      - { literal: "//" }
-      - { regex: ".*" }
+      - { literal: "#{", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: expression_list }
+      - { rule: WS_OPT }
+      - { literal: "}", ast: { discard: true } }

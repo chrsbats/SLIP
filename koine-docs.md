@@ -1,214 +1,348 @@
-# Koine
 
-_A declarative, data-driven parser generator for creating languages, ASTs, and transpilers with simple YAML._
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+# Parsing with Koine: From Text to AST
 
-Koine allows you to define a complete language pipelineâ€”from validation to Abstract Syntax Tree (AST) generation to final code transpilationâ€”using a single, human-readable JSON-compatible data structure. It separates the _what_ (your language definition) from the _how_ (the parsing engine).
-
-### Core Features
-
-- **Declarative:** Define complex grammars entirely in YAML data. No code generation step required.
-- **Pipeline-based:** Use Koine for simple validation, structured AST generation, or full transpilation.
-- **Powerful:** Handles operator precedence, left/right associativity, lookaheads, and indentation-based syntax (see Roadmap).
-- **Language Agnostic:** The Koine format is a specification. The engine can be implemented in any language (current implementation is Python).
-
----
-
-## Installation
-
-```bash
-pip install koine
+```python
+import yaml
+from koine.parser import Parser
+# 1. Load the grammars
+with open("parser_calc.yaml", "r") as f:
+    parser_grammar = yaml.safe_load(f)
+    
+    # 2. Instantiate the tools
+    parser = Parser(parser_grammar)
+    
+    # 3. Run the pipeline
+    source_code = "2 + 3"
+    parse_result = parser.parse(source_code)
 ```
 
----
-
-## Quick Start
-
-Let's build a simple calculator that can parse `2 + 3` and transpile it to `(add 2 3)`.
-
-1.  **Create your grammar file, `calc.yaml`:**
-
-    ```yaml
-    # Note: This is a simplified rule for the quick start.
-    # See the full grammar below for handling precedence.
-    start_rule: expression
-    rules:
-      expression:
-        ast: { structure: "left_associative_op" }
-        sequence:
-          - { rule: number }
-          - zero_or_more:
-              sequence:
-                [{ rule: _ }, { rule: add_op }, { rule: _ }, { rule: number }]
-      add_op:
-        ast: { leaf: true }
-        literal: "+"
-        transpile: { value: "add" }
-      number:
-        ast: { leaf: true, type: "number" }
-        transpile: { use: "value" }
-        regex: "\\d+"
-      _:
-        ast: { discard: true }
-        regex: "[ \\t]*"
-    ```
-
-2.  **Use the Koine engine in `main.py`:**
-
-    ```python
-    import yaml
-    from koine import Parser
-
-    with open("calc.yaml", "r") as f:
-        grammar = yaml.safe_load(f)
-
-    parser = Parser(grammar)
-    result = parser.transpile("2 + 3")
-
-    if result['status'] == 'success':
-        print(f"Input: '2 + 3'")
-        print(f"Output: {result['translation']}")
-    ```
-
-3.  **Run it:**
-    ```
-    Input: '2 + 3'
-    Output: (add 2 3)
-    ```
+This document is a comprehensive guide to Koine's parsing capabilities. It will show you how to define a language grammar and use Koine to transform raw source text into a clean, structured, and semantically meaningful Abstract Syntax Tree (AST).
 
 ---
 
-### Overview
+## 1. The Anatomy of a Grammar
 
-This document describes the JSON compatible grammar format for the Koine data-driven parser. The system is designed as a flexible pipeline that can be used for simple validation, structured data extraction (AST generation), or full-scale language translation (transpilation).
+A Koine grammar is a dictionary (often written in YAML for readability) with two top-level keys:
 
-The core philosophy is to separate the _what_ from the _how_. You define _what_ the language looks like and _what_ the output should be and the Koine engine handles _how_ to parse and transform it.
+-   `start_rule`: The name of the rule where parsing should begin.
+-   `rules`: A dictionary where each key is a rule's name and its value defines the rule's logic.
 
-This guide will walk through the three primary use cases, showing how to add complexity to the grammar definition at each stage using a calculator as a running example.
+### Core Building Blocks
 
----
+These are the fundamental keys you'll use to define what your language looks like.
 
-### Use Case 1: Validation
+| Key       | Description                                        |
+| :-------- | :------------------------------------------------- |
+| `literal` | Matches an exact string of text.                   |
+| `regex`   | Matches text against a regular expression.         |
+| `rule`    | References another rule by its name.               |
+| `choice`  | Matches one of several possible rules.             |
+| `sequence`| Matches a series of rules in a specific order.     |
 
-**Goal:** To answer the simple question, "Does this input string conform to my language's syntax?"
+**Example: A Simple Greeting**
 
-At this level, we only care about the structure of the language. We do not need an Abstract Syntax Tree (AST) or a transpiled output. Therefore, we only use the **Grammar Structure Keys**. The `ast` and `transpile` directives are not needed and can be omitted entirely.
+Let's define a grammar that can parse "Hello, world!" or "Hello, Alice!".
 
-#### Full Example: A Validation-Only Calculator Grammar
-
-This grammar can successfully parse valid mathematical expressions, but it produces no useful output beyond "success" or "failure".
-
-**`validation_calculator.yaml`**
-
+**`grammar.yaml`**
 ```yaml
-start_rule: expression
-
+start_rule: greeting
 rules:
-  expression:
+  greeting:
     sequence:
-      - { rule: term }
-      - zero_or_more:
-          sequence: [{ rule: _ }, { rule: add_op }, { rule: _ }, { rule: term }]
+      - { literal: "Hello" }
+      - { rule: comma_and_space }
+      - { rule: target }
+      - { literal: "!" }
 
-  term:
-    sequence:
-      - { rule: power }
-      - zero_or_more:
-          sequence:
-            [{ rule: _ }, { rule: mul_op }, { rule: _ }, { rule: power }]
+  comma_and_space:
+    regex: ",\\s+" # a comma followed by one or more spaces
 
-  power:
-    sequence:
-      - { rule: factor }
-      - optional:
-          sequence:
-            [{ rule: _ }, { rule: power_op }, { rule: _ }, { rule: power }]
-
-  factor:
+  target:
     choice:
-      - { rule: number }
-      - sequence:
-          - { literal: "(" }
-          - { rule: _ }
-          - { rule: expression }
-          - { rule: _ }
-          - { literal: ")" }
+      - { literal: "world" }
+      - { regex: "[A-Z][a-z]+" } # A capitalized name
+```
 
-  add_op:
-    choice: [{ literal: "+" }, { literal: "-" }]
+At this stage, without any AST directives, Koine produces a raw, verbose parse tree that directly mirrors the grammar structure. It's functional but noisy. We'll clean this up next.
 
-  mul_op:
-    choice: [{ literal: "*" }, { literal: "/" }]
+### Organizing Your Grammar with `includes`
 
-  power_op:
-    literal: "^"
+For larger grammars, you can split your rules across multiple files using the top-level `includes` key. This is supported when loading a grammar with `Parser.from_file()`. All rules from the included files are merged, with rules in the main file taking precedence in case of a name conflict.
 
-  number:
-    regex: "-?\\d+"
+Paths to included files are relative to the file that contains the `includes` directive.
 
+**`common_rules.yaml`**
+```yaml
+rules:
+  identifier:
+    ast: { leaf: true }
+    regex: "[a-zA-Z_]+"
   _:
+    ast: { discard: true }
     regex: "[ \\t]*"
 ```
 
-**Usage:**
+**`main_grammar.yaml`**
+```yaml
+# Include common definitions from another file
+includes:
+  - "common_rules.yaml"
 
-```python
-# Load the validation-only grammar
-with open("validation_calculator.yaml", "r") as f:
-    grammar = yaml.safe_load(f)
+start_rule: assignment
+rules:
+  assignment:
+    sequence:
+      - { rule: identifier }
+      - { rule: _ }
+      - { literal: "=", ast: { discard: true } }
+      - { rule: _ }
+      - { rule: identifier }
+```
 
-validator = Parser(grammar)
-result = validator.parse("((2 + 3) * 4) ^ 5")
+Koine also performs validation when a `Parser` is created. For instance, it will raise an error if your grammar contains `rules` that can never be reached from the `start_rule`. This helps find typos and dead code in your grammar definitions.
 
-if result['status'] == 'success':
-    # The 'ast' key will contain a raw, messy parse tree, which we ignore.
-    print("Input string is a valid expression!")
-else:
-    print(f"Invalid: {result['message']}")
+---
+
+## 2. Building a Clean AST with the `ast` Directive
+
+The raw parse tree is messy. The `ast` block is a dictionary you add to a rule to control how it's represented in the final AST. This lets you discard noise, simplify the structure, and add semantic meaning.
+
+| Key         | Description                                                                        |
+| :---------- | :--------------------------------------------------------------------------------- |
+| `discard`   | Completely removes the node from the AST. Essential for whitespace and punctuation.|
+| `promote`   | Replaces the node with its child/children, simplifying the tree.                   |
+| `leaf`      | Marks a node as a terminal. Its text is captured, but its children aren't processed.|
+| `tag`       | Renames the node in the AST, decoupling syntax from semantic meaning.              |
+| `type`      | On a `leaf` node, converts its text to a `number`, `bool`, or `null` value.        |
+
+
+**Example: A Clean "Key-Value Pair" AST**
+
+Let's parse `version = "1.0"` into a clean AST with typed values.
+
+**`grammar.yaml`**
+```yaml
+start_rule: pair
+rules:
+  pair:
+    sequence:
+      - { rule: identifier }
+      - { rule: _ }
+      - { literal: "=", ast: { discard: true } }
+      - { rule: _ }
+      - { rule: value }
+
+  identifier:
+    ast: { leaf: true }
+    regex: "[a-zA-Z_]+"
+
+  value:
+    ast: { promote: true } # We don't need a 'value' node, just what's inside
+    choice:
+      - { rule: string_literal }
+      - { rule: number_literal }
+
+  string_literal:
+    ast: { promote: true }
+    sequence:
+      - { literal: '"', ast: { discard: true } }
+      - { rule: string_content }
+      - { literal: '"', ast: { discard: true } }
+
+  string_content:
+    ast: { tag: "string", leaf: true } # Tag the important part
+    regex: '[^"]*'
+
+  number_literal:
+    ast: { tag: "number", leaf: true, type: "number" } # Add type conversion
+    regex: "\\d+(\\.\\d+)?"
+
+  _: # A common convention for discardable whitespace
+    ast: { discard: true }
+    regex: "[ \\t]*"
+```
+
+**Input Text**: `version = "1.0"`
+**Resulting AST**:
+```json
+{
+  "tag": "pair",
+  "text": "version = \"1.0\"",
+  "line": 1,
+  "col": 1,
+  "children": [
+    {
+      "tag": "identifier",
+      "text": "version",
+      "line": 1,
+      "col": 1
+    },
+    {
+      "tag": "string",
+      "text": "1.0",
+      "line": 1,
+      "col": 11
+    }
+  ]
+}
+```
+
+**Example: Typed `bool` and `null` values**
+
+The `type` key also supports `bool` and `null` conversions.
+
+**`grammar.yaml`**
+```yaml
+start_rule: config_item
+rules:
+  config_item:
+    sequence:
+      - { rule: identifier }
+      - { rule: _ }
+      - { literal: "=", ast: { discard: true } }
+      - { rule: _ }
+      - { rule: value }
+
+  value:
+    ast: { promote: true }
+    choice:
+      - { rule: bool_literal }
+      - { rule: null_literal }
+
+  bool_literal:
+    ast: { tag: "boolean", leaf: true, type: "bool" }
+    regex: "true|false"
+
+  null_literal:
+    ast: { tag: "null", leaf: true, type: "null" }
+    literal: "null"
+
+  identifier:
+    ast: { leaf: true }
+    regex: "[a-zA-Z_]+"
+
+  _:
+    ast: { discard: true }
+    regex: "[ \\t]*"
+```
+
+**Input Text 1**: `enabled = true`
+**Resulting AST 1**:
+```json
+{
+  "tag": "config_item",
+  "children": [
+    { "tag": "identifier", "text": "enabled", ... },
+    { "tag": "boolean", "text": "true", "value": true, ... }
+  ]
+}
+```
+
+**Input Text 2**: `user = null`
+**Resulting AST 2**:
+```json
+{
+  "tag": "config_item",
+  "children": [
+    { "tag": "identifier", "text": "user", ... },
+    { "tag": "null", "text": "null", "value": null, ... }
+  ]
+}
 ```
 
 ---
 
-### Use Case 2: Parsing to a Semantic AST
+## 3. Handling Repetition and Optional Parts
 
-**Goal:** To validate the input string AND convert it into a clean, structured, and meaningful data representation (an AST).
+Koine uses quantifiers to handle parts of your grammar that can repeat or be absent.
 
-This is the most common use case for parsing complex data. To achieve this, we build on the validation grammar by adding the **`ast` directive block** to our rules. This block tells the parser how to transform the raw parse tree into a clean AST by discarding whitespace, promoting nodes, and building specific structures. The `transpile` block is still not needed.
+| Key            | Description                                   |
+| :------------- | :-------------------------------------------- |
+| `optional`     | Matches zero or one time (`?`).               |
+| `zero_or_more` | Matches zero or more times (`*`).             |
+| `one_or_more`  | Matches one or more times (`+`).              |
 
-#### Full Example: An AST-Generating Calculator Grammar
+**Example: A list of tags**
 
-We now add directives like `discard`, `promote`, `leaf`, and `structure` to produce a useful tree.
+Let's parse a comma-separated list like `[urgent, "customer-issue"]`. This pattern—`item (separator item)*`—is very common for lists.
 
-**`ast_calculator.yaml`**
+**`grammar.yaml`**
+```yaml
+start_rule: tag_list
+rules:
+  tag_list:
+    sequence:
+      - { literal: "[", ast: { discard: true } }
+      - { rule: _ }
+      - optional: # The list can be empty
+          sequence:
+            - { rule: tag }
+            - zero_or_more:
+                sequence:
+                  - { rule: _ }
+                  - { literal: ",", ast: { discard: true } }
+                  - { rule: _ }
+                  - { rule: tag }
+      - { rule: _ }
+      - { literal: "]", ast: { discard: true } }
 
+  tag:
+    ast: { tag: "tag", leaf: true }
+    regex: "[a-zA-Z-]+"
+    # A full implementation would also handle quoted strings.
+
+  _:
+    ast: { discard: true }
+    regex: "[ \\t]*"
+```
+**Input Text**: `[urgent, critical]`
+**Resulting AST**:
+```json
+{
+  "tag": "tag_list",
+  "text": "[urgent, critical]",
+  "line": 1, "col": 1,
+  "children": [
+    { "tag": "tag", "text": "urgent", "line": 1, "col": 2 },
+    { "tag": "tag", "text": "critical", "line": 1, "col": 10 }
+  ]
+}
+```
+
+---
+
+## 4. Advanced AST Construction
+
+Koine offers powerful `structure` directives to automatically build complex AST nodes.
+
+### Associative Operators: `left_associative_op` and `right_associative_op`
+
+For parsing mathematical or logical expressions, handling operator precedence and associativity is crucial. Koine automates this.
+
+-   `left_associative_op`: For operators like `+`, `-`, `*`, `/`. `a - b - c` is parsed as `(a - b) - c`.
+-   `right_associative_op`: For operators like `^` (power). `a ^ b ^ c` is parsed as `a ^ (b ^ c)`.
+
+**Example: A Simple Calculator**
+
+This grammar correctly handles precedence (`*` before `+`) and associativity.
+
+**`grammar.yaml`**
 ```yaml
 start_rule: expression
-
 rules:
   expression:
     ast: { structure: "left_associative_op" }
     sequence:
       - { rule: term }
       - zero_or_more:
-          sequence: [{ rule: _ }, { rule: add_op }, { rule: _ }, { rule: term }]
-
+          sequence: [ { rule: _ }, { rule: add_op }, { rule: _ }, { rule: term } ]
   term:
     ast: { structure: "left_associative_op" }
     sequence:
-      - { rule: power }
-      - zero_or_more:
-          sequence:
-            [{ rule: _ }, { rule: mul_op }, { rule: _ }, { rule: power }]
-
-  power:
-    ast: { structure: "right_associative_op" }
-    sequence:
       - { rule: factor }
-      - optional:
-          sequence:
-            [{ rule: _ }, { rule: power_op }, { rule: _ }, { rule: power }]
-
+      - zero_or_more:
+          sequence: [ { rule: _ }, { rule: mul_op }, { rule: _ }, { rule: factor } ]
   factor:
     ast: { promote: true }
     choice:
@@ -218,283 +352,356 @@ rules:
           - { rule: _ }
           - { rule: expression }
           - { rule: _ }
-          - { literal: ")" }
-
-  add_op:
-    ast: { leaf: true }
-    choice: [{ literal: "+" }, { literal: "-" }]
-
-  mul_op:
-    ast: { leaf: true }
-    choice: [{ literal: "*" }, { literal: "/" }]
-
-  power_op:
-    ast: { leaf: true }
-    literal: "^"
-
-  number:
-    ast: { leaf: true, type: "number" }
-    regex: "-?\\d+"
-
-  _:
-    ast: { discard: true }
-    regex: "[ \\t]*"
+          - { literal: ")", ast: { discard: true } }
+  add_op: { ast: { leaf: true }, choice: [ { literal: "+" }, { literal: "-" } ] }
+  mul_op: { ast: { leaf: true }, choice: [ { literal: "*" }, { literal: "/" } ] }
+  number: { ast: { leaf: true, type: "number" }, regex: "\\d+" }
+  _: { ast: { discard: true }, regex: "[ \\t]*" }
 ```
 
-**Usage:**
-
-```python
-# Load the AST-generating grammar
-with open("ast_calculator.yaml", "r") as f:
-    grammar = yaml.safe_load(f)
-
-parser = Parser(grammar)
-result = parser.parse("((2 + 3) * 4) ^ 5")
-
-if result['status'] == 'success':
-    print("Successfully parsed. AST:")
-    # The result now contains a valuable 'ast' key with a clean tree
-    print(json.dumps(result['ast'], indent=2))
-```
-
-**Output AST:**
-
+**Input Text**: `1 + 2 * 3`
+**Resulting AST**:
 ```json
 {
   "tag": "binary_op",
-  "op": {
-    "tag": "power_op",
-    "text": "^",
-    "line": 1,
-    "col": 16
-  },
-  "left": {
-    "tag": "binary_op",
-    "op": {
-      "tag": "mul_op",
-      "text": "*",
-      "line": 1,
-      "col": 10
-    },
-    "left": {
-      "tag": "binary_op",
-      "op": {
-        "tag": "add_op",
-        "text": "+",
-        "line": 1,
-        "col": 5
-      },
-      "left": {
-        "tag": "number",
-        "text": "2",
-        "line": 1,
-        "col": 3,
-        "value": 2
-      },
-      "right": {
-        "tag": "number",
-        "text": "3",
-        "line": 1,
-        "col": 7,
-        "value": 3
-      }
-    },
-    "right": {
-      "tag": "number",
-      "text": "4",
-      "line": 1,
-      "col": 12,
-      "value": 4
-    }
-  },
+  "op": { "tag": "add_op", "text": "+", ... },
+  "left": { "tag": "number", "value": 1, ... },
   "right": {
-    "tag": "number",
-    "text": "5",
-    "line": 1,
-    "col": 18,
-    "value": 5
+    "tag": "binary_op",
+    "op": { "tag": "mul_op", "text": "*", ... },
+    "left": { "tag": "number", "value": 2, ... },
+    "right": { "tag": "number", "value": 3, ... }
+  }
+}
+```
+
+### Declarative `structure` and `map_children`
+
+This is the most powerful way to build a custom AST node. You define the shape of your node and map children from the parsing rule into it. This is robust to optional or discarded children.
+
+-   `tag`: The tag for the new AST node.
+-   `map_children`: A dictionary where keys are the desired child names in the AST, and values (`{from_child: <index>}`) specify the 0-based index of the child rule within the `sequence` list.
+
+**Example: A `let` statement**
+
+Let's parse `let version = "1.0"` into a clean node with named `name` and `value` children.
+
+**`grammar.yaml`**
+```yaml
+start_rule: declaration
+rules:
+  declaration:
+    ast:
+      structure:
+        tag: "variable_declaration"
+        map_children:
+          # 'identifier' is the 2nd item in the sequence (index 1)
+          name: { from_child: 1 }
+          # 'expression' is the 4th item (index 3)
+          value: { from_child: 3 }
+    sequence:
+      # Whitespace rules would be here but are omitted for brevity.
+      - { literal: "let", ast: { discard: true } }
+      - { rule: identifier }
+      - { literal: "=", ast: { discard: true } }
+      - { rule: expression }
+
+  identifier:
+    ast: { leaf: true }
+    regex: "[a-zA-Z_]+"
+
+  expression:
+    ast: { promote: true }
+    choice:
+      - { rule: string_literal }
+
+  string_literal:
+    ast: { tag: "string", promote: true }
+    sequence:
+      - { literal: '"', ast: { discard: true } }
+      - { rule: string_content }
+      - { literal: '"', ast: { discard: true } }
+
+  string_content:
+    ast: { leaf: true }
+    regex: '[^"]*'
+```
+
+**Input Text**: `let version = "1.0"`
+**Resulting AST**:
+```json
+{
+  "tag": "variable_declaration",
+  "text": "let version = \"1.0\"",
+  "line": 1,
+  "col": 1,
+  "children": {
+    "name": {
+      "tag": "identifier",
+      "text": "version",
+      "line": 1,
+      "col": 5
+    },
+    "value": {
+      "tag": "string",
+      "text": "1.0",
+      "line": 1,
+      "col": 15
+    }
+  }
+}
+```
+
+### `name`: Simple Child Naming
+
+As a simpler alternative to a full `structure` block, you can add `ast: { name: "..." }` to a rule within a `sequence`. If any child in a sequence is named, the parent's `children` becomes a dictionary mapping the names to the child nodes, instead of a list.
+
+**Example: A `clone` Command** using `name`.
+
+**`grammar.yaml`**
+```yaml
+start_rule: clone_statement
+rules:
+  clone_statement:
+    ast: { tag: "clone" }
+    sequence:
+      - { literal: "CLONE", ast: { discard: true } }
+      - { rule: _ }
+      - { rule: path, ast: { name: "source" } }      # Name this child
+      - { rule: _ }
+      - { literal: "TO", ast: { discard: true } }
+      - { rule: _ }
+      - { rule: path, ast: { name: "destination" } } # And this one
+
+  path:
+    ast: { leaf: true }
+    regex: "[^\\s]+"
+
+  _:
+    ast: { discard: true }
+    regex: "[ \\t]+"
+```
+
+**Input Text**: `CLONE /a/b TO /c/d`
+**Resulting AST**:
+```json
+{
+  "tag": "clone",
+  "text": "CLONE /a/b TO /c/d",
+  "line": 1,
+  "col": 1,
+  "children": {
+    "source": {
+      "tag": "path",
+      "text": "/a/b",
+      "line": 1,
+      "col": 7
+    },
+    "destination": {
+      "tag": "path",
+      "text": "/c/d",
+      "line": 1,
+      "col": 17
+    }
   }
 }
 ```
 
 ---
 
-### Use Case 3: Full Transpilation
+## 5. Advanced Logic with Lookaheads
 
-**Goal:** To validate the input, parse it to a clean AST, and then **transform that AST into a different string format** (e.g., from infix math to LISP-style s-expressions).
+Lookaheads let you check for patterns *without consuming text*. This is essential for resolving ambiguity.
 
-This is the full power of the pipeline. We use all three components: the grammar structure, the `ast` block, and now the **`transpile` directive block**. The `transpile` rules tell the final stage of the engine how to convert each AST node into a string.
+-   `positive_lookahead`: Succeeds if the pattern matches ahead (`&`).
+-   `negative_lookahead`: Succeeds if the pattern does **not** match ahead (`!`).
 
-#### Full Example: A Transpiling Calculator Grammar
+**Example: Distinguishing Two Commands**
 
-We add `transpile` directives to our operator and number rules to define the target output format.
+Let's define a grammar for a `CLONE` command that can have two forms: `CLONE <path>` or `CLONE <path> TO <path>`. A greedy parser might incorrectly match the start of the longer command with the rule for the shorter one. We must try the more specific `clone_to_statement` first, and we use lookaheads to ensure each rule only matches the correct syntax.
 
-**`full_calculator_grammar.yaml`**
-
+**`grammar.yaml`**
 ```yaml
-start_rule: expression
-
+start_rule: statement
 rules:
-  expression:
-    ast: { structure: "left_associative_op" }
-    sequence:
-      - { rule: term }
-      - zero_or_more:
-          sequence: [{ rule: _ }, { rule: add_op }, { rule: _ }, { rule: term }]
-
-  term:
-    ast: { structure: "left_associative_op" }
-    sequence:
-      - { rule: power }
-      - zero_or_more:
-          sequence:
-            [{ rule: _ }, { rule: mul_op }, { rule: _ }, { rule: power }]
-
-  power:
-    ast: { structure: "right_associative_op" }
-    sequence:
-      - { rule: factor }
-      - optional:
-          sequence:
-            [{ rule: _ }, { rule: power_op }, { rule: _ }, { rule: power }]
-
-  factor:
+  statement:
     ast: { promote: true }
     choice:
-      - { rule: number }
-      - sequence:
-          - { literal: "(" }
-          - { rule: _ }
-          - { rule: expression }
-          - { rule: _ }
-          - { literal: ")" }
+      - { rule: clone_to_statement } # Must try this one first!
+      - { rule: clone_statement }
 
-  add_op:
-    ast: { leaf: true }
-    choice:
-      - { literal: "+", transpile: { value: "add" } }
-      - { literal: "-", transpile: { value: "sub" } }
+  clone_to_statement:
+    # This rule only matches if "TO" is present later on.
+    ast: { tag: "clone_to" }
+    sequence:
+      - positive_lookahead:
+          sequence: [ { rule: clone_keyword }, { rule: _ }, { rule: path }, { rule: _ }, { rule: to_keyword } ]
+      # If the lookahead succeeds, we parse the full command.
+      - { rule: clone_keyword }
+      - { rule: _ }
+      - { rule: path, ast: { name: "source" } }
+      - { rule: _ }
+      - { rule: to_keyword }
+      - { rule: _ }
+      - { rule: path, ast: { name: "destination" } }
 
-  mul_op:
-    ast: { leaf: true }
-    choice:
-      - { literal: "*", transpile: { value: "mul" } }
-      - { literal: "/", transpile: { value: "div" } }
+  clone_statement:
+    ast: { tag: "clone" }
+    sequence:
+      - { rule: clone_keyword }
+      - { rule: _ }
+      - { rule: path, ast: { name: "source" } }
+      # And now we ensure "TO" does NOT follow.
+      - negative_lookahead:
+          sequence: [ { rule: _ }, { rule: to_keyword } ]
 
-  power_op:
-    ast: { leaf: true }
-    literal: "^"
-    transpile: { value: "pow" }
-
-  number:
-    ast: { leaf: true, type: "number" }
-    transpile: { use: "value" }
-    regex: "-?\\d+"
-
-  _:
-    ast: { discard: true }
-    regex: "[ \\t]*"
+  path: { ast: { leaf: true }, regex: "[^\\s]+" }
+  clone_keyword: { ast: { discard: true }, literal: "CLONE" }
+  to_keyword: { ast: { discard: true }, literal: "TO" }
+  _: { ast: { discard: true }, regex: "[ \\t]+" }
 ```
 
-**Usage:**
+With this logic, `CLONE /a TO /b` matches `clone_to_statement`, while `CLONE /c` correctly matches `clone_statement`.
 
-```python
-# Load the full grammar
-with open("full_calculator_grammar.yaml", "r") as f:
-    grammar = yaml.safe_load(f)
-
-parser = Parser(grammar)
-result = parser.transpile("((2 + 3) * 4) ^ 5")
-
-if result['status'] == 'success':
-    print("Parse successful. Transpiling AST...")
-    print(f"Final Output: {result['translation']}")
+**Input 1**: `CLONE /a TO /b`
+**Resulting AST 1**:
+```json
+{
+  "tag": "clone_to",
+  "children": {
+    "source": { "tag": "path", "text": "/a", ... },
+    "destination": { "tag": "path", "text": "/b", ... }
+  }
+}
 ```
 
-**Final Output:**
-
-```
-Final Output: (pow (mul (add 2 3) 4) 5)
+**Input 2**: `CLONE /c`
+**Resulting AST 2**:
+```json
+{
+  "tag": "clone",
+  "children": {
+    "source": { "tag": "path", "text": "/c", ... }
+  }
+}
 ```
 
 ---
 
-### Full Grammar and Directive Reference
+## 6. Using a Lexer for Tokens and Indentation
 
-#### Grammar Structure Keys
+For some languages, especially those with significant whitespace, comments, or context-sensitive keywords, pre-processing the text into a stream of **tokens** is better. This is done with the top-level `lexer` block.
 
-These keys define the actual parsing logic.
+When a `lexer` is defined:
+1.  The input text is first tokenized according to the `lexer` rules.
+2.  The parser then works on this stream of tokens, not the raw text.
+3.  Grammar rules must change from using `literal` and `regex` to using `token` to match token types.
 
-| Key                  | Description                                                                               | Value Type      | Example                                    |
-| :------------------- | :---------------------------------------------------------------------------------------- | :-------------- | :----------------------------------------- |
-| `literal`            | Matches an exact string of text.                                                          | `string`        | `{ literal: "if" }`                        |
-| `regex`              | Matches text against a regular expression.                                                | `string`        | `{ regex: "-?\\d+" }`                      |
-| `rule`               | References another rule by its name.                                                      | `string`        | `{ rule: expression }`                     |
-| `sequence`           | Matches a series of rules in a specific order.                                            | `list` of rules | `{ sequence: [ {rule: A}, {rule: B} ] }`   |
-| `choice`             | Matches one of several possible rules. Tries them in order.                               | `list` of rules | `{ choice: [ {rule: A}, {rule: B} }`       |
-| `zero_or_more`       | Matches the given rule zero or more times (`*`).                                          | A single rule   | `{ zero_or_more: {rule: A} }`              |
-| `one_or_more`        | Matches the given rule one or more times (`+`).                                           | A single rule   | `{ one_or_more: {rule: A} }`               |
-| `optional`           | Matches the given rule zero or one time (`?`).                                            | A single rule   | `{ optional: {rule: A} }`                  |
-| `positive_lookahead` | Asserts that the text ahead matches the rule, but does not consume text (`&`).            | A single rule   | `{ positive_lookahead: {literal: "TO"} }`  |
-| `negative_lookahead` | Asserts that the text ahead does **not** match the rule, but does not consume text (`!`). | A single rule   | `{ negative_lookahead: {literal: "END"} }` |
+### Defining Tokens
 
-#### The `ast` Block
+The `tokens` key contains an ordered list of token definitions. For each position in the text, Koine finds the token definition whose `regex` matches the longest string of text. Each token definition is a dictionary with the following keys:
 
-The `ast` block controls how the Abstract Syntax Tree is constructed for a given rule.
+| Key      | Description                                                                                                                              |
+| :------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
+| `regex`  | **(Required)** The regular expression used to match the token's text.                                                                    |
+| `token`  | The type name for the created token (e.g., `NAME`, `NUMBER`). Required unless `action` is `skip`.                                          |
+| `action` | Special behavior. `skip` discards the matched text (for whitespace/comments). `handle_indent` manages indentation tokens.                |
+| `ast`    | An `ast` block that is applied directly to the token. This is useful for `type` conversion (e.g., `{type: "number"}`) or even `discard`. |
 
-| Key         | Description                                                                                                                                         | Example                                     |
-| :---------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------ |
-| `tag`       | Renames the node in the final AST. Useful for creating cleaner, more abstract node types.                                                           | `ast: { tag: "clone_to" }`                  |
-| `discard`   | Throws away the node created by this rule. It will not appear in the AST. Essential for whitespace, comments, and syntactic sugar.                  | `ast: { discard: true }`                    |
-| `promote`   | Replaces the current node with its child node in the AST. This is used to simplify the tree by removing unnecessary intermediate nodes.             | `ast: { promote: true }`                    |
-| `leaf`      | Marks this as a terminal node in the AST. It will have no children, even if it's composed of other rules. Its `text` and `value` are preserved.     | `ast: { leaf: true }`                       |
-| `type`      | Adds a data type hint to a leaf node. Currently, `type: "number"` will cause the system to parse the node's text as a numeric value.                | `ast: { leaf: true, type: "number" }`       |
-| `name`      | In a `sequence`, assigns a name to a specific child. This causes the parent's `children` attribute in the AST to be a dictionary instead of a list. | `{ rule: path, ast: { name: "repo" } }`     |
-| `structure` | A powerful directive that automatically builds complex tree structures.                                                                             | `ast: { structure: "left_associative_op" }` |
+### `handle_indent`: For Indentation-Based Syntax
 
-##### Why Use `tag`?
+Koine's lexer has built-in support for indentation-based languages like Python.
+Using `action: "handle_indent"` on a newline-matching regex will automatically generate `INDENT` and `DEDENT` tokens.
 
-The `tag` directive provides three powerful advantages: **decoupling, abstraction, and clarity**.
+**Example: A Simple Python-like Function**
 
-1.  **Decoupling Grammar from AST:** The name of a rule often describes its **syntactic role** (what it does for parsing, like `term` or `factor`), while the tag describes its **semantic meaning** (what it _is_, like a `binary_op`). This allows the grammar to be structured for correct parsing (e.g., operator precedence) while producing a simple, semantic AST for the next stage.
+**`grammar.yaml`**
+```yaml
+lexer:
+  tokens:
+    - { regex: "[ \\t]+", action: "skip" }
+    - { regex: "\\n[ \\t]*", action: "handle_indent" } # The magic
+    - { regex: "def", token: "DEF" }
+    - { regex: "return", token: "RETURN" }
+    - { regex: "[a-zA-Z_]+", token: "NAME" }
+    - { regex: ":", token: "COLON" }
+    - { regex: "\\(", token: "LPAREN" }
+    - { regex: "\\)", token: "RPAREN" }
 
-2.  **Creating Abstract Concepts:** A `tag` allows you to create a single, unified AST node type from multiple different syntactic forms. For example, a language might have `let_statement` and `const_statement` rules, but both can be given the tag `variable_declaration`, simplifying the code that consumes the AST.
+start_rule: function_definition
+rules:
+  function_definition:
+    ast: { structure: { tag: "function", map_children: { name: {from_child: 1}, body: {from_child: 5} } } }
+    sequence:
+      - { token: "DEF", ast: { discard: true } }
+      - { rule: identifier } # 'identifier' now just wraps a NAME token
+      - { token: "LPAREN", ast: { discard: true } }
+      - { token: "RPAREN", ast: { discard: true } }
+      - { token: "COLON", ast: { discard: true } }
+      - { rule: suite }
 
-3.  **Improving Grammar Readability:** Sometimes, a rule needs a long, descriptive name to be clear (e.g., `statement_ending_with_optional_semicolon`), but you want a short, concise name in your AST (e.g., `statement`).
+  suite:
+    ast: { promote: true }
+    sequence:
+      - { token: "INDENT", ast: { discard: true } }
+      - { rule: statements }
+      - { token: "DEDENT", ast: { discard: true } }
 
-##### `structure` Types:
+  statements:
+    ast: { tag: "statements" }
+    one_or_more: { rule: statement }
+  
+  statement:
+    ast: { promote: true }
+    choice:
+      - { rule: return_statement }
 
-- `"left_associative_op"`: Automatically builds a left-leaning binary operation tree. It expects the rule to have a `sequence` with two children: the left-hand side, and a `zero_or_more` of the operator and the right-hand side.
-- `"right_associative_op"`: Automatically builds a right-leaning binary operation tree. It expects the rule to have a `sequence` with two children: the left-hand side, and an `optional` recursive call containing the operator and the right-hand side.
+  return_statement:
+    ast: { promote: true }
+    sequence:
+      - { token: "RETURN" }
 
-#### The `transpile` Block
+  identifier:
+    ast: { promote: true }
+    sequence: [ { token: "NAME" } ]
+```
 
-The `transpile` block controls how a finished AST node is converted into the final output string.
+**Input Text**
+```python
+def my_func():
+    return
+```
 
-| Key        | Description                                                                                                                                        | Example                                           |
-| :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------ |
-| `template` | Uses a Python f-string-like template to generate the output. Placeholders like `{repo}` are filled in from the AST node's named children.          | `transpile: { template: "(call {func} {args})" }` |
-| `use`      | Uses a specific property from the AST node as the output. `"use: "value"` is for numbers. `"use: "text"` is for identifiers or string literals.    | `transpile: { use: "value" }`                     |
-| `value`    | Provides a hardcoded string value as the output for this node. This is perfect for converting operators like `+` into function names like `"add"`. | `transpile: { value: "add" }`                     |
+The lexer first turns this into a token stream like: `DEF NAME LPAREN RPAREN COLON INDENT RETURN DEDENT`. The parser then easily consumes this token stream to build the correct AST.
 
-## Roadmap
-
-See our `TODO.md` for planned features, including:
-
-- Integrated Stateful Lexer for indentation-based languages.
-
-## Author
-
-The Koine engine was developed by **Chris Bates**.
-
-- https://github.com/chrsbats
-
-## Acknowledgements
-
-This project was made possible by the foundational ideas and early conceptual prototypes developed by **Adam Griffiths**. Their insights into creating a fully data-driven parsing pipeline were instrumental in shaping the final architecture and philosophy of Koine.
-
-- https://github.com/adamlwgriffiths
-
-## License
-
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+**Resulting AST**
+```json
+{
+  "tag": "function",
+  "text": "def my_func():\\n    return",
+  "line": 1, "col": 1,
+  "children": {
+    "name": {
+      "tag": "NAME",
+      "text": "my_func",
+      "value": "my_func",
+      "line": 1,
+      "col": 5
+    },
+    "body": {
+      "tag": "statements",
+      "text": "return",
+      "line": 2, "col": 5,
+      "children": [
+        {
+          "tag": "RETURN",
+          "text": "return",
+          "value": "return",
+          "line": 2,
+          "col": 5
+        }
+      ]
+    }
+  }
+}
+```
