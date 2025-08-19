@@ -1,0 +1,309 @@
+# Koine grammar for parsing the internal structure of a single SLIP path string.
+# This grammar does not parse sub-expressions within dynamic segments `()`, `[]`,
+# or metadata blocks `#()`, instead capturing their contents as text.
+
+start_rule: any_path
+
+rules:
+  # =================================================================
+  # Top-Level Entry Points
+  # =================================================================
+  any_path:
+    ast: { promote: true }
+    choice:
+      - { rule: set_path }
+      - { rule: del_path }
+      - { rule: piped_path }
+      - { rule: get_path }
+
+  # These rules are for testing this grammar in isolation.
+  get_path:
+    {
+      ast: { promote: true },
+      sequence: [{ rule: embedded_get_path }, { rule: EOI }],
+    }
+  del_path:
+    {
+      ast: { promote: true },
+      sequence: [{ rule: embedded_del_path }, { rule: EOI }],
+    }
+  set_path:
+    {
+      ast: { promote: true },
+      sequence: [{ rule: embedded_set_path }, { rule: EOI }],
+    }
+  piped_path:
+    {
+      ast: { promote: true },
+      sequence: [{ rule: embedded_piped_path }, { rule: EOI }],
+    }
+
+  # =================================================================
+  # Embedded Entry Points (for slip_grammar.yaml)
+  # =================================================================
+  any_embedded_path:
+    ast: { promote:true }
+    choice:
+      - { rule: embedded_set_path }
+      - { rule: embedded_del_path }
+      - { rule: embedded_piped_path }
+      - { rule: embedded_post_path }
+      - { rule: embedded_get_path }
+
+  embedded_get_path:
+    ast: { tag: "get-path" }
+    sequence:
+      - { rule: actual_path }
+      - optional: { rule: metadata_block }
+
+  embedded_del_path:
+    ast: { tag: "del-path" }
+    sequence:
+      - { literal: "~", ast: { discard: true } }
+      - { rule: actual_path }
+      - optional: { rule: metadata_block }
+
+  embedded_piped_path:
+    ast: { tag: "piped-path" }
+    sequence:
+      - { literal: "|", ast: { discard: true } }
+      - { rule: actual_path }
+      - optional: { rule: metadata_block }
+
+  embedded_set_path:
+    ast: { promote: true }
+    choice:
+      - { rule: multi_set_path }
+      - { rule: simple_set_path }
+
+  simple_set_path:
+    ast: { tag: "set-path" }
+    sequence:
+      - { rule: actual_path }
+      - optional: { rule: metadata_block }
+      - { literal: ":", ast: { discard: true } }
+
+  embedded_post_path:
+    ast: { tag: "post-path" }
+    sequence:
+      - { rule: actual_path }
+      - optional: { rule: metadata_block }
+      - { literal: "<-", ast: { discard: true } }
+
+  multi_set_path:
+    ast: { tag: "multi-set-path" }
+    sequence:
+      - { literal: "[", ast: { discard: true } }
+      - { rule: ws_opt_path }
+      - optional: { rule: multi_set_targets }
+      - { rule: ws_opt_path }
+      - { literal: "]", ast: { discard: true } }
+      - { literal: ":", ast: { discard: true } }
+
+  multi_set_targets:
+    ast: { promote: true }
+    sequence:
+      - { rule: multi_set_target }
+      - zero_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: ws_opt_path }
+            - { literal: ",", ast: { discard: true } }
+            - { rule: ws_opt_path }
+            - { rule: multi_set_target }
+
+  multi_set_target:
+    ast: { tag: "set-path" }
+    rule: actual_path
+
+  # =================================================================
+  # Core Path Structure (Simplified and Corrected)
+  # =================================================================
+  url_path:
+    ast: { promote: true }
+    choice:
+      - { rule: url_name_segment }
+      - { rule: url_scheme_segment }
+
+  actual_path:
+    ast: { promote: true }
+    choice:
+      - { rule: url_path }   # scheme URLs are a single, atomic segment
+      - sequence:
+          - { rule: root_segment }
+          - optional: { rule: component_chain }
+      - sequence:
+          - { rule: pwd_segment }
+          - optional: { rule: component_chain }
+      - { rule: component_chain }
+
+  component_chain:
+    ast: { promote: true }
+    sequence:
+      - { rule: path_component }
+      - zero_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: separator }
+            - { rule: path_component }
+
+  path_component:
+    ast: { promote: true }
+    sequence:
+      - { rule: path_component_base }
+      - zero_or_more:
+          ast: { promote: true }
+          choice:
+            - { rule: query_segment }
+            - { rule: group_segment }
+
+  path_component_base:
+    ast: { promote: true }
+    choice:
+      - { rule: parent_segment }
+      - { rule: any_name_segment }
+      # A group can only be a base component. a(b) is parsed as a name
+      # component `a` followed by a group follower `(b)`.
+      - { rule: group_segment }
+
+  separator:
+    ast: { discard: true }
+    choice:
+      - { literal: "." }
+      - { literal: "/" }
+
+  # =================================================================
+  # Individual Segment Definitions
+  # =================================================================
+  root_segment: { ast: { tag: "root" }, regex: '/(?!:)' } # Match / unless it's followed by :
+  parent_segment: { ast: { tag: "parent" }, literal: ".." }
+  pwd_segment: { ast: { tag: "pwd" }, literal: "./" }
+
+  any_name_segment:
+    ast: { promote: true }
+    choice:
+      - { rule: operator_segment }
+      - { rule: name_segment }
+
+  operator_segment:
+    ast: { tag: "name", leaf: true }
+    # Match single '-' only if it's not the start of a '--' comment.
+    regex: '(\*\*|!=|>=|<=|[+*=/><]|-(?!-))'
+
+  name_segment:
+    ast: { tag: "name", leaf: true }
+    regex: '[a-zA-Z0-9-]+(?:\.\.\.|\?)?'
+
+  url_name_segment:
+    ast: { tag: "name", leaf: true }
+    # Exclude '#' so '#(...)' remains for metadata_block to parse
+    regex: '(?:https?|fs)://[^#\s;,()\[\]\{\}]*[^#\s;,()\[\]\{\}:]'
+
+  url_scheme_segment:
+    ast: { tag: "name", leaf: true }
+    regex: '(?:https?|fs)://'
+
+
+  group_segment:
+    ast: { tag: "group" }
+    sequence:
+      - { literal: "(", ast: { discard: true } }
+      - { rule: expr_for_paren }
+      - { literal: ")", ast: { discard: true } }
+
+  query_segment:
+    ast: { tag: "query-segment" }
+    sequence:
+      - { literal: "[", ast: { discard: true } }
+      - { rule: ws_opt_path }
+      - { rule: query_content }
+      - { rule: ws_opt_path }
+      - { literal: "]", ast: { discard: true } }
+
+  query_content:
+    ast: { promote: true }
+    choice:
+      # Precedence: slice must be tried before filter and simple query.
+      - { rule: slice_query }
+      - { rule: filter_query }
+      - { rule: simple_query }
+
+  simple_query:
+    ast: { tag: "simple-query" }
+    rule: simple_query_expr
+
+  filter_query:
+    ast: { tag: "filter-query" }
+    sequence:
+      - { rule: query_operator }
+      - { rule: ws_opt_path }
+      - { rule: query_rhs_expr }
+
+  query_operator:
+    ast: { tag: "operator", leaf: true }
+    regex: "(>=|<=|!=|==|=|>|<)"
+
+  slice_query:
+    ast: { tag: "slice-query" }
+    choice:
+      - sequence: # [start:end] or [start:]
+          - { rule: slice_start_expr }
+          - { literal: ":", ast: { discard: true } }
+          - optional: { rule: slice_end_expr }
+      - sequence: # [:end] or [:]
+          - { literal: ":", ast: { discard: true } }
+          - optional: { rule: slice_end_expr }
+
+  metadata_block:
+    ast: { tag: "meta" }
+    sequence:
+      - { literal: "#(", ast: { discard:true } }
+      - { rule: expr_for_paren }
+      - { literal: ")", ast: { discard:true } }
+
+  # =================================================================
+  # Subgrammars for Expression Content
+  # =================================================================
+  simple_query_expr:
+    ast: { promote: true }
+    subgrammar:
+      file: "slip_grammar.yaml"
+      rule: "expression_list"
+      placeholder: { ast: { tag: "expr", leaf: true }, regex: '[^\]]*' }
+
+  query_rhs_expr:
+    ast: { tag: "rhs-expr" }
+    sequence:
+      - subgrammar:
+          file: "slip_grammar.yaml"
+          rule: "expression_list"
+          placeholder: { ast: { tag: "expr", leaf: true }, regex: '[^\]]*' }
+
+  slice_start_expr:
+    ast: { tag: "start-expr" }
+    sequence:
+      - subgrammar:
+          file: "slip_grammar.yaml"
+          rule: "expression_list"
+          placeholder: { ast: { tag: "expr", leaf: true }, regex: "[^\\]:]+" }
+
+  slice_end_expr:
+    ast: { tag: "end-expr" }
+    sequence:
+      - subgrammar:
+          file: "slip_grammar.yaml"
+          rule: "expression_list"
+          placeholder: { ast: { tag: "expr", leaf: true }, regex: '[^\]]*' }
+
+  expr_for_paren:
+    ast: { promote: true }
+    subgrammar:
+      file: "slip_grammar.yaml"
+      rule: "expression_list"
+      placeholder: { ast: { tag: "expr", leaf: true }, regex: "[^)]*" }
+
+  # =================================================================
+  # Helpers
+  # =================================================================
+  ws_opt_path: { ast: { discard: true }, regex: '[ \t]*' }
+  EOI: { ast: { discard: true }, regex: '\Z' }

@@ -1,0 +1,75 @@
+start_rule: sig
+rules:
+  sig:
+    ast: { tag: "sig" }
+    sequence:
+      - { rule: WS_OPT }
+      - optional: { rule: sig_params }
+      - { rule: WS_OPT }
+      - optional: { rule: sig_return }
+      - { rule: WS_OPT }
+
+  sig_params:
+    ast: { promote: true }
+    sequence:
+      - { rule: sig_param }
+      - zero_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: WS_OPT }
+            - { literal: ",", ast: { discard: true } }
+            - { rule: WS_OPT }
+            - { rule: sig_param }
+
+  sig_param:
+    ast: { promote: true }
+    choice:
+      - { rule: sig_kwarg }
+      - { rule: sig_rest_item }
+      - { rule: sig_arg }
+
+  sig_arg:
+    ast: { tag: "sig-arg" }
+    rule: sig_name
+
+  sig_kwarg:
+    ast: { tag: "sig-kwarg" }
+    sequence:
+      - { rule: sig_name, ast: { name: "sig-key" } }
+      - { rule: WS_OPT }
+      - { literal: ":", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: sig_value, ast: { name: "value" } }
+
+  sig_value:
+    ast: { tag: "expr", leaf: true }
+    regex: '(?:(?!->)[^,}])+'
+
+  sig_rest:
+    ast: { tag: "sig-rest-arg", leaf: true }
+    regex: '[a-zA-Z][a-zA-Z0-9-]*\??(?=\.\.\.)'
+
+  sig_rest_item:
+    ast: { promote: true }
+    sequence:
+      - { rule: sig_rest }
+      - { literal: "...", ast: { discard: true } }
+
+  sig_return:
+    ast: { tag: "sig-return" }
+    sequence:
+      - { literal: "->", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: sig_return_value }
+
+  sig_return_value:
+    ast: { tag: "expr", leaf: true }
+    regex: '[^}]*'
+
+  sig_name:
+    ast: { tag: "name", leaf: true }
+    regex: '[a-zA-Z][a-zA-Z0-9-]*\??'
+
+  WS_OPT:
+    ast: { discard: true }
+    regex: '[ \t]*'
