@@ -4,11 +4,10 @@ Transforms the raw parser AST into a semantic AST using slip_datatypes.
 
 from slip.slip_datatypes import (
     Code, List, IString,
-    GetPathLiteral, SetPathLiteral, DelPathLiteral,
+    PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group,
     Root, Parent, Pwd, PipedPath,
-    PipedPathLiteral, MultiSetPathLiteral,
-    Sig, PostPath, ByteStream
+    Sig, PostPath, ByteStream, MultiSetPath
 )
 
 class SlipTransformer:
@@ -50,7 +49,19 @@ class SlipTransformer:
                     return []
                 return self.transform(children)
             case 'code':
-                return self._attach_loc(Code(self.transform(children)), node)
+                # Transform each child expr. If an expr consists solely of multiple PathLiterals,
+                # split them into separate expressions to match expected AST shape.
+                items = []
+                for ch in children:
+                    if isinstance(ch, dict) and ch.get('tag') == 'expr':
+                        terms = self.transform(ch.get('children', []))
+                        if isinstance(terms, list) and len(terms) > 1 and all(isinstance(t, PathLiteral) for t in terms):
+                            items.extend([[t] for t in terms])
+                        else:
+                            items.append(terms)
+                    else:
+                        items.append(self.transform(ch))
+                return self._attach_loc(Code(items), node)
             case 'list':
                 return self._attach_loc(List(self.transform(children)), node)
             case 'typed-list':
@@ -120,20 +131,11 @@ class SlipTransformer:
                 if not children:
                     raise ValueError("Path literal cannot be empty.")
                 inner = self.transform(children[0])
-                if isinstance(inner, GetPath):
-                    plit = GetPathLiteral(inner.segments, inner.meta)
-                elif isinstance(inner, SetPath):
-                    plit = SetPathLiteral(inner.segments, inner.meta)
-                elif isinstance(inner, DelPath):
-                    gp = inner.path
-                    plit = DelPathLiteral(GetPathLiteral(gp.segments, gp.meta))
-                elif isinstance(inner, PipedPath):
-                    plit = PipedPathLiteral(inner.segments, inner.meta)
-                elif isinstance(inner, tuple) and inner[0] == 'multi-set':
-                    plit = MultiSetPathLiteral(inner[1])
-                else:
+                if isinstance(inner, tuple) and inner[0] == 'multi-set':
+                    inner = MultiSetPath(inner[1])
+                if not isinstance(inner, (GetPath, SetPath, DelPath, PipedPath, MultiSetPath)):
                     raise TypeError(f"Unexpected path type in path literal: {type(inner)}")
-                return self._attach_loc(plit, node)
+                return self._attach_loc(PathLiteral(inner), node)
 
             # Desugar literals
             case 'dict':
@@ -312,24 +314,17 @@ class SlipTransformer:
 
     def transform_path_literal(self, node):
         # The parser gives us a 'path-literal' node with a single child,
-        # which is the AST for a get-path, set-path, or del-path.
+        # which is the AST for a get-path, set-path, del-path, piped-path, or multi-set path.
         if not node.get('children'):
-             # This can happen for an empty literal: ``
-             raise ValueError("Path literal cannot be empty.")
+            # This can happen for an empty literal: ``
+            raise ValueError("Path literal cannot be empty.")
         path_action_ast = node['children'][0]
         path_action_obj = self.transform(path_action_ast)
 
-        if isinstance(path_action_obj, GetPath):
-            return GetPathLiteral(path_action_obj.segments, path_action_obj.meta)
-        if isinstance(path_action_obj, SetPath):
-            return SetPathLiteral(path_action_obj.segments, path_action_obj.meta)
-        if isinstance(path_action_obj, DelPath):
-            get_path_action = path_action_obj.path
-            return DelPathLiteral(GetPathLiteral(get_path_action.segments, get_path_action.meta))
-        if isinstance(path_action_obj, PipedPath):
-            return PipedPathLiteral(path_action_obj.segments, path_action_obj.meta)
         if isinstance(path_action_obj, tuple) and path_action_obj[0] == 'multi-set':
-            return MultiSetPathLiteral(path_action_obj[1])
+            return PathLiteral(MultiSetPath(path_action_obj[1]))
+        if isinstance(path_action_obj, (GetPath, SetPath, DelPath, PipedPath)):
+            return PathLiteral(path_action_obj)
 
         raise TypeError(f"Unexpected path type in path literal: {type(path_action_obj)}")
 

@@ -95,7 +95,7 @@ def test_stdlib_math(stdlib):
 
 def test_stdlib_string(stdlib):
     assert stdlib._join(['a', 'b'], '-') == "a-b"
-    assert stdlib._replace("hello", "l", "w") == "hewwo"
+    assert stdlib._str_replace("hello", "l", "w") == "hewwo"
 
 def test_stdlib_list(stdlib):
     assert stdlib._slice_range([1,2,3,4], 1, 3) == [2,3]

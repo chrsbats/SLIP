@@ -83,6 +83,8 @@ SLIP's syntax requires specific spacing rules for clarity and to avoid ambiguity
     data|map [ ... ]
     ```
 
+- Filters: In filter predicates, reference the current item’s fields with a leading dot (e.g., .hp, .name). Bare names are lexical. Example: players[.hp > 100 and .name = 'Karl'].
+
 **4. Formatting Blocks and Statements**
 
 Code blocks and statements should be formatted for maximum readability.
@@ -122,6 +124,14 @@ Code blocks and statements should be formatted for maximum readability.
     (add 10 20)    // Correct
     add 10, 20     // Syntax Error
     ```
+
+Use {} for meta-parameters (sig literals) in functions that bind variables
+- When a function’s argument is declarative metadata (never evaluated) and will be inspected to bind names dynamically, pass it as a sig literal.
+- This convention is used by the core and should be followed in user code:
+  - `fn {args} [body]`
+  - `foreach {vars} collection [body]`
+  - `for {i} start end [body]`
+Rationale for readers from other languages: A sig literal is structurally distinct and unevaluated. Seeing `x {y} ys [ … ]` signals “{y} is metadata that will bind y”, not “evaluate {y}”. This keeps evaluation rules uniform and call sites self-documenting.
 
 *   **Commas:** Use one space after a comma inside `sig`, `dict`, and `list` literals.
     ```slip

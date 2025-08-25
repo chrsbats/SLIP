@@ -1,7 +1,7 @@
 import pytest
 from slip.slip_runtime import StdLib
 from slip.slip_interpreter import Evaluator, View
-from slip.slip_datatypes import Scope, GetPathLiteral, GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group, Parent, Root, Pwd, Code, SlipFunction, PipedPath
+from slip.slip_datatypes import Scope, GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group, Parent, Root, Pwd, Code, SlipFunction, PipedPath, Sig
 
 @pytest.fixture
 def evaluator():
@@ -437,7 +437,7 @@ async def test_foreach_over_list_accumulates(evaluator, root_scope):
     # foreach item items [ sum: sum + item ]
     ast = [[
         GetPath([Name('foreach')]),
-        GetPath([Name('item')]),
+        Sig(['item'], {}, None, None),
         GetPath([Name('items')]),
         Code([[SetPath([Name('sum')]), [GetPath([Name('sum')]), GetPath([Name('+')]), GetPath([Name('item')])]]])
     ]]
@@ -446,20 +446,20 @@ async def test_foreach_over_list_accumulates(evaluator, root_scope):
     assert root_scope['sum'] == sum(root_scope['items'])
 
 @pytest.mark.asyncio
-async def test_foreach_over_dict_iterates_values(evaluator, root_scope):
+async def test_foreach_over_dict_iterates_keys(evaluator, root_scope):
     root_scope['dct'] = {'x': 1, 'y': 3}
     root_scope['acc'] = 0
-    # foreach val dct [ acc: acc + val ]
+    # foreach k dct [ acc: acc + dct[k] ]
     ast = [[
         GetPath([Name('foreach')]),
-        GetPath([Name('val')]),
+        Sig(['k'], {}, None, None),
         GetPath([Name('dct')]),
-        Code([[SetPath([Name('acc')]), [GetPath([Name('acc')]), GetPath([Name('+')]), GetPath([Name('val')])]]])
+        Code([[SetPath([Name('acc')]), [GetPath([Name('acc')]), GetPath([Name('+')]), GetPath([Name('dct'), Index([[GetPath([Name('k')])]])])]]])
     ]]
     await evaluator.eval(ast, root_scope)
     assert root_scope['acc'] == 4
-    # Last bound value should persist in scope
-    assert root_scope['val'] == 3
+    # Last bound key should persist in scope
+    assert root_scope['k'] == 'y'
 
 @pytest.mark.asyncio
 async def test_generic_dispatch_by_arity(evaluator, root_scope):

@@ -1,6 +1,6 @@
 import pytest
 from slip import ScriptRunner
-from slip.slip_datatypes import Response, GetPathLiteral, Name
+from slip.slip_datatypes import Response, PathLiteral, GetPath, Name
 from slip.slip_runtime import SlipObject
 
 
@@ -63,7 +63,7 @@ calculate-fireball-impact caster target none
     # Verify we got a Response(ok, <state>) back, and side effects are present and ordered
     resp = res.value
     assert isinstance(resp, Response), f"expected Response, got {type(resp).__name__}"
-    assert resp.status == GetPathLiteral([Name("ok")])
+    assert resp.status == PathLiteral(GetPath([Name("ok")]))
 
     # New target state should be a SlipObject with updated hp (100 - (50 - 10) = 60)
     state = resp.value

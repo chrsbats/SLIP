@@ -12,9 +12,9 @@ import pystache
 
 from slip.slip_datatypes import (
     Scope, Code, List as SlipList, IString, SlipFunction, GenericFunction, Response,
-    GetPathLiteral, SetPathLiteral, DelPathLiteral, MultiSetPathLiteral, PathNotFound, PipedPathLiteral,
+    PathLiteral, PathNotFound,
     GetPath, SetPath, DelPath, Name, Index, Slice, Group, FilterQuery,
-    Root, Parent, Pwd, PipedPath, PathSegment, SlipCallable, Sig, PostPath, ByteStream
+    Root, Parent, Pwd, PipedPath, PathSegment, SlipCallable, Sig, PostPath, ByteStream, MultiSetPath
 )
 
 # Global registry for christening Scope types
@@ -67,6 +67,97 @@ class PathResolver:
     """Handles all path traversal and resolution logic."""
     def __init__(self, evaluator: 'Evaluator'):
         self.evaluator = evaluator
+
+    def _build_item_overlay_scope(self, item, parent: Scope) -> Scope:
+        s = Scope(parent=parent)
+        try:
+            # Scope-like
+            from slip.slip_datatypes import Scope as _Scope
+            if isinstance(item, _Scope):
+                for k, v in item.bindings.items():
+                    s[k] = v
+            # Mapping-like
+            elif isinstance(item, collections.abc.Mapping):
+                for k in item.keys():
+                    try:
+                        key = str(k)
+                        s[key] = item[k]
+                    except Exception:
+                        continue
+            else:
+                # Plain object: expose public attributes (non-callables, no _ prefix)
+                for name in dir(item):
+                    if name.startswith('_'):
+                        continue
+                    try:
+                        v = getattr(item, name)
+                        if callable(v):
+                            continue
+                        s[name] = v
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return s
+
+    def _normalize_relative_predicate_terms(self, terms):
+        # Strip a leading '.' in single-name GetPath nodes to support .hp syntax.
+        from slip.slip_datatypes import GetPath as _GP, Name as _Name, Group as _Group, List as _List, Parent as _Parent
+        def norm_term(t):
+            if isinstance(t, _GP) and t.segments and isinstance(t.segments[0], _Name):
+                txt = t.segments[0].text
+                if isinstance(txt, str):
+                    if txt.startswith('.') and len(txt) > 1:
+                        # .field -> field (item-relative; evaluate in overlay)
+                        new_first = _Name(txt[1:])
+                        segs = [new_first] + list(t.segments[1:])
+                        return _GP(segs, getattr(t, 'meta', None))
+                    else:
+                        # Bare name -> force lexical: rewrite to ../name so overlay cannot shadow it
+                        segs = [_Parent, _Name(txt)] + list(t.segments[1:])
+                        return _GP(segs, getattr(t, 'meta', None))
+                return t
+            if isinstance(t, _Group):
+                # Recurse into nested expression lists
+                inner = []
+                for expr in t.nodes:
+                    inner.append([norm_term(x) for x in expr])
+                g = _Group(inner)
+                try:
+                    g.loc = getattr(t, 'loc', None)
+                except Exception:
+                    pass
+                return g
+            if isinstance(t, _List):
+                # Recurse into list literal expressions
+                inner = []
+                for expr in t.nodes:
+                    inner.append([norm_term(x) for x in expr])
+                l = _List(inner)
+                try:
+                    l.loc = getattr(t, 'loc', None)
+                except Exception:
+                    pass
+                return l
+            return t
+        return [norm_term(x) for x in terms]
+
+    def _split_top_level_and(self, terms):
+        from slip.slip_datatypes import GetPath as _GP, Name as _Name, Parent as _Parent
+        if not isinstance(terms, list):
+            return None
+        for i, t in enumerate(terms):
+            if isinstance(t, _GP):
+                segs = getattr(t, 'segments', [])
+                if len(segs) == 1 and isinstance(segs[0], _Name) and segs[0].text in ('and', 'logical-and'):
+                    left = terms[:i]
+                    right = terms[i+1:]
+                    return left, right
+                if len(segs) == 2 and segs[0] is _Parent and isinstance(segs[1], _Name) and segs[1].text in ('and', 'logical-and'):
+                    left = terms[:i]
+                    right = terms[i+1:]
+                    return left, right
+        return None
 
     async def _get_segment_key(self, segment: PathSegment, scope: Scope) -> Any:
         """Evaluates a path segment to determine the key for a lookup."""
@@ -127,10 +218,10 @@ class PathResolver:
                 return u
         return None
 
-    def _extract_fs_locator(self, path: GetPath | SetPath) -> str | None:
+    def _extract_file_locator(self, path: GetPath | SetPath) -> str | None:
         loc = getattr(path, 'loc', None) or {}
         txt = loc.get('text') if isinstance(loc, dict) else None
-        if isinstance(txt, str) and txt.startswith("fs://"):
+        if isinstance(txt, str) and txt.startswith("file://"):
             u = txt.rstrip()
             # Strip any inline metadata (e.g., "#(...)") that may be present in the token text
             # Be robust: cut at the first '#' to handle tokens like "...#:" as well.
@@ -139,11 +230,20 @@ class PathResolver:
                 u = u[:hash_idx]
             if isinstance(path, SetPath) or u.endswith(":"):
                 u = u.rstrip(":")
+            # Canonicalize bare and relative forms
+            try:
+                tail = u[len("file://"):]
+                if tail in ("", "/", ".", "./"):
+                    return "file://./"
+                if tail in ("..", "../"):
+                    return "file://../"
+            except Exception:
+                pass
             return u
         segments = getattr(path, 'segments', None) or []
         if segments and isinstance(segments[0], Name):
             s0 = segments[0].text
-            if isinstance(s0, str) and s0.startswith("fs://"):
+            if isinstance(s0, str) and s0.startswith("file://"):
                 u = s0
                 # Trim any inline metadata fragment, e.g., "#(...)"
                 hash_idx = u.find("#")
@@ -151,6 +251,15 @@ class PathResolver:
                     u = u[:hash_idx]
                 if isinstance(path, SetPath) or u.endswith(":"):
                     u = u.rstrip(":")
+                # Canonicalize bare and relative forms
+                try:
+                    tail = u[len("file://"):]
+                    if tail in ("", "/", ".", "./"):
+                        return "file://./"
+                    if tail in ("..", "../"):
+                        return "file://../"
+                except Exception:
+                    pass
                 return u
         return None
 
@@ -212,43 +321,35 @@ class PathResolver:
             from slip.slip_http import http_get  # local import to avoid hard dependency until needed
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
             return await http_get(url, cfg)
-        fs_loc = self._extract_fs_locator(path)
-        if fs_loc:
-            from slip.slip_fs import fs_get
+        file_loc = self._extract_file_locator(path)
+        if file_loc:
+            from slip.slip_file import file_get
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
             base_dir = getattr(self.evaluator, 'source_dir', None)
             try:
-                return await fs_get(fs_loc, cfg, base_dir=base_dir)
+                return await file_get(file_loc, cfg, base_dir=base_dir)
             except FileNotFoundError:
-                raise PathNotFound(fs_loc)
+                raise PathNotFound(file_loc)
         # Resolve the path normally
         val = await self._resolve_value(path, scope)
         # If the resolved value is itself a path (alias), try to dereference it safely.
         try:
-            from slip.slip_datatypes import GetPath as _GP, GetPathLiteral as _GPL
-            # Literal alias
-            if isinstance(val, _GPL):
-                # Self-alias like ok: `ok` should yield the literal, not recurse.
-                if val.segments == path.segments and getattr(val, 'meta', None) == getattr(path, 'meta', None):
-                    return val
-                gp = _GP(val.segments, getattr(val, 'meta', None))
-                try:
-                    return await self.get(gp, scope)
-                except Exception:
-                    # On failure, keep the original literal (do not coerce to GetPath)
-                    return val
+            from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL
+            # Literal alias: return as-is. Callers that need a path object can use call.
+            if isinstance(val, _PL):
+                return val
             # Runtime path alias
             if isinstance(val, _GP):
                 # Avoid immediate recursion when alias points to the same path.
                 if val.segments == path.segments and getattr(val, 'meta', None) == getattr(path, 'meta', None):
-                    from slip.slip_datatypes import GetPathLiteral as _GPLIT
-                    return _GPLIT(val.segments, getattr(val, 'meta', None))
+                    from slip.slip_datatypes import PathLiteral as _PLIT
+                    return _PLIT(val)
                 try:
                     return await self.get(val, scope)
                 except Exception:
                     # On failure, return a literal representation for stable equality
-                    from slip.slip_datatypes import GetPathLiteral as _GPLIT
-                    return _GPLIT(val.segments, getattr(val, 'meta', None))
+                    from slip.slip_datatypes import PathLiteral as _PLIT
+                    return _PLIT(val)
         except Exception:
             pass
         return val
@@ -285,11 +386,11 @@ class PathResolver:
                 payload = value if isinstance(value, (str, bytes, bytearray)) else str(value)
             await http_put(url, payload, cfg)
             return  # assignment expression will still return the RHS value upstream
-        fs_loc = self._extract_fs_locator(path)
-        if fs_loc:
-            from slip.slip_fs import fs_put
+        file_loc = self._extract_file_locator(path)
+        if file_loc:
+            from slip.slip_file import file_put
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
-            await fs_put(fs_loc, value, cfg, base_dir=getattr(self.evaluator, 'source_dir', None))
+            await file_put(file_loc, value, cfg, base_dir=getattr(self.evaluator, 'source_dir', None))
             return
         container, key = await self._resolve(path, scope)
 
@@ -352,11 +453,11 @@ class PathResolver:
             cfg = await self._meta_to_dict(getattr(path.path, 'meta', None), scope)
             await http_delete(url, cfg)
             return
-        fs_loc = self._extract_fs_locator(path.path)
-        if fs_loc:
-            from slip.slip_fs import fs_delete
+        file_loc = self._extract_file_locator(path.path)
+        if file_loc:
+            from slip.slip_file import file_delete
             cfg = await self._meta_to_dict(getattr(path.path, 'meta', None), scope)
-            await fs_delete(fs_loc, cfg, base_dir=getattr(self.evaluator, 'source_dir', None))
+            await file_delete(file_loc, cfg, base_dir=getattr(self.evaluator, 'source_dir', None))
             return
         container, key = await self._resolve(path.path, scope)
         del container[key]
@@ -454,10 +555,68 @@ class PathResolver:
         if isinstance(container, list):
             out = []
             for item in container:
+                ok = False
                 try:
-                    ok = await self.evaluator._eval_expr([item] + pred, scope)
+                    # New: object-relative predicate in overlay scope
+                    pred_terms = self._normalize_relative_predicate_terms(pred)
+                    overlay = self._build_item_overlay_scope(item, scope)
+                    # Try structured AND split first to ensure grouped RHS is truth-evaluated as a whole.
+                    split = self._split_top_level_and(pred_terms)
+                    if split:
+                        left_terms, right_terms = split
+                        try:
+                            lval = await self.evaluator._eval_expr(left_terms, overlay)
+                            if isinstance(lval, Response):
+                                st = lval.status
+                                if (
+                                    isinstance(st, PathLiteral)
+                                    and isinstance(getattr(st, "inner", None), GetPath)
+                                    and len(st.inner.segments) == 1
+                                    and isinstance(st.inner.segments[0], Name)
+                                    and st.inner.segments[0].text == "return"
+                                ):
+                                    lval = lval.value
+                            if not lval:
+                                ok = False
+                            else:
+                                rval = await self.evaluator._eval_expr(right_terms, overlay)
+                                if isinstance(rval, Response):
+                                    st = rval.status
+                                    if (
+                                        isinstance(st, PathLiteral)
+                                        and isinstance(getattr(st, "inner", None), GetPath)
+                                        and len(st.inner.segments) == 1
+                                        and isinstance(st.inner.segments[0], Name)
+                                        and st.inner.segments[0].text == "return"
+                                    ):
+                                        rval = rval.value
+                                ok = bool(rval)
+                            # short-circuit: skip generic path when split succeeded
+                            if ok:
+                                out.append(item)
+                            continue
+                        except Exception:
+                            # Fall through to generic single-expression eval below
+                            pass
+                    # Generic single-expression evaluation in overlay
+                    ok_eval = await self.evaluator._eval_expr(pred_terms, overlay)
+                    if isinstance(ok_eval, Response):
+                        st = ok_eval.status
+                        if (
+                            isinstance(st, PathLiteral)
+                            and isinstance(getattr(st, "inner", None), GetPath)
+                            and len(st.inner.segments) == 1
+                            and isinstance(st.inner.segments[0], Name)
+                            and ok_eval.status.inner.segments[0].text == "return"
+                        ):
+                            ok_eval = ok_eval.value
+                    ok = bool(ok_eval)
                 except Exception:
-                    ok = False
+                    # Back-compat: old pipeline style using the item as LHS
+                    try:
+                        ok = bool(await self.evaluator._eval_expr([item] + pred, scope))
+                    except Exception:
+                        ok = False
                 if ok:
                     out.append(item)
             return out
@@ -507,9 +666,48 @@ class PathResolver:
             keep = True
             if getattr(filt, 'predicate_ast', None) is not None:
                 try:
-                    keep = await self.evaluator._eval_expr([val] + filt.predicate_ast, scope)
+                    pred_terms = self._normalize_relative_predicate_terms(filt.predicate_ast)
+                    overlay = self._build_item_overlay_scope(item, scope)
+                    split = self._split_top_level_and(pred_terms)
+                    if split:
+                        try:
+                            left_terms, right_terms = split
+                            lval = await self.evaluator._eval_expr(left_terms, overlay)
+                            if isinstance(lval, Response):
+                                st = lval.status
+                                if (
+                                    isinstance(st, PathLiteral)
+                                    and isinstance(getattr(st, "inner", None), GetPath)
+                                    and len(st.inner.segments) == 1
+                                    and isinstance(st.inner.segments[0], Name)
+                                    and st.inner.segments[0].text == "return"
+                                ):
+                                    lval = lval.value
+                            if not lval:
+                                keep = False
+                            else:
+                                rval = await self.evaluator._eval_expr(right_terms, overlay)
+                                if isinstance(rval, Response):
+                                    st = rval.status
+                                    if (
+                                        isinstance(st, PathLiteral)
+                                        and isinstance(getattr(st, "inner", None), GetPath)
+                                        and len(st.inner.segments) == 1
+                                        and isinstance(st.inner.segments[0], Name)
+                                        and st.inner.segments[0].text == "return"
+                                    ):
+                                        rval = rval.value
+                                keep = bool(rval)
+                        except Exception:
+                            # fallback to generic eval below
+                            keep = bool(await self.evaluator._eval_expr(pred_terms, overlay))
+                    else:
+                        keep = bool(await self.evaluator._eval_expr(pred_terms, overlay))
                 except Exception:
-                    keep = False
+                    try:
+                        keep = bool(await self.evaluator._eval_expr([val] + filt.predicate_ast, scope))
+                    except Exception:
+                        keep = False
             else:
                 # Legacy shorthand like [> 10]: synthesize predicate and evaluate via evaluator
                 op = getattr(filt, 'operator', None)
@@ -583,9 +781,48 @@ class PathResolver:
             keep = True
             if getattr(filt, 'predicate_ast', None) is not None:
                 try:
-                    keep = await self.evaluator._eval_expr([val] + filt.predicate_ast, scope)
+                    pred_terms = self._normalize_relative_predicate_terms(filt.predicate_ast)
+                    overlay = self._build_item_overlay_scope(item, scope)
+                    split = self._split_top_level_and(pred_terms)
+                    if split:
+                        try:
+                            left_terms, right_terms = split
+                            lval = await self.evaluator._eval_expr(left_terms, overlay)
+                            if isinstance(lval, Response):
+                                st = lval.status
+                                if (
+                                    isinstance(st, PathLiteral)
+                                    and isinstance(getattr(st, "inner", None), GetPath)
+                                    and len(st.inner.segments) == 1
+                                    and isinstance(st.inner.segments[0], Name)
+                                    and st.inner.segments[0].text == "return"
+                                ):
+                                    lval = lval.value
+                            if not lval:
+                                keep = False
+                            else:
+                                rval = await self.evaluator._eval_expr(right_terms, overlay)
+                                if isinstance(rval, Response):
+                                    st = rval.status
+                                    if (
+                                        isinstance(st, PathLiteral)
+                                        and isinstance(getattr(st, "inner", None), GetPath)
+                                        and len(st.inner.segments) == 1
+                                        and isinstance(st.inner.segments[0], Name)
+                                        and st.inner.segments[0].text == "return"
+                                    ):
+                                        rval = rval.value
+                                keep = bool(rval)
+                        except Exception:
+                            # fallback to generic eval below
+                            keep = bool(await self.evaluator._eval_expr(pred_terms, overlay))
+                    else:
+                        keep = bool(await self.evaluator._eval_expr(pred_terms, overlay))
                 except Exception:
-                    keep = False
+                    try:
+                        keep = bool(await self.evaluator._eval_expr([val] + filt.predicate_ast, scope))
+                    except Exception:
+                        keep = False
             else:
                 # Legacy shorthand like [> 10]: synthesize predicate and evaluate via evaluator
                 op = getattr(filt, 'operator', None)
@@ -638,6 +875,8 @@ class Evaluator:
         self.call_stack = []
         self.current_source = None
         self.current_local_scope = None
+        # Cache of loaded modules keyed by PathLiteral string
+        self.module_cache: Dict[str, Any] = {}
         # When True, prefer binding into the current container scope even if a parent owns the key.
         # Used by run-with to avoid leaking writes into the caller's scope.
         self.bind_locals_prefer_container: bool = True
@@ -668,7 +907,7 @@ class Evaluator:
         """Public entry point for evaluation. Unwraps 'return' responses."""
         self.current_node = node
         result = await self._eval(node, scope)
-        if isinstance(result, Response) and result.status == GetPathLiteral([Name("return")]):
+        if isinstance(result, Response) and isinstance(result.status, PathLiteral) and isinstance(result.status.inner, GetPath) and len(result.status.inner.segments) == 1 and isinstance(result.status.inner.segments[0], Name) and result.status.inner.segments[0].text == "return":
             return result.value
         return result
 
@@ -690,7 +929,7 @@ class Evaluator:
                 for expr in node:
                     result = await self._eval_expr(expr, scope)
                     # Only propagate 'return' control-flow responses; other responses are data.
-                    if isinstance(result, Response) and result.status == GetPathLiteral([Name("return")]):
+                    if isinstance(result, Response) and isinstance(result.status, PathLiteral) and isinstance(result.status.inner, GetPath) and len(result.status.inner.segments) == 1 and isinstance(result.status.inner.segments[0], Name) and result.status.inner.segments[0].text == "return":
                         return result
                 return result
             else: # It's a single expression (list of terms)
@@ -702,7 +941,7 @@ class Evaluator:
                 return await self.path_resolver.get(node, scope)
 
             # Path literals evaluate to themselves (do not resolve)
-            case GetPathLiteral() | SetPathLiteral() | DelPathLiteral() | MultiSetPathLiteral() | PipedPathLiteral():
+            case PathLiteral():
                 return node
 
             case Group():
@@ -712,44 +951,7 @@ class Evaluator:
             case SlipList():
                 results = []
                 for expr in node.nodes:
-                    # Special handling for list elements that are a single term which may be callable:
-                    # auto-call only when there is an exact zero-arity (non-variadic) method.
-                    if isinstance(expr, list) and len(expr) == 1:
-                        term = expr[0]
-                        val = await self._eval(term, scope)
-                        should_auto_call = False
-
-                        # GenericFunction: auto-call only if it has an exact 0-arity, non-variadic method.
-                        if isinstance(val, GenericFunction):
-                            for m in val.methods:
-                                s = getattr(m, 'meta', {}).get('type')
-                                if isinstance(s, Sig):
-                                    base = len(s.positional) + len(s.keywords)
-                                    if base == 0 and s.rest is None:
-                                        should_auto_call = True
-                                        break
-                                elif isinstance(m.args, Code):
-                                    # Legacy Code-args function with zero parameters
-                                    if len(m.args.nodes) == 0:
-                                        should_auto_call = True
-                                        break
-
-                        # SlipFunction: check its signature (or legacy Code args) for zero arity.
-                        elif isinstance(val, SlipFunction):
-                            s = getattr(val, 'meta', {}).get('type')
-                            if isinstance(s, Sig):
-                                base = len(s.positional) + len(s.keywords)
-                                if base == 0 and s.rest is None:
-                                    should_auto_call = True
-                            elif isinstance(val.args, Code) and len(val.args.nodes) == 0:
-                                should_auto_call = True
-
-                        if should_auto_call:
-                            results.append(await self.call(val, [], scope))
-                        else:
-                            results.append(val)
-                    else:
-                        results.append(await self._eval_expr(expr, scope))
+                    results.append(await self._eval_expr(expr, scope))
                 return results
 
             case ByteStream() as bs:
@@ -874,7 +1076,7 @@ class Evaluator:
                 elif isinstance(first, GetPath):
                     try:
                         resolved = await self._eval(first, scope)
-                        update_style = isinstance(resolved, (PipedPath, PipedPathLiteral))
+                        update_style = isinstance(resolved, PipedPath)
                     except Exception:
                         update_style = False
 
@@ -897,7 +1099,7 @@ class Evaluator:
                     # treat as a normal assignment (e.g., "+: |add" or rebind "/+: |sub") rather than an update.
                     try:
                         cur_val = await self.path_resolver.get(GetPath(head_uneval.segments, head_uneval.meta), scope)
-                        if isinstance(cur_val, (PipedPath, PipedPathLiteral)):
+                        if isinstance(cur_val, PipedPath):
                             update_style = False
                     except PathNotFound:
                         update_style = False
@@ -905,7 +1107,7 @@ class Evaluator:
                 if update_style:
                     # Seed the RHS chain with the current value, evaluate, set, and return the new value.
                     new_value = await self._eval_expr([cur_val] + value_expr, scope)
-                    if isinstance(new_value, Response) and new_value.status == GetPathLiteral([Name("return")]):
+                    if isinstance(new_value, Response) and isinstance(new_value.status, PathLiteral) and isinstance(new_value.status.inner, GetPath) and len(new_value.status.inner.segments) == 1 and isinstance(new_value.status.inner.segments[0], Name) and new_value.status.inner.segments[0].text == "return":
                         new_value = new_value.value
                     self.current_node = head_uneval
                     await self.path_resolver.set(head_uneval, new_value, scope)
@@ -914,7 +1116,7 @@ class Evaluator:
                 # Normal assignment: evaluate RHS as a value, set, return the assigned value (or merged GF)
                 self.current_node = head_uneval
                 value = await self._eval_expr(value_expr, scope)
-                if isinstance(value, Response) and value.status == GetPathLiteral([Name("return")]):
+                if isinstance(value, Response) and isinstance(value.status, PathLiteral) and isinstance(value.status.inner, GetPath) and len(value.status.inner.segments) == 1 and isinstance(value.status.inner.segments[0], Name) and value.status.inner.segments[0].text == "return":
                     value = value.value
 
                 # Alias write: if LHS is a simple name bound to a path, write to that path instead of rebinding
@@ -924,9 +1126,9 @@ class Evaluator:
                         existing = scope[tname]
                     except KeyError:
                         existing = None
-                    from slip.slip_datatypes import GetPath as _GP, GetPathLiteral as _GPL
-                    if isinstance(existing, _GPL):
-                        existing = _GP(existing.segments, getattr(existing, 'meta', None))
+                    from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL
+                    if isinstance(existing, _PL) and isinstance(getattr(existing, 'inner', None), _GP):
+                        existing = existing.inner
                     if isinstance(existing, _GP):
                         await self.path_resolver.set(SetPath(existing.segments, getattr(existing, 'meta', None)), value, scope)
                         return value
@@ -953,8 +1155,7 @@ class Evaluator:
                         from slip.slip_datatypes import (
                             Scope, Code, IString, SlipFunction as _SF, GenericFunction as _GF,
                             GetPath as _GP, SetPath as _SP, DelPath as _DP, PipedPath as _PP,
-                            GetPathLiteral as _GPL, SetPathLiteral as _SPL, DelPathLiteral as _DPL,
-                            PipedPathLiteral as _PPL, MultiSetPathLiteral as _MSPL
+                            PathLiteral as _PL, MultiSetPath as _MSP
                         )
                         if val is None:
                             return 'none'
@@ -974,7 +1175,7 @@ class Evaluator:
                             return 'dict'
                         if isinstance(val, Scope):
                             return 'scope'
-                        if isinstance(val, (_GP, _SP, _DP, _PP, _GPL, _SPL, _DPL, _PPL, _MSPL)):
+                        if isinstance(val, (_GP, _SP, _DP, _PP, _PL, _MSP)):
                             return 'path'
                         if isinstance(val, (_SF, _GF)) or callable(val):
                             return 'function'
@@ -1123,20 +1324,20 @@ class Evaluator:
                 if url is not None and len(terms) >= 2:
                     # Evaluate RHS to a value, then write via PathResolver.set
                     value = await self._eval_expr(terms[1:], scope)
-                    if isinstance(value, Response) and value.status == GetPathLiteral([Name("return")]):
+                    if isinstance(value, Response) and isinstance(value.status, PathLiteral) and isinstance(value.status.inner, GetPath) and len(value.status.inner.segments) == 1 and isinstance(value.status.inner.segments[0], Name) and value.status.inner.segments[0].text == "return":
                         value = value.value
                     await self.path_resolver.set(SetPath(head_uneval.segments, getattr(head_uneval, 'meta', None)), value, scope)
                     return value
                 # Convenience: allow FS PUT using get-path + value, e.g.:
-                #   fs://path/to/file "body"
+                #   file://path/to/file "body"
                 # Treat as a SetPath to the same locator and perform PUT.
                 try:
-                    fs_loc = self.path_resolver._extract_fs_locator(head_uneval)
+                    file_loc = self.path_resolver._extract_file_locator(head_uneval)
                 except Exception:
-                    fs_loc = None
-                if fs_loc is not None and len(terms) >= 2:
+                    file_loc = None
+                if file_loc is not None and len(terms) >= 2:
                     value = await self._eval_expr(terms[1:], scope)
-                    if isinstance(value, Response) and value.status == GetPathLiteral([Name("return")]):
+                    if isinstance(value, Response) and isinstance(value.status, PathLiteral) and isinstance(value.status.inner, GetPath) and len(value.status.inner.segments) == 1 and isinstance(value.status.inner.segments[0], Name) and value.status.inner.segments[0].text == "return":
                         value = value.value
                     await self.path_resolver.set(SetPath(head_uneval.segments, getattr(head_uneval, 'meta', None)), value, scope)
                     return value
@@ -1146,7 +1347,7 @@ class Evaluator:
                 if not value_expr:
                     raise SyntaxError("PostPath must be followed by a value.")
                 value = await self._eval_expr(value_expr, scope)
-                if isinstance(value, Response) and value.status == GetPathLiteral([Name("return")]):
+                if isinstance(value, Response) and isinstance(value.status, PathLiteral) and isinstance(value.status.inner, GetPath) and len(value.status.inner.segments) == 1 and isinstance(value.status.inner.segments[0], Name) and value.status.inner.segments[0].text == "return":
                     value = value.value
                 self.current_node = head_uneval
                 result = await self.path_resolver.post(head_uneval, value, scope)
@@ -1216,6 +1417,26 @@ class Evaluator:
         self.current_node = remaining_terms[0]
         head_val = await self._eval(remaining_terms[0], scope)
 
+        # Dynamic assignment: if the head evaluates to a SetPath or MultiSetPath, treat it as an assignment target
+        from slip.slip_datatypes import SetPath as _SP, MultiSetPath as _MSP
+        if isinstance(head_val, _SP):
+            value = await self._eval_expr(remaining_terms[1:], scope)
+            if isinstance(value, Response) and isinstance(value.status, PathLiteral) and isinstance(value.status.inner, GetPath) and len(value.status.inner.segments) == 1 and isinstance(value.status.inner.segments[0], Name) and value.status.inner.segments[0].text == "return":
+                value = value.value
+            self.current_node = remaining_terms[0]
+            await self.path_resolver.set(head_val, value, scope)
+            return value
+        if isinstance(head_val, _MSP) or (isinstance(head_val, tuple) and len(head_val) > 0 and head_val[0] == 'multi-set'):
+            # Normalize targets list from runtime MultiSetPath or literal tuple form
+            targets = head_val.targets if isinstance(head_val, _MSP) else head_val[1]
+            values = await self._eval_expr(remaining_terms[1:], scope)
+            if not isinstance(values, list) or len(values) != len(targets):
+                raise TypeError(f"Multi-set mismatch: pattern requires {len(targets)} values")
+            for path, v in zip(targets, values):
+                self.current_node = remaining_terms[0]
+                await self.path_resolver.set(path, v, scope)
+            return None
+
         # Support mixing prefix-call followed by piped infix operators.
         # If a PipedPath appears, only consume args up to it for the prefix call.
         result = head_val
@@ -1231,12 +1452,89 @@ class Evaluator:
             arg_end = split_at if split_at is not None else len(remaining_terms)
             arg_terms = remaining_terms[1:arg_end]
 
-            # If a piped operator appears immediately after the head (e.g., "f |example ..."),
-            # do NOT perform a zero-arity prefix call. Treat the head as a value and let
-            # the pipe consume it as the left-hand argument.
-            if split_at is not None and arg_end == 1:
-                k = 1  # start processing at the piped operator
+            # ADD: debug prep for prefix call
+            self._dbg(
+                "CALL prefix prepare",
+                "head_type", getattr(head_val, "__class__", type(head_val)).__name__,
+                "split_at", split_at,
+                "arg_end", arg_end,
+                "argc_terms", len(arg_terms),
+                "arg_term_types", [type(t).__name__ for t in arg_terms],
+            )
+
+            # Zero‑arity handling:
+            # - If a piped operator follows, do not invoke; let the pipe consume the head as LHS.
+            # - Otherwise, auto‑invoke only if the callee has an exact zero‑arity (non‑variadic) method,
+            #   or is a Python callable with no required positional args.
+            if arg_end == 1:
+                if split_at is not None:
+                    k = 1  # defer to the pipe
+                else:
+                    def _should_autocall_zero_arity(v):
+                        try:
+                            from slip.slip_datatypes import GenericFunction as _GF, SlipFunction as _SF, Sig as _Sig, Code as _Code
+                            if isinstance(v, _GF):
+                                for m in v.methods:
+                                    s = getattr(m, 'meta', {}).get('type')
+                                    if isinstance(s, _Sig):
+                                        base = len(s.positional) + len(s.keywords)
+                                        if base == 0 and s.rest is None:
+                                            return True
+                                    else:
+                                        if isinstance(m.args, _Code) and len(m.args.nodes) == 0:
+                                            return True
+                                return False
+                            if isinstance(v, _SF):
+                                s = getattr(v, 'meta', {}).get('type')
+                                if isinstance(s, _Sig):
+                                    base = len(s.positional) + len(s.keywords)
+                                    return base == 0 and s.rest is None
+                                if isinstance(v.args, _Code) and len(v.args.nodes) == 0:
+                                    return True
+                                return False
+                        except Exception:
+                            pass
+                        # Python callable fallback
+                        try:
+                            import inspect
+                            sig = inspect.signature(v)
+                            req = [
+                                p for p in sig.parameters.values()
+                                if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                                and p.default is inspect._empty
+                            ]
+                            # keyword-only params (e.g., scope) are ignored here
+                            return len(req) == 0
+                        except Exception:
+                            return False
+
+                    if _should_autocall_zero_arity(head_val):
+                        name = None
+                        if isinstance(remaining_terms[0], GetPath) and len(remaining_terms[0].segments) == 1 and isinstance(remaining_terms[0].segments[0], Name):
+                            name = remaining_terms[0].segments[0].text
+                        evaluated_args = []
+                        self._dbg(
+                            "CALL prefix",
+                            getattr(head_val, "__class__", type(head_val)).__name__,
+                            "split_at", split_at,
+                            "argc_terms", 0,
+                            "argc", 0,
+                            "arg_term_types", [],
+                            "arg_types", [],
+                        )
+                        self._push_frame(name or '<call>', head_val, evaluated_args, remaining_terms[0])
+                        _ok = False
+                        try:
+                            result = await self.call(head_val, evaluated_args, scope)
+                            _ok = True
+                        finally:
+                            if _ok:
+                                self._pop_frame()
+                        k = 1
+                    else:
+                        k = 1  # leave result=head_val (function value)
             else:
+                # existing evaluated-args call path remains unchanged
                 # Determine display name for stack frame
                 name = None
                 if isinstance(remaining_terms[0], GetPath) and len(remaining_terms[0].segments) == 1 and isinstance(remaining_terms[0].segments[0], Name):
@@ -1246,8 +1544,11 @@ class Evaluator:
                 self._dbg(
                     "CALL prefix",
                     getattr(head_val, "__class__", type(head_val)).__name__,
+                    "split_at", split_at,
+                    "argc_terms", len(arg_terms),
                     "argc", len(evaluated_args),
-                    "arg_types", [type(a).__name__ for a in evaluated_args]
+                    "arg_term_types", [type(t).__name__ for t in arg_terms],
+                    "arg_types", [type(a).__name__ for a in evaluated_args],
                 )
                 self._push_frame(name or '<call>', head_val, evaluated_args, remaining_terms[0])
                 _ok = False
@@ -1258,6 +1559,42 @@ class Evaluator:
                     if _ok:
                         self._pop_frame()
                 k = arg_end
+        async def _rhs_span_for_logical(terms, op_index, scope):
+            """
+            Determine how many terms constitute the RHS operand for a logical op.
+            Recognize simple infix patterns by resolving the middle term to any piped operator:
+              <term> <operator> <term>  -> span 3
+            Also recognize unary piped operator form when only two terms are present:
+              <term> <operator>         -> span 2
+            Otherwise, treat RHS as a single term (span 1).
+            """
+            start = op_index + 1
+            # Try binary form: [term, op, term]
+            if start + 2 < len(terms):
+                mid = terms[start + 1]
+                try:
+                    # PipedPath literal counts as an operator
+                    if isinstance(mid, PipedPath):
+                        return 3
+                    # Resolve mid; if it resolves to a PipedPath, treat as operator
+                    resolved = await self._eval(mid, scope)
+                    if isinstance(resolved, PipedPath):
+                        return 3
+                except Exception:
+                    pass
+            # Try unary piped op form: [term, op]
+            if start + 1 < len(terms):
+                mid = terms[start + 1]
+                try:
+                    if isinstance(mid, PipedPath):
+                        return 2
+                    resolved = await self._eval(mid, scope)
+                    if isinstance(resolved, PipedPath):
+                        return 2
+                except Exception:
+                    pass
+            return 1
+
         while k < len(remaining_terms):
             op_term = remaining_terms[k]
             raw_op_term = op_term # Preserve original term for error reporting
@@ -1277,12 +1614,13 @@ class Evaluator:
                     op_val = GetPath([Name('/')], op_val.meta)
                     continue
                 # Convert path literals to runtime path types first
-                if isinstance(op_val, GetPathLiteral):
-                    op_val = GetPath(op_val.segments, op_val.meta)
-                    continue
-                if isinstance(op_val, PipedPathLiteral):
-                    op_val = PipedPath(op_val.segments, op_val.meta)
-                    continue
+                if isinstance(op_val, PathLiteral):
+                    inner = op_val.inner
+                    if isinstance(inner, PipedPath):
+                        op_val = inner
+                        continue
+                    # Non-piped path-literal (e.g., `ok`) is not an operator; stop resolving
+                    break
                 # Resolve GetPath references from scope (e.g., '+' -> '|add')
                 if isinstance(op_val, GetPath):
                     op_val = await self._eval(op_val, scope)
@@ -1333,10 +1671,12 @@ class Evaluator:
                         if isinstance(pv, PipedPath):
                             unary_mode = True
                             break
-                        if isinstance(pv, GetPathLiteral):
-                            pv = GetPath(pv.segments, pv.meta); continue
-                        if isinstance(pv, PipedPathLiteral):
-                            pv = PipedPath(pv.segments, pv.meta); continue
+                        if isinstance(pv, PathLiteral):
+                            inner = pv.inner
+                            if isinstance(inner, PipedPath):
+                                unary_mode = True
+                            # Either way, stop unwrapping to avoid toggling PathLiteral <-> GetPath
+                            break
                         if isinstance(pv, GetPath):
                             pv = await self._eval(pv, scope); continue
                         if isinstance(pv, Group) and pv.nodes and isinstance(pv.nodes[0], list) and pv.nodes[0]:
@@ -1366,24 +1706,38 @@ class Evaluator:
 
             if func_name == 'logical-and':
                 # Short-circuit: only evaluate RHS if LHS is truthy
+                span = await _rhs_span_for_logical(remaining_terms, k, scope)
                 if not result:
-                    k += 2
+                    # Skip operator and the entire RHS operand
+                    k += 1 + span
                     continue
-                self.current_node = remaining_terms[k + 1]
-                self.current_node = remaining_terms[k + 1]
-                rhs_arg = await self._eval(remaining_terms[k + 1], scope)
+                rhs_start = k + 1
+                if span >= 2:
+                    # Evaluate the RHS slice (operator-inclusive) as a single sub-expression
+                    rhs_arg = await self._eval_expr(remaining_terms[rhs_start:rhs_start + span], scope)
+                else:
+                    self.current_node = remaining_terms[rhs_start]
+                    rhs_arg = await self._eval(remaining_terms[rhs_start], scope)
                 result = rhs_arg
-                k += 2
+                k += 1 + span
                 continue
 
             if func_name == 'logical-or':
                 # Short-circuit: only evaluate RHS if LHS is falsey
+                span = await _rhs_span_for_logical(remaining_terms, k, scope)
                 if result:
-                    k += 2
+                    # Skip operator and the entire RHS operand
+                    k += 1 + span
                     continue
-                rhs_arg = await self._eval(remaining_terms[k + 1], scope)
+                rhs_start = k + 1
+                if span >= 2:
+                    # Evaluate the RHS slice (operator-inclusive) as a single sub-expression
+                    rhs_arg = await self._eval_expr(remaining_terms[rhs_start:rhs_start + span], scope)
+                else:
+                    self.current_node = remaining_terms[rhs_start]
+                    rhs_arg = await self._eval(remaining_terms[rhs_start], scope)
                 result = rhs_arg
-                k += 2
+                k += 1 + span
                 continue
 
             # Special-case: attach examples without calling into StdLib for Sig RHS
@@ -1495,8 +1849,7 @@ class Evaluator:
                 return 'dict'
             if isinstance(val, Scope):
                 return 'scope'
-            if isinstance(val, (GetPath, SetPath, DelPath, PipedPath,
-                                GetPathLiteral, SetPathLiteral, DelPathLiteral, PipedPathLiteral, MultiSetPathLiteral)):
+            if isinstance(val, (GetPath, SetPath, DelPath, PipedPath, PathLiteral, MultiSetPath)):
                 return 'path'
             if isinstance(val, (SlipFunction, GenericFunction)) or callable(val):
                 return 'function'
@@ -1529,8 +1882,8 @@ class Evaluator:
         idx = 0
         for _, type_spec in sig.keywords.items():
             # Normalize path-literal annotations to runtime get-path form
-            if isinstance(type_spec, GetPathLiteral):
-                type_spec = GetPath(type_spec.segments, type_spec.meta)
+            if isinstance(type_spec, PathLiteral):
+                type_spec = type_spec.inner
 
             arg_i = offset + idx
             if arg_i >= len(args):
@@ -1617,12 +1970,14 @@ class Evaluator:
         # Normalize arguments: unwrap 'return' responses so nested calls receive values.
         if isinstance(args, list):
             args = [
-                (a.value if isinstance(a, Response) and a.status == GetPathLiteral([Name("return")]) else a)
+                (a.value if isinstance(a, Response) and isinstance(a.status, PathLiteral) and isinstance(a.status.inner, GetPath) and len(a.status.inner.segments) == 1 and isinstance(a.status.inner.segments[0], Name) and a.status.inner.segments[0].text == "return" else a)
                 for a in args
             ]
 
         match func:
             case GenericFunction():
+                # ADD: entry debug
+                self._dbg("GF call", func.name, "argc", len(args), "methods", len(func.methods))
                 # Helper to build a scope for evaluating guards with parameters bound
                 def _build_guard_scope(method: SlipFunction):
                     call_scope = Scope(parent=method.closure)
@@ -1653,6 +2008,49 @@ class Evaluator:
                                 call_scope[pn.segments[0].text] = arg_val
                     return call_scope
 
+                # Hard preference: exact-arity, non-variadic match (guarded outranks plain)
+                guarded_exact: list[SlipFunction] = []
+                plain_exact: list[SlipFunction] = []
+
+                for m in reversed(func.methods):  # most recent first
+                    s = getattr(m, 'meta', {}).get('type')
+                    if not isinstance(s, SigType):
+                        continue
+                    base = len(s.positional) + len(s.keywords)
+                    if s.rest is not None or len(args) != base:
+                        continue
+                    # Type match
+                    if not await self._sig_types_match(s, m, args, scope):
+                        continue
+                    guards = getattr(m, 'meta', {}).get('guards') or []
+                    if guards:
+                        guard_scope = _build_guard_scope(m)
+                        ok = True
+                        for g in guards:
+                            val = await self._eval(g.ast, guard_scope) if isinstance(g, Code) else await self._eval(g, guard_scope)
+                            if isinstance(val, Response) and isinstance(val.status, PathLiteral) and isinstance(val.status.inner, GetPath) and len(val.status.inner.segments) == 1 and isinstance(val.status.inner.segments[0], Name) and val.status.inner.segments[0].text == "return":
+                                val = val.value
+                            if not val:
+                                ok = False
+                                break
+                        if ok:
+                            guarded_exact.append(m)
+                            # ADD: log candidate
+                            self._dbg("GF exact candidate guarded", getattr(m, "meta", {}).get("type"))
+                    else:
+                        plain_exact.append(m)
+                        # ADD: log candidate
+                        self._dbg("GF exact candidate plain", getattr(m, "meta", {}).get("type"))
+
+                if guarded_exact:
+                    # ADD: log pick
+                    self._dbg("GF pick exact_guarded", getattr(guarded_exact[0], "meta", {}).get("type"))
+                    return await self.call(guarded_exact[0], args, scope)  # most recent guarded
+                if plain_exact:
+                    # ADD: log pick
+                    self._dbg("GF pick exact_plain", getattr(plain_exact[0], "meta", {}).get("type"))
+                    return await self.call(plain_exact[0], args, scope)    # most recent plain
+
                 exact_nonvar_guarded: list[SlipFunction] = []
                 exact_nonvar_plain: list[SlipFunction] = []
                 variadic_ok_guarded: list[tuple[int, SlipFunction]] = []
@@ -1675,7 +2073,7 @@ class Evaluator:
                         guard_scope = _build_guard_scope(m)
                         for g in guards:
                             val = await self._eval(g.ast, guard_scope) if isinstance(g, Code) else await self._eval(g, guard_scope)
-                            if isinstance(val, Response) and val.status == GetPathLiteral([Name("return")]):
+                            if isinstance(val, Response) and isinstance(val.status, PathLiteral) and isinstance(val.status.inner, GetPath) and len(val.status.inner.segments) == 1 and isinstance(val.status.inner.segments[0], Name) and val.status.inner.segments[0].text == "return":
                                 val = val.value
                             if not val:
                                 guard_ok = False
@@ -1690,6 +2088,11 @@ class Evaluator:
                             (variadic_ok_guarded if guards else variadic_ok_plain).append((base, m))
                     else:
                         (no_sig_guarded if guards else no_sig_plain).append(m)
+
+                # If any exact-arity candidates exist, ignore variadic ones entirely to ensure exact wins.
+                if exact_nonvar_guarded or exact_nonvar_plain:
+                    variadic_ok_guarded = []
+                    variadic_ok_plain = []
 
                 # 1) Prefer exact-arity, non-variadic; guarded methods outrank plain
                 if exact_nonvar_guarded:
@@ -1790,7 +2193,7 @@ class Evaluator:
                     self.current_local_scope = prev_local
                 if isinstance(result, Response):
                     # Unwrap 'return' control-flow when leaving a SLIP function call.
-                    if result.status == GetPathLiteral([Name("return")]):
+                    if isinstance(result.status, PathLiteral) and isinstance(result.status.inner, GetPath) and len(result.status.inner.segments) == 1 and isinstance(result.status.inner.segments[0], Name) and result.status.inner.segments[0].text == "return":
                         return result.value
                     return result
                 return result

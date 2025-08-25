@@ -93,7 +93,7 @@ replace: fn {src: `ordered`, old: `ordered`, new: `ordered`} [
 reverse: fn {data-list: `ordered`} [
     result: #[]
     -- For each item in the original list (from start to end)...
-    foreach item data-list [
+    foreach {item} data-list [
         -- ...prepend it to the front of our result list.
         result: add #[ item ] result
     ]
@@ -104,7 +104,16 @@ reverse: fn {data-list: `ordered`} [
 -- list containing the results.
 map: fn {func, data-list: `ordered`} [
     results: #[]
-    foreach item data-list [
+    foreach {item} data-list [
+        results: add results #[ (func item) ]
+    ]
+    return results
+]
+
+-- Data-first overload to support pipe style: list |map (fn {...})
+map: fn {data-list: `ordered`, func: `function`} [
+    results: #[]
+    foreach {item} data-list [
         results: add results #[ (func item) ]
     ]
     return results
@@ -114,7 +123,18 @@ map: fn {func, data-list: `ordered`} [
 -- for which the predicate function returns a truthy value.
 filter: fn {predicate, data-list: `ordered`} [
     results: #[]
-    foreach item data-list [
+    foreach {item} data-list [
+        if [predicate item] [
+            results: add results #[ item ]
+        ]
+    ]
+    return results
+]
+
+-- Data-first overload to support pipe style: list |filter (fn {...})
+filter: fn {data-list: `ordered`, predicate: `function`} [
+    results: #[]
+    foreach {item} data-list [
         if [predicate item] [
             results: add results #[ item ]
         ]
@@ -124,7 +144,7 @@ filter: fn {predicate, data-list: `ordered`} [
 
 -- Reduces a list to a single value by applying a function cumulatively.
 reduce: fn {reducer, accumulator, data-list: `ordered`} [
-    foreach item data-list [
+    foreach {item} data-list [
         accumulator: reducer accumulator item
     ]
     return accumulator
@@ -160,9 +180,14 @@ partial: fn {func, partial-args...} [
 -- right to left. (compose f g h)(x) is equivalent to f(g(h(x))).
 compose: fn {funcs...} [
     return (fn {initial-arg} [
-        return (reduce (fn {acc, f} [ call f #[ acc ] ]) initial-arg (reverse funcs))
+        result: initial-arg
+        foreach {f} (reverse funcs) [
+            result: (call f #[ result ])
+        ]
+        result
     ])
 ]
+
 
 -- --- Object Model Utilities ---
 
@@ -229,7 +254,7 @@ loop: fn {body-block} [
 --       #[ [true], "equal" ]
 --   ]  -- returns "equal"
 cond: fn {clauses} [
-    foreach clause clauses [
+    foreach {clause} clauses [
         [condition-block, result-expr]: clause
 
         -- Execute the condition block. If it's truthy...
@@ -248,13 +273,20 @@ cond: fn {clauses} [
     return none
 ]
 
--- Executes a block of code within the context of a given object,
--- then returns the object. Ideal for fluent configuration.
--- Example: obj |with [ name: "new" ]
-with: fn {obj, block} [
+-- Executes a block of code or merges a mapping within the context of a given
+-- object, then returns the object. Ideal for fluent configuration.
+-- Example (code block): obj |with [ name: "new" ]
+-- Example (mapping):    obj |with #{ hp: 100 }
+with: fn {obj: `scope`, config: `code`} [
     -- Run the code block in the context of the object
-    run-with block obj
-
-    -- Return the original, now-modified object
+    run-with config obj
     return obj
 ]
+with: fn {obj: `scope`, config: `mapping`} [
+    -- Merge key-value pairs from the mapping into the object
+    foreach {k, v} (items config) [
+        obj[k]: v
+    ]
+    return obj
+]
+

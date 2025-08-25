@@ -453,6 +453,21 @@ TEST_CASES = [
             ]}
         ]
     }),
+    ("import_with_file_path_literal", "math1: import `file:///tmp/pytest-of-bats/pytest-66/test_import_file_module_caches0/math.slip`", {
+        "tag": "code", "children": [
+            {"tag": "expr", "children": [
+                {"tag": "set-path", "children": [{"tag": "name", "text": "math1"}]},
+                {"tag": "get-path", "children": [{"tag": "name", "text": "import"}]},
+                {"tag": "path-literal", "children": [
+                    {"tag": "SlipPath_get_path", "children": [
+                        {"tag": "get-path", "children": [
+                            {"tag": "name", "text": "file:///tmp/pytest-of-bats/pytest-66/test_import_file_module_caches0/math.slip"}
+                        ]}
+                    ]}
+                ]}
+            ]}
+        ]
+    }),
 ]
 
 # --- Pytest Test Function ---

@@ -1,6 +1,6 @@
 import pytest
 from slip import ScriptRunner
-from slip.slip_datatypes import Response, GetPathLiteral, Name
+from slip.slip_datatypes import Response, PathLiteral, GetPath, Name
 
 def assert_ok(res, expected=None):
     assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
@@ -13,10 +13,10 @@ def assert_error(res, contains: str | None = None):
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
 def is_resp_ok(resp: Response) -> bool:
-    return isinstance(resp, Response) and resp.status == GetPathLiteral([Name("ok")])
+    return isinstance(resp, Response) and resp.status == PathLiteral(GetPath([Name("ok")]))
 
 def is_resp_err(resp: Response) -> bool:
-    return isinstance(resp, Response) and resp.status == GetPathLiteral([Name("err")])
+    return isinstance(resp, Response) and resp.status == PathLiteral(GetPath([Name("err")]))
 
 @pytest.mark.asyncio
 async def test_example_inline_and_test_single_function_passes():

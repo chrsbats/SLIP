@@ -1,10 +1,9 @@
 import pytest
 from slip.slip_datatypes import (
     Scope, Code, List, IString, SlipFunction, Response,
-    GetPathLiteral, SetPathLiteral, DelPathLiteral,
+    PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, Group,
     Root, Parent, Pwd, PipedPath, MultiSetPath,
-    PipedPathLiteral, MultiSetPathLiteral,
     SlipBlock, PathSegment
 )
 
@@ -159,7 +158,7 @@ def test_slip_function():
     assert repr(f) == "fn [] []"
 
 def test_response():
-    p = GetPathLiteral([Name("ok")])
+    p = PathLiteral(GetPath([Name("ok")]))
     r = Response(p, 123)
     assert r.status is p
     assert r.value == 123
@@ -208,34 +207,31 @@ def test_group_is_sequence():
     g.append(3)
     assert g.ast == ['x', '+', 2, 3]
 
-def test_get_path_literal_structure():
-    p = GetPathLiteral([Name("user"), Name("name")])
-    assert len(p.segments) == 2
-    assert isinstance(p[0], Name)
-    assert p[0].text == "user"
-    assert isinstance(p[1], Name)
-    assert p[1].text == "name"
+def test_path_literal_structure_and_equality():
+    pl1 = PathLiteral(GetPath([Name("user"), Name("name")]))
+    pl2 = PathLiteral(GetPath([Name("user"), Name("name")]))
+    pl3 = PathLiteral(GetPath([Name("user"), Name("email")]))
+    # Inner is a GetPath with two Name segments
+    assert isinstance(pl1.inner, GetPath)
+    assert len(pl1.inner.segments) == 2
+    assert isinstance(pl1.inner.segments[0], Name) and pl1.inner.segments[0].text == "user"
+    assert isinstance(pl1.inner.segments[1], Name) and pl1.inner.segments[1].text == "name"
+    # Equality/hash by canonical string
+    assert pl1 == pl2
+    assert hash(pl1) == hash(pl2)
+    assert pl1 != pl3
+    assert hash(pl1) != hash(pl3)
 
-def test_get_path_literal_getitem():
-    segments = [Name("a"), Index([]), Name("b")]
-    p = GetPathLiteral(segments)
-    assert p[0] is segments[0]
-    assert p[1:] == segments[1:]
-
-def test_path_literal_empty_error():
-    with pytest.raises(ValueError):
-        GetPathLiteral([])
-
-def test_get_path_literal_equality_and_hash():
-    p1 = GetPathLiteral([Name("user"), Name("name")])
-    p2 = GetPathLiteral([Name("user"), Name("name")])
-    p3 = GetPathLiteral([Name("user"), Name("email")])
-
-    assert p1 == p2
-    assert hash(p1) == hash(p2)
-    assert p1 != p3
-    assert hash(p1) != hash(p3)
-    assert p1 != "not a path"
+def test_path_literal_with_set_and_del_and_multiset():
+    pls = PathLiteral(SetPath([Name("user"), Name("name")]))
+    pld = PathLiteral(DelPath(GetPath([Name("user")])))
+    plm = PathLiteral(MultiSetPath([SetPath([Name("a")]), SetPath([Name("b")])]))
+    # String forms
+    from slip.slip_printer import Printer
+    pf = Printer().pformat
+    assert pf(pls) == "`user.name:`"
+    assert pf(pld) == "`~user`"
+    assert pf(plm) == "`[a,b]:`"
 
 
 def test_set_path_structure():
@@ -309,62 +305,66 @@ def test_multi_set_path_equality_and_hash():
 
 # --- Literal Datatype Tests ---------------------------------------------------
 
-def test_piped_path_literal_structure():
-    p = PipedPathLiteral([Name("map")])
-    assert len(p.segments) == 1
-    assert isinstance(p[0], Name)
-    assert p[0].text == "map"
+def test_path_literal_piped_path_structure():
+    pl = PathLiteral(PipedPath([Name("map")]))
+    assert isinstance(pl.inner, PipedPath)
+    assert len(pl.inner.segments) == 1
+    assert isinstance(pl.inner[0], Name)
+    assert pl.inner[0].text == "map"
 
-def test_piped_path_literal_equality_and_hash():
-    p1 = PipedPathLiteral([Name("map")])
-    p2 = PipedPathLiteral([Name("map")])
-    p3 = PipedPathLiteral([Name("filter")])
+def test_path_literal_piped_path_equality_and_hash():
+    p1 = PathLiteral(PipedPath([Name("map")]))
+    p2 = PathLiteral(PipedPath([Name("map")]))
+    p3 = PathLiteral(PipedPath([Name("filter")]))
     assert p1 == p2
     assert hash(p1) == hash(p2)
     assert p1 != p3
     assert p1 != "not a path"
 
-def test_multi_set_path_literal_structure():
-    p = MultiSetPathLiteral([SetPath([Name("a")]), SetPath([Name("b")])])
-    assert len(list(p)) == 2
+def test_path_literal_multiset_structure():
+    pl = PathLiteral(MultiSetPath([SetPath([Name("a")]), SetPath([Name("b")])]))
+    assert isinstance(pl.inner, MultiSetPath)
+    assert len(list(pl.inner)) == 2
 
-def test_multi_set_path_literal_equality_and_hash():
-    m1 = MultiSetPathLiteral([SetPath([Name("a")]), SetPath([Name("b")])])
-    m2 = MultiSetPathLiteral([SetPath([Name("a")]), SetPath([Name("b")])])
-    m3 = MultiSetPathLiteral([SetPath([Name("x")])])
+def test_path_literal_multiset_equality_and_hash():
+    m1 = PathLiteral(MultiSetPath([SetPath([Name("a")]), SetPath([Name("b")])]))
+    m2 = PathLiteral(MultiSetPath([SetPath([Name("a")]), SetPath([Name("b")])]))
+    m3 = PathLiteral(MultiSetPath([SetPath([Name("x")])]))
     assert m1 == m2
     assert hash(m1) == hash(m2)
     assert m1 != m3
     assert m1 != "not a path"
 
 
-def test_set_path_literal_structure():
+def test_path_literal_set_path_structure():
     meta = Group([])
-    p = SetPathLiteral([Name("user"), Name("name")], meta=meta)
-    assert len(p.segments) == 2
-    assert p.meta is meta
-    assert isinstance(p[0], Name)
+    pl = PathLiteral(SetPath([Name("user"), Name("name")], meta=meta))
+    assert isinstance(pl.inner, SetPath)
+    assert len(pl.inner.segments) == 2
+    assert pl.inner.meta is meta
+    assert isinstance(pl.inner[0], Name)
 
-def test_set_path_literal_equality_and_hash():
-    p1 = SetPathLiteral([Name("user")])
-    p2 = SetPathLiteral([Name("user")])
-    p3 = SetPathLiteral([Name("email")])
-    p4_meta = SetPathLiteral([Name("user")], meta=Group([]))
+def test_path_literal_set_path_equality_and_hash():
+    p1 = PathLiteral(SetPath([Name("user")]))
+    p2 = PathLiteral(SetPath([Name("user")]))
+    p3 = PathLiteral(SetPath([Name("email")]))
+    p4_meta = PathLiteral(SetPath([Name("user")], meta=Group([])))
 
     assert p1 == p2
     assert hash(p1) == hash(p2)
     assert p1 != p3
     assert p1 != p4_meta
 
-def test_del_path_literal_structure():
-    p = GetPathLiteral([Name("user")])
-    d = DelPathLiteral(p)
-    assert d.path is p
+def test_path_literal_del_path_structure():
+    gp = GetPath([Name("user")])
+    pl = PathLiteral(DelPath(gp))
+    assert isinstance(pl.inner, DelPath)
+    assert pl.inner.path is gp
 
-def test_del_path_literal_equality_and_hash():
-    d1 = DelPathLiteral(GetPathLiteral([Name("user")]))
-    d2 = DelPathLiteral(GetPathLiteral([Name("user")]))
-    d3 = DelPathLiteral(GetPathLiteral([Name("email")]))
+def test_path_literal_del_path_equality_and_hash():
+    d1 = PathLiteral(DelPath(GetPath([Name("user")])))
+    d2 = PathLiteral(DelPath(GetPath([Name("user")])))
+    d3 = PathLiteral(DelPath(GetPath([Name("email")])))
     assert d1 == d2
     assert hash(d1) == hash(d2)
     assert d1 != d3

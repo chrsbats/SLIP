@@ -79,10 +79,10 @@ async def test_b1_bit_packing_full_and_partial():
     assert_ok(res2, bytes([0xA0]))
 
 @pytest.mark.asyncio
-async def test_fs_put_with_bytestream(tmp_path):
+async def test_file_put_with_bytestream(tmp_path):
     # Write bytes produced by a typed stream to disk
     target = tmp_path / "payload.bin"
-    url = f"fs:///{str(target).lstrip('/')}"
+    url = f"file:///{str(target).lstrip('/')}"
     src = f"""
     {url}: u8#[65, 66, 67]
     """

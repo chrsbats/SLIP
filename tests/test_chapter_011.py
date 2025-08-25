@@ -60,7 +60,7 @@ async def test_foreach_accumulates_in_task_context():
     src = """
 xs: #[1, 2, 3, 4]
 sum: 0
-foreach x xs [
+foreach {x} xs [
   sum: sum + x
 ]
 sum
@@ -125,7 +125,7 @@ task [
   ]
 ]
 task [
-  foreach n (range 1 201) [
+  foreach {n} (range 1 201) [
     obj.sum: obj.sum + n
   ]
 ]
@@ -155,7 +155,7 @@ async def test_channels_producer_consumer_in_order():
     src = """
 ch: make-channel
 task [
-  foreach n #[1, 2, 3, 4, 5] [
+  foreach {n} #[1, 2, 3, 4, 5] [
     send ch n
   ]
 ]

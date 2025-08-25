@@ -56,6 +56,7 @@ rules:
       - { rule: actual_path }
       - optional: { rule: metadata_block }
 
+
   embedded_del_path:
     ast: { tag: "del-path" }
     sequence:
@@ -119,16 +120,17 @@ rules:
   # =================================================================
   # Core Path Structure (Simplified and Corrected)
   # =================================================================
-  url_path:
-    ast: { promote: true }
-    choice:
-      - { rule: url_name_segment }
-      - { rule: url_scheme_segment }
+  # Treat scheme URLs as a single atomic segment with a generic alphabetical scheme
+  url_segment:
+    ast: { tag: "name", leaf: true }
+    # Match '<letters>://', optionally followed by URL content excluding '#' and structural separators.
+    # Allow scheme-only like 'file://'.
+    regex: '[A-Za-z]+://[^#\s;,()\[\]\{\}]*'
 
   actual_path:
     ast: { promote: true }
     choice:
-      - { rule: url_path }   # scheme URLs are a single, atomic segment
+      - { rule: url_segment } # scheme URLs are a single, atomic segment
       - sequence:
           - { rule: root_segment }
           - optional: { rule: component_chain }
@@ -136,6 +138,7 @@ rules:
           - { rule: pwd_segment }
           - optional: { rule: component_chain }
       - { rule: component_chain }
+
 
   component_chain:
     ast: { promote: true }
@@ -175,7 +178,7 @@ rules:
   # =================================================================
   # Individual Segment Definitions
   # =================================================================
-  root_segment: { ast: { tag: "root" }, regex: '/(?!:)' } # Match / unless it's followed by :
+  root_segment: { ast: { tag: "root" }, regex: "/(?!:)" } # Match / unless it's followed by :
   parent_segment: { ast: { tag: "parent" }, literal: ".." }
   pwd_segment: { ast: { tag: "pwd" }, literal: "./" }
 
@@ -183,6 +186,7 @@ rules:
     ast: { promote: true }
     choice:
       - { rule: operator_segment }
+      - { rule: dot_name_segment }
       - { rule: name_segment }
 
   operator_segment:
@@ -192,17 +196,13 @@ rules:
 
   name_segment:
     ast: { tag: "name", leaf: true }
-    regex: '[a-zA-Z0-9-]+(?:\.\.\.|\?)?'
+    regex: '[a-zA-Z0-9_-]+(?:\.\.\.|\?)?'
 
-  url_name_segment:
+  dot_name_segment:
     ast: { tag: "name", leaf: true }
-    # Exclude '#' so '#(...)' remains for metadata_block to parse
-    regex: '(?:https?|fs)://[^#\s;,()\[\]\{\}]*[^#\s;,()\[\]\{\}:]'
+    regex: "\\.[A-Za-z][A-Za-z0-9_-]*"
 
-  url_scheme_segment:
-    ast: { tag: "name", leaf: true }
-    regex: '(?:https?|fs)://'
-
+  # Deprecated: url_name_segment and url_scheme_segment replaced by url_segment with generic scheme support
 
   group_segment:
     ast: { tag: "group" }

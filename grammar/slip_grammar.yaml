@@ -254,14 +254,38 @@ rules:
     ast: { tag: "null", leaf: true, type: "null" }
     literal: "none"
 
+  # Helper rules: simplified URL path inside backticks
+  protocol_url_name:
+    ast: { tag: "name", leaf: true }
+    regex: '[A-Za-z]+://[^#`]*'
+
+  protocol_url_get_path:
+    ast: { tag: "get-path" }
+    sequence:
+      - { rule: protocol_url_name }
+      - optional:
+          ast: { tag: "meta" }
+          sequence:
+            - { literal: "#(", ast: { discard: true } }
+            - { rule: expression_list }
+            - { literal: ")", ast: { discard: true } }
+
   path_literal:
     ast: { tag: "path-literal" }
     sequence:
       - { literal: "`", ast: { discard: true } }
-      - subgrammar:
-          file: "slip_path.yaml"
-          rule: "any_embedded_path"
-          placeholder: { ast: { tag: "path-placeholder", leaf: true }, regex: "[^`]*" }
+      - choice:
+          # Protocol-shaped literals: only when content begins with "<letters>://"
+          - sequence:
+              - { regex: "(?=[A-Za-z]+://)", ast: { discard: true } }
+              - { rule: protocol_url_get_path }
+            ast: { tag: "SlipPath_get_path" }
+          # Non-URL literals: keep existing behavior/wrapper
+          - subgrammar:
+              file: "slip_path.yaml"
+              rule: "any_embedded_path"
+              placeholder:
+                { ast: { tag: "path-placeholder", leaf: true }, regex: "[^`]*" }
       - { literal: "`", ast: { discard: true } }
 
   # =================================================================

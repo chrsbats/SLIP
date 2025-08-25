@@ -67,7 +67,7 @@ async def test_foreach_over_list_and_dict_accumulates():
     src = """
     xs: #[1, 2, 3]
     total: 0
-    foreach x xs [
+    foreach {x} xs [
       total: total + x
     ]
 
@@ -76,8 +76,8 @@ async def test_foreach_over_list_and_dict_accumulates():
       jaina: 150
     }
     sum-scores: 0
-    foreach s scores [
-      sum-scores: sum-scores + s
+    foreach {k} scores [
+      sum-scores: sum-scores + scores[k]
     ]
 
     #[ total, sum-scores ]
@@ -129,3 +129,38 @@ async def test_logical_and_or_short_circuiting():
     """
     res = await run_slip(src)
     assert_ok(res, [False, True, 1, 1])
+
+
+@pytest.mark.asyncio
+async def test_keys_values_items_helpers_for_dict_and_scope():
+    src = """
+    d: #{
+      a: 1,
+      b: 2
+    }
+    k1: keys d
+    v1: values d
+    i1: items d
+
+    s: scope #{
+      a: 1,
+      b: 2
+    }
+    k2: keys s
+    v2: values s
+    i2: items s
+
+    #[ k1, v1, i1, k2, v2, i2 ]
+    """
+    res = await run_slip(src)
+    assert_ok(
+        res,
+        [
+            ["a", "b"],
+            [1, 2],
+            [["a", 1], ["b", 2]],
+            ["a", "b"],
+            [1, 2],
+            [["a", 1], ["b", 2]],
+        ],
+    )

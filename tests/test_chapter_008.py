@@ -2,7 +2,7 @@ import pytest
 
 from slip import ScriptRunner
 from slip.slip_printer import Printer
-from slip.slip_datatypes import GetPathLiteral
+from slip.slip_datatypes import PathLiteral
 
 
 async def run_slip(src: str):
@@ -65,7 +65,7 @@ async def test_path_literal_with_meta_round_trips_via_printer():
     res = await run_slip(src)
     assert res.status == 'success'
     val = res.value
-    assert isinstance(val, GetPathLiteral)
+    assert isinstance(val, PathLiteral)
     # Ensure the meta attachment survives and pretty-prints back to the same shape
     pf = Printer().pformat
     assert pf(val) == "`a#(flag: true)`"

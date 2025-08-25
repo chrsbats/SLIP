@@ -89,7 +89,7 @@ async def test_emit_records_side_effects():
 
 
 @pytest.mark.asyncio
-async def test_status_aliases_bound_to_path_literals():
+async def test_status_aliases_bound_call_literals():
     src = """
     #[ eq ok `ok`, eq err `err`, eq not-found `not-found`, eq invalid `invalid` ]
     """

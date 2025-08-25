@@ -130,7 +130,7 @@ SLIP has several container literals, which fall into two fundamental categories 
 - **Unevaluated Literals:** These operators capture their contents as-is, without execution, producing data structures that represent code or declarations.
 
   - **`[...]` – A Literal `code` Block.** This is the fundamental operator for creating unevaluated code. It produces a `code` object, which is an Abstract Syntax Tree (a list of lists) that can be stored, manipulated, or passed to functions. Expressions within the block can be separated by newlines or semicolons (`;`), allowing multiple expressions on one line (e.g., `[x: 1; y: x + 3]`). The code inside is not executed until explicitly run. This is the foundation of SLIP's function-controlled evaluation and metaprogramming. When a `code` block is executed (e.g., by `run` or as part of a control flow structure like `if`), its expressions are evaluated within the **current lexical scope**. Bindings created inside the block will therefore modify the current scope. New lexical scopes are created only when a function body is executed.
-  - **`{...}` – A `sig` (Signature) Literal.** This creates an **unevaluated `sig` object**, which is a declarative data structure used for function signatures, type definitions, and examples. Its contents are not executed and must follow a simple, restricted syntax.
+  - **`{...}` – A `sig` (Signature) Literal.** This creates an unevaluated `sig` object. It is used for function signatures, type unions/examples, and as a meta-parameter for functions that dynamically bind variables (e.g., `fn {…} […]`, `foreach {…} … […]`, `for {…} … […]`). A sig literal is never evaluated; it is inspected as data.
 
 - **Evaluation Groups & Constructor Literals:** These operators create and immediately evaluate a nested expression. Their result is passed to the surrounding expression.
   - `(...)` – The **general evaluation group**. Evaluates the code inside and returns the result of the final expression. Expressions within the group can be separated by newlines or semicolons (`;`). This is the primary mechanism for controlling the order of operations.
@@ -219,6 +219,16 @@ The following table summarizes the literal syntax for creating SLIP's core data 
 | **sig**          | `{...}`           | `my-sig: { a, b: int }`   | A **signature literal**. Creates an **unevaluated** `sig` object used for function signatures, type definitions, and examples.                                  |
 | **list**         | `#[...]`          | `items: #[ 1, "a" ]`      | A **list literal**. The expressions inside are evaluated, and the results are collected into a new `list` object. Functionally equivalent to `list [...]`.      |
 | **dict**         | `#{...}`          | `data: #{ key: "val" }`   | A **dictionary literal**. Creates a simple key-value store by evaluating the expressions inside. Functionally equivalent to `dict [...]`.                       |
+| **byte-stream**     | e.g., `u8#[]`, `i16#[]`, `u32#[]`, `u64#[]`, `f32#[]`, `f64#[]`, `b1#[]` | `u8#[65, 66, 67]` | Typed binary constructors. Produce bytes for unsigned/signed ints, floats, and bit-packed booleans (`b1`). Little‑endian for 16/32/64‑bit ints and floats. |
+
+**A Note on Byte-streams**
+
+For binary data manipulation, SLIP provides a family of typed byte-stream constructors. These literals evaluate the expressions within them and serialize the results into a raw `bytes` object. The available types include unsigned integers (`u8#[]`, `u16#[]`, `u32#[]`, `u64#[]`), signed integers (`i8#[]`, `i16#[]`, `i32#[]`, `i64#[]`), and floating-point numbers (`f32#[]`, `f64#[]`). For consistency, all multi-byte numeric types use little-endian encoding.
+
+Additionally, the `b1#[]` constructor provides bit-packing for boolean values. It packs eight truthy or falsey values into a single byte, processing them from Most Significant Bit (MSB) to LSB. If the total number of values is not a multiple of eight, the final byte is left-padded with zeros.
+
+These byte-stream objects can be converted to strings using `to-str` (which decodes them as UTF-8) or written directly to disk using `file://` paths, making them a powerful tool for low-level I/O and data serialization.
+
 
 **A Note on I-Strings**: `i-string`s are automatically "de-dented," meaning common leading whitespace is removed from every line, making them easy to format in your code.
 
@@ -235,6 +245,7 @@ In SLIP, paths are more than just variable names; they are a core syntactic feat
 | **Multi-Set Path** | `[path1, path2]:`    | `[x, y]: #[10, 20]` | The destructuring assignment form. Binds multiple values from a collection to multiple paths at once.                                               |
 | **Delete Path**    | `~path.to.value`     | `~player.old_token` | The unbinding form. The leading tilde (`~`) marks it for removing a binding from a scope.                                                           |
 | **Piped Path**     | `\|path.to.function` | `data \|map [...]`  | The pipe form. The leading pipe (`\|`) marks a path that will trigger an implicit function call, using the value on its left as the first argument. |
+| Post Path         | `url<-`                    | `http://api/items#(headers: #{...})<- #{id: 1}` | The POST form. Parses to a PostPath node and triggers an HTTP POST. The url may include a transient `#(...)` config that is applied to the operation. |
 
 ### 2.3. The `scope` Data Type
 
@@ -253,13 +264,9 @@ The `scope` object is the cornerstone of SLIP's object model, which is detailed 
 
 ### 2.4. Data Type Semantics
 
-- **Path Equality:** Two `path` objects are considered equal if their canonical string representations are identical.
-- **Additional Path Variants:** The tokenizer also emits two more path-shaped datatypes:  
-  • **`piped-path`** – created by the `|` prefix (e.g. `|map`).  
-  • **`multi-set-path`** – created by a destructuring assignment head (e.g. `[a,b]:`).  
-  In the semantic AST these are the **`piped-path`** and **`multi-set-path`** datatypes, with corresponding literal forms `` `|map` `` and `` `[a,b]:` `` represented by the **`piped-path-literal`** and **`multi-set-path-literal`** datatypes.  
-  They behave exactly like the existing `get-path`, `set-path`, and `del-path` datatypes: they are first-class runtime values that the evaluator understands for look-ups, implicit pipe calls, and destructuring assignment.
-- **Mutable Containers:** `list`, `dict`, and `scope` are mutable reference types. Assigning a container to a new variable creates a reference to the original container, not a copy. Any modifications made through one reference will be visible through all other references to that container. Use the `copy` (shallow) or `clone` (deep) functions to create a new, independent instance.
+The different path forms (`get-path`, `set-path`, `del-path`, `piped-path`, `post-path`, and `multi-set-path`) are all distinct, first-class data types. The evaluator inspects an object's type to determine how to act on it. For example, encountering a `SetPath` object as the first term of an expression triggers an assignment. Two path objects are considered equal if they are of the same type and their canonical string representations are identical.
+
+Like paths, other containers such as `list`, `dict`, and `scope` are mutable reference types. Assigning a container to a new variable creates a reference to the original, not a copy. Modifications made through one reference will be visible through all others. To create a new, independent instance, use the `copy` (shallow) or `clone` (deep) functions.
 
 ### 2.5. Querying Collections with `[...]`
 
@@ -293,13 +300,32 @@ The query DSL supports three primary forms:
   numbers[> 20] -- Returns #[100, 42]
   ```
 
-#### Filters
+#### Advanced Filtering
 
-Filter content may be any infix/pipe chain that evaluates to a boolean for each item. This is fully backward compatible with the shorthand operator form like `[> 10]`, and also supports derived predicates such as pipelines and chained infix transforms.
+The filter predicate inside the square brackets is a powerful feature that allows for complex, multi-part conditions. The content of the filter is a complete expression that is evaluated for each item in the collection.
 
-Examples:
-- Derived pipeline predicate: `points[|dist < 10]` — keeps points where `dist(point) < 10`.
-- Chained infix transform: `xs[* 10 - 20 / 2 > 20]` — keeps elements where `(((x*10) - 20) / 2) > 20`.
+Within this expression, a special syntax is used to distinguish between accessing a property of the item being filtered and accessing a variable from the surrounding lexical scope:
+
+- **Dot-prefixed paths** (e.g., `.hp`, `.name`) refer to properties of the current item being processed.
+- **Bare names** (e.g., `threshold`, `class-name`) refer to variables in the current lexical scope.
+
+You can combine multiple conditions using the standard `and` and `or` operators. This allows for highly expressive, readable queries.
+
+```slip
+-- A list of player objects
+players: #[
+  #{ name: "Karl", class: "Warrior", hp: 120 },
+  #{ name: "Jaina", class: "Mage", hp: 110 },
+  #{ name: "Thrall", class: "Warrior", hp: 95 }
+]
+
+-- Find all Warriors with HP over 100
+strong-warriors: players[.class = "Warrior" and .hp > 100]
+
+-- Project their names
+strong-warrior-names: strong-warriors |map (fn {p} [ p.name ])
+-- strong-warrior-names is now #["Karl"]
+```
 
 A key feature of the query system is the **vectorized pluck**. When you access a property on a collection of objects, SLIP automatically "plucks" that property from each object and returns a new list of the results. This new list can then be queried.
 
@@ -326,6 +352,7 @@ This makes `[...]` a powerful and consistent tool for all forms of dynamic data 
 SLIP provides two string literal forms with different semantics:
 
 - i-strings: Written with double quotes, e.g., "..."
+
   - Behavior: These are interpolated strings that are automatically dedented and support Mustache-style templating using double braces.
   - Dedent: Common leading indentation is removed from every line, making multi-line strings easy to author inline.
   - Templating: Placeholders of the form {{ expression }} are evaluated in the current scope and the result is inserted into the string.
@@ -350,6 +377,7 @@ SLIP provides two string literal forms with different semantics:
     ```
 
 Notes:
+
 - Choose i-strings for user-facing text and templates where you want interpolation and clean multi-line formatting.
 - Choose raw-strings when you need exact byte-for-byte text with no processing, such as regex patterns or OS paths.
 
@@ -363,9 +391,18 @@ SLIP's grammar has only one special syntactic construct: assignment, denoted by 
 
 This single, powerful `:` form unifies simple binding, destructuring, slice manipulation, and even dynamic, computed targets.
 
-- Return semantics: The assignment expression yields the new value that was assigned. This enables concise update patterns where the right-hand side is an operator or a piped path applied to the current value:
-  - Example: x.counter: + 1 — Reads x.counter, computes add(x.counter, 1), writes back, returns the new value.
-  - Example: hp: |heal — Reads hp, computes heal(hp), writes back, returns the new value.
+An assignment is an expression that evaluates to the value being assigned. This enables a concise "update" pattern where the right-hand side of the assignment is an operation on the path's current value. The interpreter reads the value, applies the operation, writes the result back, and returns the new value, all in one step.
+
+```slip
+-- Simple update with an infix operator
+counter: 1
+counter: + 1  -- Reads 1, computes 1+1, writes 2, returns 2
+
+-- Unary update with a piped function
+heal: fn {n} [ n + 10 ]
+hp: 40
+hp: |heal     -- Reads 40, computes heal(40), writes 50, returns 50
+```
 
 #### Assignment Strategies
 
@@ -413,6 +450,14 @@ Here are the different binding strategies determined by the pattern on the left-
   - **Syntax:** `list[start:end].property: value-or-list-expression`
   - **Example:** `users[:10].is-active: false`
 
+This pattern also supports update-style expressions. The operation on the right-hand side is applied to each matching element individually.
+
+**Example:**
+```slip
+-- Give +10 hp to all players with less than 50 hp
+players.hp[< 50]: + 10
+```
+
 - **7. Parent Scope Binding**
 
   - **Behavior:** Modifies a binding in an outer scope. Each leading `../` prefix climbs one level up the parent scope chain before performing the assignment.
@@ -455,13 +500,9 @@ You create a function implementation using the `fn` constructor. To create a nam
 -- Defines a function 'add' that takes two arguments.
 add: fn {x, y} [ x + y ]
 
-##### Variadic Arguments (Rest Parameters)
+#### Variadic Arguments (Rest Parameters)
 
-SLIP supports variadic functions through a "rest parameter" syntax. By appending `...` to the final parameter name in a signature, you indicate that it should collect all remaining arguments supplied in a call into a single `list`.
-
-- **Syntax:** `fn {arg1, rest-args...} [...]`
-- **Rule:** The rest parameter **must** be the last parameter in the signature.
-- **Behavior:** All arguments provided to the function beyond the named parameters are bundled into a `list` and assigned to the rest parameter. If no extra arguments are provided, it will be an empty list.
+SLIP supports variadic functions through a "rest parameter" syntax. By appending `...` to the final parameter name in a signature, you indicate that it should collect all remaining arguments from a call into a single `list`. The rest parameter must be the last one in the signature. If no extra arguments are provided, it will be bound to an empty list.
 
 ```slip
 -- Example of a variadic function
@@ -565,6 +606,18 @@ if active-players [
 -- The server is empty.
 ```
 
+### 3.5. Meta-parameters with Signature Literals
+
+In SLIP, some functions require arguments that are declarative metadata rather than expressions to be evaluated. A clear convention is used for this: the argument is provided as a signature literal (`{...}`). This signals to both the reader and the interpreter that the argument is a pattern or declaration to be inspected, not a value to be computed.
+
+This pattern is used consistently by core functions:
+
+- **`fn {args} [body]`**: The `{args}` block is a parameter declaration.
+- **`foreach {vars} collection [body]`**: The `{vars}` block is a pattern for destructuring items from the collection.
+- **`for {i} 0 10 [body]`**: The `{i}` block declares the loop index variable.
+
+This convention makes the code's intent obvious. When you see `my-func {pattern} data`, you immediately understand that `{pattern}` is providing metadata to control how `my-func` operates on `data`.
+
 ---
 
 ## 4. Infix Syntax and the Pipe Operator
@@ -597,11 +650,11 @@ This mechanism works for chained operations as well. The expression `10 + 5 * 2`
 
 ### 4.3. The Explicit Pipe Operator `|`
 
-The pipe operator `|` is the explicit way to create a piped path and chain operations. It is not a special operator; it is syntactic sugar that modifies the path immediately following it.
+The pipe operator `|` is the explicit way to create a piped path and chain operations. It is not a special operator but syntactic sugar that modifies the path immediately following it.
 
 - `data |map [ ... ]` is parsed as `[expr [get-path [name 'data']], [piped-path [name 'map']], [code ...]]`
 - The evaluator sees `data` (a value) followed by `|map` (a piped path), triggering the same implicit pipe call rule used for infix math.
-- Unary piped call: When a piped-path appears without a right-hand argument (e.g., [value, |heal]), it is treated as a unary call to heal with value as its single argument.
+The pipe can also be used for unary calls. When a piped path appears without a right-hand argument, it is treated as a unary call where the value on the left becomes the single argument to the function. For example, `hp |heal` is equivalent to `heal hp`.
 
 ### 4.4. Operator Definitions
 
@@ -621,20 +674,20 @@ To define a new operator, you simply bind a path to a piped path. A forward slas
 The following table lists the default operator bindings provided by the standard root scope.
 
 | Operator | Bound Piped Path |
-| :------- | :--------------- | ------------ |
-| `+`      | `                | add`         |
-| `-`      | `                | sub`         |
-| `*`      | `                | mul`         |
-| `/`      | `                | div`         |
-| `**`     | `                | pow`         |
-| `=`      | `                | eq`          |
-| `!=`     | `                | neq`         |
-| `>`      | `                | gt`          |
-| `>=`     | `                | gte`         |
-| `<`      | `                | lt`          |
-| `<=`     | `                | lte`         |
-| `and`    | `                | logical-and` |
-| `or`     | `                | logical-or`  |
+| :------- | :--------------- |
+| `+`      | `\|add`          |
+| `-`      | `\|sub`          |
+| `*`      | `\|mul`          |
+| `/`      | `\|div`          |
+| `**`     | `\|pow`          |
+| `=`      | `\|eq`           |
+| `!=`     | `\|neq`          |
+| `>`      | `\|gt`           |
+| `>=`     | `\|gte`          |
+| `<`      | `\|lt`           |
+| `<=`     | `\|lte`          |
+| `and`    | `\|logical-and`  |
+| `or`     | `\|logical-or`   |
 
 ### 4.5. The "No Double Pipe" Rule
 
@@ -820,6 +873,13 @@ print Character.meta.name -- Returns "main.Character"
 print Player.meta.parent  -- Returns (The Character scope object)
 ```
 
+### 5.6. Introspection with `is-a?`
+
+The standard library provides an `is-a?` function to check the prototype chain of an object.
+
+- `is-a? <object> <prototype>`: Returns `true` if the `<prototype>` scope exists anywhere in the `<object>`'s parent chain. It returns `false` for non-scope objects or if the prototype is not found.
+- `is-schema? <object>`: Returns `true` if the object inherits from the base `Schema` prototype.
+
 ## 6. Control Flow
 
 In SLIP, control flow is not managed by special keywords but by standard functions that operate on unevaluated code blocks (`[...]`). This approach preserves the language's uniformity and empowers metaprogramming. While some core primitives like `if` and `while` must be provided by the host environment to control evaluation, they are called just like any other function.
@@ -882,18 +942,35 @@ The `foreach` function is the most versatile tool for iterating over collections
   When iterating over a list, the variable pattern is a path that is assigned each element in sequence.
 
   ```slip
-  foreach fruit #["apple", "banana"] [
+  foreach {fruit} #["apple", "banana"] [
       print "I like to eat {fruit}s."
   ]
   ```
 
-- **Iterating over a Dictionary:**
-  When iterating over a dictionary, the loop yields a `[key, value]` pair. The variable pattern can be a `code` block to destructure the pair into separate variables.
+- **Iterating over a Dictionary (or Scope):**
+  When iterating over a mapping, a single-variable pattern iterates keys. Use a two‑variable pattern to destructure key/value pairs. To iterate values or explicit pairs, use the helpers `(values mapping)` and `(items mapping)`.
 
   ```slip
   scores: #{"Kael": 100, "Jaina": 150}
-  foreach [name, score] scores [
+
+  -- Single variable → keys (fetch values on demand)
+  foreach {name} scores [
+      print "{name} -> {scores[name]}"
+  ]
+
+  -- Two variables → key/value pairs
+  foreach {name, score} scores [
       print "{name} has a score of {score}."
+  ]
+
+  -- Explicit values iteration
+  foreach {score} (values scores) [
+      print "Score: {score}"
+  ]
+
+  -- Explicit items iteration (pairs)
+  foreach {name, score} (items scores) [
+      print "{name}: {score}"
   ]
   ```
 
@@ -1080,7 +1157,41 @@ find-player: fn {name} [
 ]
 ```
 
-### 7.5. Handling Outcomes with Multiple Dispatch
+### 7.5. Capturing Outcomes with `with-log`
+
+While `emit` is used to report side effects to the host application, the `with-log` primitive provides a way to capture and inspect the outcome and effects of a code block *from within a script*. This makes it an invaluable tool for testing, debugging, and creating higher-level abstractions that need to observe the behavior of a piece of code.
+
+- **Syntax:** `with-log <code-block>`
+- **Behavior:**
+  1.  Executes the provided `code` block.
+  2.  Intercepts all side effects generated by `emit` *only from within that block*.
+  3.  Captures the final outcome of the block, normalizing it into a `response` object. A raw return value becomes `response ok <value>`, and a runtime error becomes `response err <message>`.
+- **Return Value:** A dictionary-like object with two keys:
+  - `outcome`: A `response` object representing the final outcome of the block.
+  - `effects`: A list of side-effect events emitted within the block.
+
+**Example: Inspecting a Code Block**
+
+```slip
+-- Use with-log to run a block of code and inspect its results.
+log: with-log [
+  emit "debug" "Performing an action..."
+  10 + 20
+]
+
+-- The `log` object now contains the captured results.
+-- `log.outcome` holds a `response` object with status `ok` and value `30`.
+-- `log.effects` holds a list containing one side-effect event.
+
+-- We can now inspect the `response` object's properties.
+if [log.outcome.status = ok] [
+    print "The block succeeded with value: {log.outcome.value}"
+]
+```
+
+`with-log` cleanly separates the execution of the code from the observation of its results, isolating its effects from the main script's side-effect log. This makes it a powerful tool for building robust, introspective systems.
+
+### 7.6. Handling Outcomes with Multiple Dispatch
 
 The true power of this system is realized when `response` objects are handled by a generic function that uses `|guard` clauses to dispatch based on the response's status.
 
@@ -1123,9 +1234,10 @@ Thank you for the sharp correction. Let's get it right. This is a much more eleg
 
 Here is the completely rewritten section that accurately reflects this superior model.
 
-***
+---
 
-### 7.6. Modularity and Code Organization
+
+### 7.7. Modularity and Code Organization
 
 In SLIP, modularity is not handled by special keywords. Instead, code organization is managed by a powerful `import` **function**, which is provided by the host environment as part of the standard library. This function leverages SLIP's path system to locate and load modules.
 
@@ -1133,13 +1245,13 @@ In SLIP, modularity is not handled by special keywords. Instead, code organizati
 
 The `import` function is the standard way to load and use code from other files. It takes a single **path literal** as an argument, which specifies the module's location using a scheme-based syntax.
 
--   **Syntax:** `variable-name: import scheme://path/to/module`
--   **Behavior:**
-    1.  The `import` function receives a `path` object (e.g., `file://modules/math.slip`).
-    2.  It asks the host application to inspect this path. The host is responsible for implementing the logic for different schemes (the first segment of the path, like `file:` or `https:`).
-    3.  The host executes the module's code **exactly once** in a new, dedicated `scope`.
-    4.  The host then **caches** this new scope. If `import` is called again with the same path, the host immediately returns the cached scope without re-running the code.
-    5.  The `import` function returns the module's scope, which is then assigned to a local variable.
+- **Syntax:** `` variable-name: import `scheme://path/to/module`  ``
+- **Behavior:**
+  1.  The `import` function receives a `path-literal` object (e.g., `` `file://modules/math.slip` ``).
+  2.  It asks the host application to inspect this path. The host is responsible for implementing the logic for different schemes (the first segment of the path, like `file:` or `https:`).
+  3.  The host executes the module's code **exactly once** in a new, dedicated `scope`.
+  4.  The host then **caches** this new scope. If `import` is called again with the same path, the host immediately returns the cached scope without re-running the code.
+  5.  The `import` function returns the module's scope, which is then assigned to a local variable.
 
 This host-driven approach provides maximum security and flexibility. The host can implement custom logic to load modules from a virtual filesystem, a network location, or a database, and can add support for new schemes (`git://`, `db://`, etc.) without changing the language itself.
 
@@ -1149,8 +1261,8 @@ The standard stylistic convention in SLIP is to use `kebab-case` for all variabl
 
 ```slip
 -- Correct, idiomatic SLIP:
-math: import fs://math.slip
-my-utils: import https://sliplang.com/utils.slip
+math: import `file://math.slip`
+my-utils: import `https://sliplang.com/utils.slip`
 ```
 
 #### Example Workflow
@@ -1158,6 +1270,7 @@ my-utils: import https://sliplang.com/utils.slip
 This example shows how a `main.slip` file can import and use functions from both a local and a remote module.
 
 **File: `math.slip`** (Located locally)
+
 ```slip
 -- This file is a module. It defines functions that will be
 -- available to any script that imports it.
@@ -1167,13 +1280,14 @@ subtract: fn {a, b} [ a - b ]
 ```
 
 **File: `main.slip`**
+
 ```slip
--- Import the local math module using the 'fs://' scheme.
+-- Import the local math module using the 'file://' scheme.
 -- The result is assigned to a standard, kebab-case variable.
-math: import fs://math.slip
+math: import `file://math.slip`
 
 -- Import a utility module from a remote web server.
-utils: import https://sliplang.com/utils.slip
+utils: import `https://sliplang.com/utils.slip`
 
 -- Now 'math' and 'utils' are scope objects in our environment. We can
 -- access the functions defined within them using standard path syntax.
@@ -1287,7 +1401,68 @@ add: fn {a, b} [
 
 This explicit, example-driven approach is safer and more predictable than automatic type generalization. It ensures that a function only ever accepts the exact combinations of types that you have documented and tested.
 
-### 8.3. Reusing Method Implementations
+### 8.3. The SLIP Test Framework
+
+The `|example` helper is not just for documentation and type inference; it is the foundation of SLIP's built-in test framework. The standard library provides two functions, `test` and `test-all`, that execute these examples and report on their success or failure.
+
+#### Testing a Single Function with `test`
+
+The `test` function runs all examples attached to a single function (or generic function container).
+
+-   **Syntax:** `test <function-object>`
+-   **Behavior:** It iterates through all `|example` blocks, executes the function with the example's inputs, and compares the result against the expected output.
+-   **Return Value:** It returns a `response` object summarizing the outcome.
+    -   **Success:** `response ok <count>`, where `<count>` is the number of examples that passed.
+    -   **Failure:** `response err <list-of-failures>`, where each item in the list is a dictionary detailing a failed example, e.g., `#{ index: 1, expected: 3, actual: 2 }`.
+
+```slip
+-- Define a function with one passing and one failing example
+add: fn {x, y} [ x + y ]
+  |example { x: 2, y: 3 -> 5 }    -- Passes
+  |example { x: 1, y: 1 -> 3 }    -- Fails
+
+-- Test the function
+result: test add
+
+-- The result is a response object indicating failure:
+-- response err #[ #{ index: 1, expected: 3, actual: 2 } ]
+```
+
+#### Testing a Module with `test-all`
+
+The `test-all` function scans an entire scope, finds all functions with examples, and runs `test` on each one.
+
+-   **Syntax:** `test-all <scope-object>`
+-   **Behavior:** Aggregates the results from all tests within the scope into a single summary report.
+-   **Return Value:** It returns a summary inside a `response` object. The status is `ok` if all tests passed, and `err` otherwise. The value is a summary dictionary.
+
+```slip
+-- Define a module scope to hold our functions
+math-mod: scope #{}
+
+run-with [
+  add: fn {a, b} [ a + b ] |example { a: 1, b: 2 -> 3 }
+  mul: fn {a, b} [ a * b ] |example { a: 2, b: 3 -> 5 } -- This will fail
+] math-mod
+
+-- Test all functions in the module
+summary-response: test-all math-mod
+
+-- summary-response.status is `err`
+-- summary-response.value is a dictionary like this:
+-- #{
+--   with-examples: 2,
+--   passed: 1,
+--   failed: 1,
+--   details: #[
+--     #{ name: "mul", failures: #[ #{ index: 0, expected: 5, actual: 6 } ] }
+--   ]
+-- }
+```
+
+This integrated test framework makes it trivial to verify the correctness of your code, turning documentation directly into a comprehensive test suite.
+
+### 8.4. Reusing Method Implementations
 
 A core principle of good software design is "Don't Repeat Yourself" (DRY). In SLIP, you can easily share the implementation logic of one method with another, even if they have completely different type signatures. This is achieved by composing SLIP's core primitives for introspection and evaluation.
 
@@ -1474,7 +1649,7 @@ A full reference of these node types and their structure can be found in Appendi
 ### 10.2. Core Evaluation Functions
 
 - `run <code>`: The primary function for executing a block of code. It evaluates the code within the current scope. If the `code` block is empty, it returns `none`; otherwise, it returns the value of the last expression.
-- `run-with <code> <scope>`: Executes a code block within a specific, user-provided scope.
+- `run-with <code> <scope>`: Executes a code block within a specific, user-provided scope. Writes are contained within the target scope, but lookups for unbound names (like functions or operators) will resolve through the caller's scope.
 - `list <code>`: Evaluates the expressions in a code block and collects all their results into a new `list`. This is the underlying function for the `#[...]` literal.
 - `dict <code>`: Evaluates the expressions in a code block (typically assignments) and returns a new `dict` object. This is the underlying function for the `#{...}` literal.
 
@@ -1503,9 +1678,12 @@ run [
 
 ### 10.4. Dynamic Path and Function Creation
 
-- `to-path <string>` (or `intern`): A crucial standard library function that converts a `string` into a `GetPathLiteral` object. This is the primary mechanism for creating paths programmatically.
-
-  - Example: `(to-path "user.name"): "John"`
+- `call <path-literal | string> [<arg-list>]`: A powerful metaprogramming primitive.
+  - **Path Creation**: When called with a string like `"user.name"`, it returns a `PathLiteral` (`\`user.name\``).
+  - **Dynamic Invocation**: When called with a path and an argument list (`#[...]`), it resolves the path to a function and calls it.
+  - **Dynamic Assignment/Deletion**: It can execute `SetPath` or `DelPath` literals.
+    - `(call \`x:\`) 2` is equivalent to `x: 2`.
+    - `(call \`~x\`)` is equivalent to `~x`.
 
 - `fn {signature} [body]`: The core function for creating new `function` objects (closures). `fn` captures the current lexical scope and bundles it with the argument list and the unevaluated body of code.
   - Example: `add-five: fn {x} [ x + 5 ]`
@@ -1883,27 +2061,24 @@ if [target = none] [
 
 ### 13.5. Protocol Status Codes (Host-provided, optional)
 
-Numeric “status codes” are produced by host protocol handlers that service scheme paths (e.g., fs://, http://) when the caller opts in via #(...). The core interpreter itself reports ExecutionResult.status as 'success' | 'error' | 'return' and does not emit numeric codes.
+When interacting with external resources via scheme paths like `file://` or `http://`, it can be useful to receive structured status information instead of just a return value or a script error. SLIP supports this through an opt-in mechanism using transient path configuration.
 
-Opt-in result shapes:
-- lite: #(lite: true) → #[status, value]
-- full: #(full: true) → #{status: <int>, value: <any>, meta: #{...]}
+By default, a successful operation like `http://example.com/api` returns the response body directly, while a failure (e.g., a 404 or 500 error) raises a runtime script error. However, you can request a structured response by adding a configuration block to the path:
 
-Defaults:
-- If neither lite nor full is present:
-  - On success, return the value directly (e.g., file contents, HTTP body).
-  - On transport/IO error, raise a runtime error (normal script error).
+- **Lite Mode**: `path#(lite: true)` returns a two-element list `#[status, value]`.
+- **Full Mode**: `path#(full: true)` returns a dictionary `#{status: <int>, value: <any>, meta: #{...}}`, which may contain additional metadata like HTTP headers.
 
-Schemes:
-- http/https: status is the HTTP status code (e.g., 200, 404, 500). “value” is the response body (string by default) or bytes if #(binary: true). full may include headers.
-- fs (filesystem): status 0 indicates success. On failures, handlers may use OS error numbers (e.g., ENOENT) and include an error message in full.
+The meaning of the `status` code depends on the protocol. For HTTP, it is the standard HTTP status code (e.g., `200`, `404`). For the filesystem, `0` typically indicates success, while other values may represent OS-level error codes. This feature allows scripts to handle I/O failures gracefully without halting execution.
 
-Examples:
-- [status, body]: http://api/items#(lite: true, timeout: 2)
-- resp: http://api/items#(full: true, method: `post`, body: #{id: 1})
-- [status, data]: fs://docs/readme.txt#(lite: true, encoding: "utf-8")
+```slip
+-- Request a lite response to handle potential errors
+[status, body]: http://api/items#(lite: true)
+if [status != 200] [
+    emit "error" "API request failed with status {status}"
+]
+```
 
-Note: This section describes host-provided behavior for scheme paths. It does not change the interpreter’s own error reporting.
+Note that this behavior is specific to host-provided scheme path handlers and does not change the interpreter's own `ExecutionResult` status, which will still be `'success'` as long as the script itself runs without error.
 
 ## 14. Reference
 
@@ -1915,61 +2090,87 @@ While most of SLIP's standard library can be written in SLIP itself, a minimal s
 
 #### Paths
 
-SLIP’s core notion of identity and navigation is the path. The tokenizer and transformer produce distinct path datatypes that the evaluator understands and acts upon.
+SLIP's core notion of identity and navigation is the path. The language defines several distinct path data types, each signaling a specific intent to the evaluator.
 
-- get-path
-  - Purpose: Read/lookup a value.
-  - Syntax: `user.name`, `/root.value`, `../parent.key`, `orders[0]`, `items[1:3]`, `numbers[> 10]`, `dynamic.(segment)`.
-  - Details: Can include names, root `/`, parent `../`, dynamic group segments `( ... )`, and query segments for index/key, slice, and filter. May carry a transient configuration block `#(...)` that the host can interpret for a single operation.
+- **`get-path`**: The default path form, used to read or look up a value (e.g., `user.name`). It can contain various segments, including names, root (`/`), parent (`../`), dynamic groups (`(...)`), and query segments (`[...]`). It may also carry a transient configuration block (`#(...)`) that the host can interpret for a single operation.
+- **`set-path`**: Marked by a trailing colon (`:`), this path is the head of an assignment expression, used to write a value (e.g., `user.name:`). It supports the same segments as a `get-path` and powers simple binding, slice replacement, and vectorized updates.
+- **`del-path`**: Marked by a leading tilde (`~`), this path instructs the evaluator to unbind or delete a value (e.g., `~user.old_token`). A `del-path` is a standalone expression and cannot be part of a larger chain.
+- **`multi-set-path`**: A destructuring assignment pattern used to bind multiple targets at once from a collection (e.g., `[a, b, c]:`).
+- **`piped-path`**: Marked by a leading pipe (`|`), this path triggers an implicit pipe call when it appears in the second position of an expression (e.g., `data |map [...]`). Infix operators like `+` and `and` are aliases for piped paths.
+- **`post-path`**: Marked by a trailing arrow (`<-`), this path is the head of an HTTP POST expression (e.g., `http://api/items<- ...`).
 
-- set-path
-  - Purpose: Write/bind a value (assignment head).
-  - Syntax: `user.name:`, `list[1:3]:`, `users[:10].flag:`.
-  - Details: Marked by a trailing colon. Supports the same segments and optional `#(...)` configuration as get-path. Can only appear as the first term of an expression. Powers simple binding, slice replacement, and vectorized (columnar) updates.
+#### Scheme Paths: Filesystem and HTTP
 
-- del-path
-  - Purpose: Unbind/delete a value.
-  - Syntax: `~user.old_token`, `~(join `user `session)`, `~db/records/123#(soft-delete: true)`.
-  - Details: Marked by a leading `~`. Removes a binding from its owner. May include `#(...)` configuration. A del-path is a standalone expression and does not participate in larger arithmetic or pipe chains.
+The host can provide handlers for scheme-based paths, such as `file://` and `http://`, to enable seamless I/O. These paths behave like regular SLIP paths and can be used for reading, writing, and deleting.
 
-- multi-set-path
-  - Purpose: Destructuring assignment head to bind many targets at once.
-  - Syntax: `[a, b, c]:`, `[user.name, user.hp]:`, `[x, y]:`.
-  - Details: Left-hand pattern that binds multiple paths from a right-hand collection (element‑wise). The transformer produces a MultiSetPath object for the evaluator.
+**Shorthand Writes**: A `get-path` with a scheme can be used as the head of an expression to perform a shorthand write. The evaluator interprets this as a write operation:
+- `http://example.com/data: "body"` performs an HTTP PUT.
+- `file:///tmp/out.txt: "text"` writes to a file.
 
-- piped-path
-  - Purpose: Trigger implicit pipe calls for left‑to‑right evaluation and infix operators.
-  - Syntax: `|map`, `|add`, `|logical-and`, `|my-func`.
-  - Details: Appears in the second position of an expression to call a function with the left value as the first argument. Operators like `+` and `and` are bound to piped paths (e.g., `+: |add`, `and: |logical-and`), enabling familiar infix syntax without parser precedence.
+**File I/O (`file://`)**: The `file://` scheme provides access to the local filesystem (sandboxed by the host).
+- **Reading**: `file:///path/to/file.txt` reads a file. The content is automatically deserialized based on the file extension (`.json`, `.yaml`, etc.) or returned as text. Reading a `.slip` file returns an unevaluated `code` block. Reading a directory returns a dictionary-like view of its contents.
+- **Writing**: `file:///path/to/out.json: #{ a: 1 }` serializes the data based on the extension and writes it to disk. You can override the serialization format by providing a `content-type` in a metadata block, e.g., `file://out.txt#(content-type: "application/json"): ...`.
 
-#### Scheme paths: fs (filesystem) and http (host-provided)
+**Path Resolution**: The `file://` scheme supports several forms for path resolution:
+- **Absolute paths**: `file:///path/to/file` is resolved from the filesystem root.
+- **Home directory**: `file://~/documents/file.txt` expands `~` to the user's home directory.
+- **Current working directory**: `file://./relative/path` is resolved relative to the directory where the SLIP interpreter was started.
+- **Source-file relative**: `file://relative/path` and `file://../parent/path` are resolved relative to the directory of the SLIP source file currently being executed. If not executed from a file (e.g., in a REPL), this falls back to the current working directory. This allows modules to refer to local resources portably.
 
-Scheme paths are handled by the host as normal get/set/del paths and can be configured per call via #(...). They are optional but recommended.
+**HTTP I/O (`http://`, `https://`)**: The `http://` scheme enables network requests.
+- **GET**: `http://example.com/api/data` performs an HTTP GET and returns the response body.
+- **PUT**: `http://example.com/api/data: #{ a: 1 }` serializes the payload to JSON (the default) and performs an HTTP PUT.
+- **POST**: `http://example.com/api/data<- #{ a: 1 }` performs an HTTP POST.
+- **DELETE**: `~http://example.com/api/data` performs an HTTP DELETE.
 
-fs:// (filesystem)
-- Read a file (default binary): fs://path/to/file → returns a list of bytes (ints 0–255).
-- Text read: fs://path/to/file#(encoding: "utf-8") → returns a string.
-- Write:
-  - fs://path/to/file: "text" → writes UTF‑8 by default (override with #(encoding: "...")).
-  - fs://path/to/file: #[66, 89] → writes raw bytes.
-- Directories (trailing slash recommended): fs://path/to/dir/ returns a dict-like view where keys are entry names and values are files or subdirectories. You can treat it like a mapping:
-  - docs: fs://docs/
-  - docs["new.txt"]: "hello"        -- creates/writes a file
-  - ~docs["old.txt"]                -- deletes a file
-- Options (host-defined): encoding, mkdirs (create parents on write), append, recursive (for delete).
-- Status (optional): #(lite: true) → #[status, value], #(full: true) → #{status, value, meta: ...}. Without these, IO errors raise normally.
+**Configuring Scheme Paths**
 
-http:// and https:// (network)
-- Default GET: http://example.com/page → returns response body as text (UTF‑8 or charset). Use #(binary: true) for bytes (list of ints).
-- Options (host-defined): method (`get`, `post`, ...), timeout, retries, headers, body.
-- Status (optional): #(lite: true) / #(full: true) return status-coded structures; otherwise, non-2xx results raise an error.
+Scheme path operations can be configured on a per-call basis using a transient `#(...)` block. This allows for fine-grained control over network requests and filesystem I/O. Common options for `http://` requests include `timeout` and `retries`, which have sensible defaults (timeout: 5.0 seconds, retries: 2) but can be overridden when needed.
 
-Security: Hosts should sandbox fs roots and control which schemes are enabled.
+The `resource` function is a convenient wrapper that lets you create a handle with "baked-in" configuration, which is then applied to all subsequent operations on that handle.
 
-Examples:
-- note: fs://docs/readme.txt#(encoding: "utf-8")
-- fs://docs/new.txt: 'hello world'
-- [status, body]: http://api/items#(lite: true, timeout: 2)
+A particularly important configuration option is `content-type`. When provided for a write operation (`PUT`, `POST`), it serves two critical functions:
+
+1.  **Header Promotion**: The value is automatically set as the `Content-Type` header in the outgoing HTTP request.
+2.  **Automatic Serialization**: It instructs the runtime to serialize the request body using the appropriate format. For example, a `content-type` of `"application/json"` will cause a SLIP `dict` or `list` to be automatically converted to a JSON string.
+
+This applies to all forms of HTTP writes, including shorthand assignments, direct `post-path` (`<-`) operations, and calls using a `resource` handle.
+
+```slip
+-- Create a configured resource handle for a JSON API
+admin-api: resource `http://api/items#(
+    content-type: "application/json",
+    timeout: 5
+)`
+
+-- The content-type and timeout are automatically applied to this PUT.
+put admin-api #{ name: "new-item" }
+
+-- The configuration can also be applied directly to a post-path.
+http://api/items#(content-type: "application/json")<- #{ name: "another" }
+```
+
+**The `resource` Fluent API**
+
+For convenience, the standard library provides a `resource` function that creates a pre-configured handle for a URL. This handle can then be used with `get`, `put`, `post`, and `del` functions for a more readable, fluent API style.
+
+- `resource <url-path>`: Creates a resource handle. The URL path can include a transient configuration block (`#(...)`).
+- `get <resource>`: Performs an HTTP GET.
+- `put <resource> <data>`: Performs an HTTP PUT with the data.
+- `post <resource> <data>`: Performs an HTTP POST with the data.
+- `del <resource>`: Performs an HTTP DELETE.
+
+**Example:**
+```slip
+-- Create a configured resource handle for a JSON API
+admin-api: resource `http://api/items#(content-type: "application/json")`
+
+-- Use the handle to perform operations
+item: get admin-api
+put admin-api #{ name: "new-item" }
+del admin-api
+```
+
 
 #### Evaluation Primitives
 
@@ -1994,11 +2195,14 @@ These functions are the basis of all logic and iteration.
 
 - `if <condition-block> <then-block> <else-block>`: The fundamental conditional. It first evaluates the `<condition-block>`. If the result is truthy, it then evaluates the `<then-block>`. Otherwise, it evaluates the `<else-block>`. It is crucial that only one of the two branch code blocks is ever evaluated.
 - `while <condition-block> <body-block>`: The fundamental loop. It repeatedly evaluates the `condition-block` and, if the result is true, runs the `body-block`.
-- `foreach <pattern> <collection> <body-block>`: The primary iteration tool. It iterates over a collection, binding each item to the `pattern`, and executes the `body-block`. Like `while`, it must be a primitive to support automatic yielding inside a `task`.
+- `foreach <var-spec: sig> <collection> <body-block>`: The first argument is a sig literal (e.g., `{x}` or `{k, v}`). It is never evaluated; its positional names are bound/destructured per iteration.
+- `for <var-spec: sig> <start> <end> [body-block]` (library): Idiomatic helper built on `while`/`foreach`. The first argument is a sig literal (e.g., `{i}`).
 - `logical-and <lhs> <rhs>`: A short-circuiting logical AND. It evaluates its first argument. If the result is falsey, it returns that value immediately without evaluating the second argument. If the first argument is truthy, it evaluates the second argument and returns its result. The `and` operator is an alias for this primitive. Note: This short-circuiting behavior makes `logical-and` a special form, as it breaks the standard rule of evaluating all arguments before a function call. This is a pragmatic exception made for intuitive syntax.
 - `logical-or <lhs> <rhs>`: A short-circuiting logical OR. It evaluates its first argument. If the result is truthy, it returns that value immediately without evaluating the second argument. If the first argument is falsey, it evaluates the second argument and returns its result. The `or` operator is an alias for this primitive. Note: Like `logical-and`, this is a special form.
 - `return <value>`: Terminates the execution of the current function and returns the given `value` (or `none` if not provided). This is achieved by creating a `Response` object with `status: 'return'`, which is then handled by the function evaluation machinery.
 - `task <code-block>`: Executes a code block asynchronously on the host's event loop. Inside a `task`, `while` and `foreach` loops automatically yield control (`sleep 0`) on each iteration to prevent blocking the host.
+- `loop <body-block>`: Provides an infinite loop. This is an alias for `while [true] [...]`. A `return` or other non-local exit is required to break out of the loop.
+- `cond <clauses>`: A multi-branch conditional that takes a list of `[condition-block, result-expression]` pairs. It executes the first `condition-block` that returns a truthy value and then returns the corresponding `result-expression`.
 
 #### Outcome and Response Primitives
 
@@ -2006,6 +2210,7 @@ These primitives manage structured outcomes.
 
 - `response <status> <value>`: The core constructor for creating a `response` object, which is a structured outcome with a `status` (a `get-path-literal`) and a `value`.
 - `respond <status> <value>`: Creates a `response` object and immediately triggers a non-local exit, making that `response` the return value of the current function.
+- `with-log <code>`: Executes the code block, returning a dict-like object #{ outcome: <response>, effects: #[...] } where outcome reflects the block’s result (normalized to response ok/err/...) and effects is the list of side-effect events emitted during the block.
 
 #### Metaprogramming Primitives
 
@@ -2021,12 +2226,23 @@ These functions are the foundation of SLIP's object system.
 - `scope <initial-data: dict>`: Creates a new `scope` object, which is a live, lexically-linked object that serves as the basis for prototypes and instances. The initial data is provided by a `dict`.
 - `inherit <child-scope> <parent-scope>`: Sets the parent (prototype) link of the `child-scope` to be the `parent-scope`. This is the primary mechanism for establishing an "is-a" relationship and can only be performed once per object.
 - `mixin <target-scope> <source-scopes...>`: Establishes a "has-a" relationship by adding one or more `source-scopes` to the `target-scope`'s list of mixins. This is a dynamic link, not a copy. Property lookups will search through mixins before checking the target's parent. This mechanism can be used multiple times to layer capabilities.
+- `with <object> <config-block>`: Executes a code block within the context of a given object, then returns the object. It is ideal for fluent configuration and is typically used with the pipe operator.
+  ```slip
+  -- Create a scope, then configure it fluently using 'with'
+  my-char: (create Character) |with [
+      name: "Kael"
+      hp: 150
+  ]
+  ```
+
+- `guard <function> [condition-block]`: A helper function used with `fn` to add a conditional guard to a method definition. The method is only considered for dispatch if the `condition-block` evaluates to a truthy value.
+- `example <function> {example-sig}`: A helper function used with `fn` to attach an executable example to a function definition. It provides documentation, enables testing, and can be used by a compiler for type inference.
 
 #### Type System Primitives
 
 These functions allow the language to be introspective.
 
-- `to-path <string>` (also called `intern`): Converts a string into a `path` object. This is essential for creating paths dynamically.
+- `call <string>` (also called `intern`): Converts a string into a `path` object. This is essential for creating paths dynamically.
 - `type-of <value>`: Returns a `path` representing the type of the value (e.g., `` `core.number` ``, `` `core.list` ``).
 
 #### Core Data Operations
@@ -2061,7 +2277,9 @@ These functions allow the language to be introspective.
   - `join <segments...>`: Joins multiple path segments, path literals, or strings into a single `get-path-literal`. This is the primary tool for programmatic path construction.
 - `split <string> <separator>`: Splits a string by a separator into a list of strings.
 - `find <haystack> <needle> [<start-index>]`: Finds the first occurrence of a substring.
-- `replace <string> <old> <new>`: Returns a new string with all occurrences of `old` replaced by `new`.
+- `replace`: A generic function for replacing values.
+  - `replace <string> <old> <new>`: Returns a new string with all occurrences of `old` replaced by `new`.
+  - `replace <list|code> <old-list> <new-list>`: Replaces all occurrences of `old-list[0]` with `new-list[0]` in the target list or code block.
 - `indent <string> <prefix>`: Adds a prefix to the beginning of each line.
 - `dedent <string>`: Removes common leading whitespace from every line.
 
@@ -2074,8 +2292,27 @@ These functions allow the language to be introspective.
   - `(range <start> <stop> <step>)`: Generates numbers from start to stop-1, incrementing by step.
 - `keys <dict|scope>`: Returns a new list containing the keys of the dictionary or scope.
 - `values <dict|scope>`: Returns a new list containing the values of the dictionary or scope.
+- `items <dict|scope>`: Returns a list of `#[key, value]` pairs.
 - `copy <collection>`: Returns a **shallow copy** of a list, dictionary or code block. Nested collections within the copied structure will still refer to the original nested collections.
 - `clone <collection>`: Returns a **deep copy** of a list, dictionary or code block. All nested collections are also recursively copied, creating a completely independent duplicate of the original structure.
+- `reverse <list>`: Returns a new list with the elements in reverse order.
+- `sort <list>`: Returns a new, sorted list.
+
+#### Functional Helpers
+
+These functions provide common higher-order operations for working with collections.
+
+- `map <function> <list>`: Applies a function to each item in a list, returning a new list of the results. Also supports a data-first overload for piping: `list |map <function>`.
+- `filter <predicate> <list>`: Returns a new list containing only the items for which the predicate function returns a truthy value. Also supports a data-first overload: `list |filter <predicate>`.
+- `reduce <reducer> <accumulator> <list>`: Reduces a list to a single value by applying the `reducer` function cumulatively. The reducer takes two arguments: the accumulator and the current item.
+- `zip <list-a> <list-b>`: Combines two lists into a list of pairs. The resulting list's length is determined by the shorter of the two input lists.
+
+#### Function Composition
+
+These helpers create new functions from existing ones.
+
+- `partial <function> <partial-args...>`: Creates a new function that, when called, will invoke the original function with the pre-supplied arguments, followed by any new arguments.
+- `compose <functions...>`: Composes functions, returning a new function that applies them from right to left. `(compose f g h)(x)` is equivalent to `f(g(h(x)))`.
 
 #### Data Modeling
 
@@ -2109,39 +2346,22 @@ These functions allow the language to be introspective.
 
 #### Import and Modules
 
-- `import <module-path: path>`: Loads a module specified by a path literal that includes a scheme (e.g., `fs://math.slip`, `https://example.com/utils.slip`). The host environment implements scheme handlers, executes the module exactly once in a fresh scope, caches that scope by canonical path, and returns the cached scope on subsequent imports.
+- `import <module-path: path>`: Loads a module specified by a path literal that includes a scheme (e.g., `file://math.slip`, `https://example.com/utils.slip`). The host environment implements scheme handlers, executes the module exactly once in a fresh scope, caches that scope by canonical path, and returns the cached scope on subsequent imports.
   - The argument must be a path literal (not a string), keeping module locations within SLIP's path system.
   - The returned value is a `scope` that contains the module's bindings. Bind it to a kebab-case variable.
   - Example:
     ```slip
-    math: import fs://math.slip
+    math: import file://math.slip
     utils: import https://sliplang.com/utils.slip
     ```
 
-### 14.2. Host Integration: host-object and task
+### 14.2. Host Integration: `host-object` and `task`
 
-This section specifies the two required host integration points that every SLIP runtime must provide. They are implemented by the host and surfaced to SLIP scripts as normal core functions.
+Every SLIP runtime must provide two core functions that bridge the gap between the script and the host application.
 
-#### host-object
+The **`host-object`** function serves as a gateway for scripts to retrieve live `SLIPHost` instances from the application. The host implements this function to take an identifier (typically a string) and return the corresponding object handle, or `none` if not found. This allows scripts to access and modify host object data via the `__getitem__`, `__setitem__`, and `__delitem__` contract. Note that methods decorated with `@slip_api_method` are exposed as top-level SLIP functions and are called directly (e.g., `take-damage 10`); `host-object` is used only to get a handle to an object as data.
 
-- Purpose: Returns a live SLIPHost instance by ID/handle so scripts can treat host objects like scopes.
-- Contract:
-  - Provide a global SLIP function named `host-object`.
-  - It takes an identifier (commonly a string) and returns a SLIPHost instance or `none` if not found.
-  - Returned objects must implement the SLIPHost contract (see Chapter 12): `__getitem__`, `__setitem__`, `__delitem__` (and typically `__contains__`).
-- Usage:
-  - Data access: `obj: host-object "player-kael"`; then `obj.hp`, `obj["hp"]`, `obj.hp: 120`, `~obj.hp`.
-  - Method exposure: Any Python method on SLIPHost marked with `@slip_api_method` is bound into the script scope as a top‑level function using kebab‑case. You call it directly: `take-damage 10`. No `host-object` prefix is needed. Use `host-object` only to obtain object handles as data.
-
-#### task
-
-- Purpose: Run a code block asynchronously on the host event loop and integrate task lifecycle with the current SLIPHost.
-- Behavior:
-  - `task [ ... ]` schedules the block to run concurrently and immediately returns a task handle (often ignored).
-  - Inside a task, `while` and `foreach` loops automatically yield (equivalent to `sleep 0`) each iteration to keep the host responsive.
-- Host lifecycle:
-  - Tasks created while executing against a host object are registered on that object. The base `SLIPHost` provides `cancel-tasks` (exposed to SLIP) to cancel all its active tasks.
-  - The host decides when to cancel tasks (e.g., on logout or object deletion).
+The **`task`** primitive integrates with the host's asynchronous event loop. Calling `task [...]` schedules the code block to run concurrently and immediately returns a task handle. To ensure the host remains responsive, `while` and `foreach` loops inside a task automatically yield control on each iteration. The host is responsible for managing the task lifecycle. When a task is created in the context of a `SLIPHost` object, it is registered with that object. The base `SLIPHost` class provides a `cancel-tasks` method (exposed to SLIP) so the host can clean up all active tasks associated with an object when it is no longer needed (e.g., on player logout).
 
 For the full SLIPHost contract and binding rules, see Chapter 12.
 
@@ -2150,230 +2370,6 @@ For the full SLIPHost contract and binding rules, see Chapter 12.
 SLIP extends its built-in functionality with a core library written in SLIP itself. This file is loaded automatically by the interpreter and provides a rich set of higher-order functions and utilities. This demonstrates the power of the language to build upon its own primitives.
 
 There is nothing special about `root.slip` other than the fact that all functions are set in the root scope and that it is automatically loaded before any other script is run.
-
-```slip
-{--
-    SLIP Core Library v1.0
-
-    This library provides a set of common, high-level utilities
-    written in pure SLIP. It is loaded into the global scope.
-    Note: this file is loaded directly into the root scope, so all
-    definitions are global.
---}
-
--- --- Operator and Alias Definitions ---
--- Note: The core functions (add, sub, etc.) are host primitives.
--- These bindings make them available as infix operators.
-+: |add
--: |sub
-*: |mul
-/: |div
-**: |pow
-=: |eq
-!=: |neq
->: |gt
->=: |gte
-<: |lt
-<=: |lte
-and: |logical-and
-or: |logical-or
-
--- Common aliases for response statuses
-ok:        `ok`
-err:       `err`
-not-found: `not-found`
-invalid:   `invalid`
-
--- Common aliases
-print: fn {msg} [ emit "stdout" msg ]
-stderr: fn {msg} [ emit "stderr" msg ]
-
--- --- Type Utilities ---
--- Note: `type-of` is a host primitive.
-is-number?:  fn {x} [ logical-or (eq (type-of x) `int`) (eq (type-of x) `float`) ]
-is-string?:  fn {x} [ logical-or (eq (type-of x) `string`) (eq (type-of x) `i-string`) ]
-is-list?:    fn {x} [ eq (type-of x) `list` ]
-is-dict?:    fn {x} [ eq (type-of x) `dict` ]
-is-scope?:   fn {x} [ eq (type-of x) `scope` ]
-is-path?:    fn {x} [ eq (type-of x) `path` ]
-is-fn?:      fn {x} [ eq (type-of x) `function` ]
-is-code?:    fn {x} [ eq (type-of x) `code` ]
-is-boolean?: fn {x} [ eq (type-of x) `boolean` ]
-is-none?:    fn {x} [ eq (type-of x) `none` ]
-
--- --- List & Sequence Utilities ---
-
--- Reverses a list by iterating through it and prepending
--- each item to a new list.
-reverse: fn {data-list} [
-    result: #[]
-    -- For each item in the original list (from start to end)...
-    foreach item data-list [
-        -- ...prepend it to the front of our result list.
-        result: add #[ item ] result
-    ]
-    return result
-]
-
--- Applies a function to each item in a list and returns a new
--- list containing the results.
-map: fn {func, data-list} [
-    results: #[]
-    foreach item data-list [
-        results: add results #[ (func item) ]
-    ]
-    return results
-]
-
--- Filters a list, returning a new list containing only the items
--- for which the predicate function returns a truthy value.
-filter: fn {predicate, data-list} [
-    results: #[]
-    foreach item data-list [
-        if [predicate item] [
-            results: add results #[ item ]
-        ]
-    ]
-    return results
-]
-
--- Reduces a list to a single value by applying a function cumulatively.
-reduce: fn {reducer, accumulator, data-list} [
-    foreach item data-list [
-        accumulator: reducer accumulator item
-    ]
-    return accumulator
-]
-
--- Combines two lists into a list of pairs. The resulting list's
--- length is determined by the shorter of the two input lists.
-zip: fn {list-a, list-b} [
-    results: #[]
-    limit: if [(len list-a) < (len list-b)] [len list-a] [len list-b]
-    i: 0
-    while [i < limit] [
-        results: add results #[ #[ list-a[i], list-b[i] ] ]
-        i: i + 1
-    ]
-    return results
-]
-
--- --- Function Utilities ---
-
--- Creates a new function that, when called, will invoke the original
--- function with the pre-supplied arguments, followed by any new arguments.
-partial: fn {func, partial-args...} [
-    return (fn {new-args...} [
-        -- `add` creates a new list by concatenating the pre-supplied
-        -- arguments with any new arguments.
-        all-args: add partial-args new-args
-        return (call func all-args)
-    ])
-]
-
--- Composes functions, returning a new function that applies them from
--- right to left. (compose f g h)(x) is equivalent to f(g(h(x))).
-compose: fn {funcs...} [
-    return (fn {initial-arg} [
-        return (reduce (fn {acc, f} [ f acc ]) initial-arg (reverse funcs))
-    ])
-]
-
--- --- Object Model Utilities ---
-
--- The base object for all validation schemas.
-Schema: scope #{}
-
--- The canonical way to create a validation schema.
-schema: fn {config} [
-    (scope config) |inherit Schema
-]
-
--- Checks if an object inherits from a given prototype.
-is-a?: fn {obj, proto} [
-    -- We can only check scopes.
-    if [not (is-scope? obj)] [
-        return false
-    ]
-    current: obj
-    while [current] [
-        if [eq current proto] [
-            return true
-        ]
-        -- Walk up the prototype chain.
-        current: current.meta.parent
-    ]
-    return false
-]
-
--- Checks if an object is a schema.
-is-schema?: fn {obj} [
-    is-a? obj Schema
-]
-
--- The canonical way to create a new instance of an object.
--- This is a generic function that dispatches on arity.
-create: fn {} [ scope #{} ]
-create: fn {prototype} [ scope #{} |inherit prototype ]
-create: fn {prototype, config-block} [
-    (scope #{} |inherit prototype) |with config-block
-]
-
-
--- --- Control Flow ---
-
--- Provides a conditional branch without a required 'else' block.
-when: fn {condition, then-block} [
-    if [run condition] then-block []
-]
-
--- Provides an infinite loop. This is an alias for `while [true] [...]`.
-loop: fn {body-block} [
-    while [true] body-block
-]
-
--- A multi-branch conditional, like a switch statement. It takes a list of
--- [condition-block, result-expression] pairs. It executes the first
--- condition-block that returns a truthy value, and then returns the
--- corresponding result-expression.
--- Example:
---   x: 5
---   cond #[
---       #[ [x < 5], "less" ],
---       #[ [x > 5], "greater" ],
---       #[ [true], "equal" ]
---   ]  -- returns "equal"
-cond: fn {clauses} [
-    foreach clause clauses [
-        [condition-block, result-expr]: clause
-
-        -- Execute the condition block. If it's truthy...
-        if [run condition-block] [
-            -- ...return the associated result.
-            -- If the result expression is a code block, run it. Otherwise,
-            -- it's a literal, so return it directly.
-            if [is-code? result-expr] [
-                return (run result-expr)
-            ] [
-                return result-expr
-            ]
-        ]
-    ]
-    -- If no conditions match, return none.
-    return none
-]
-
--- Executes a block of code within the context of a given object,
--- then returns the object. Ideal for fluent configuration.
--- Example: obj |with [ name: "new" ]
-with: fn {obj, block} [
-    -- Run the code block in the context of the object
-    run-with block obj
-
-    -- Return the original, now-modified object
-    return obj
-]
-```
 
 ---
 

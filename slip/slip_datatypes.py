@@ -82,14 +82,16 @@ class Scope:
             "mixins": []  # List[Scope]
         }
 
-    def __setitem__(self, key: str, value: Any):
+    def __setitem__(self, key: Any, value: Any):
+        key = self._normalize_key(key)
         if key == "meta":
             raise KeyError("'.meta' is reserved and cannot be rebound.")
         if not isinstance(key, str):
             raise TypeError(f"Scope key must be a str, not {type(key)}")
         self.bindings[key] = value
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: Any) -> Any:
+        key = self._normalize_key(key)
         if key == "meta":
             return self.meta
         if not isinstance(key, str):
@@ -99,7 +101,8 @@ class Scope:
             return owner.bindings[key]
         raise KeyError(f"'{key}'")
 
-    def __delitem__(self, key: str):
+    def __delitem__(self, key: Any):
+        key = self._normalize_key(key)
         if key == "meta":
             raise KeyError("'.meta' is reserved and cannot be deleted.")
         if not isinstance(key, str):
@@ -110,6 +113,7 @@ class Scope:
 
     def __contains__(self, key: Any) -> bool:
         """Checks if a key exists in this Scope or its prototypes."""
+        key = self._normalize_key(key)
         if isinstance(key, str):
             return self.find_owner(key) is not None
         return False
@@ -129,8 +133,9 @@ class Scope:
             return parent.find_owner(key)
         return None
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: Any, default: Any = None) -> Any:
         """Gets a value, returning a default if not found."""
+        key = self._normalize_key(key)
         if not isinstance(key, str):
             return default
         owner = self.find_owner(key)
@@ -150,6 +155,24 @@ class Scope:
         for src in sources:
             if src not in mixins:
                 mixins.append(src)
+
+    def _normalize_key(self, key):
+        """Allow a single-name PathLiteral(GetPath(...)) or GetPath to be used as a key."""
+        try:
+            from slip.slip_datatypes import PathLiteral as _PL  # local import to avoid cycle during edits
+            if isinstance(key, _PL):
+                inner = getattr(key, 'inner', None)
+                if isinstance(inner, GetPath):
+                    segs = getattr(inner, 'segments', [])
+                    if len(segs) == 1 and isinstance(segs[0], Name):
+                        return segs[0].text
+            if isinstance(key, GetPath):
+                segs = getattr(key, 'segments', [])
+                if len(segs) == 1 and isinstance(segs[0], Name):
+                    return segs[0].text
+        except Exception:
+            pass
+        return key
 
     @property
     def parent(self) -> Optional['Scope']:
@@ -287,7 +310,7 @@ class GenericFunction(SlipCallable):
 
 class Response:
     """Represents a structured outcome from a function call (`response ...`)."""
-    def __init__(self, status: 'GetPathLiteral', value: Any):
+    def __init__(self, status: 'PathLiteral', value: Any):
         self.status = status
         self.value = value
 
@@ -385,49 +408,11 @@ class GetPath:
         return hash(self.to_str_repr())
 
 
-class GetPathLiteral:
-    """Represents a SLIP get-path literal value, e.g. `` `a.b` ``."""
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
-        if not segments:
-            raise ValueError("GetPathLiteral must have at least one segment.")
-        self.segments = segments
-        self.meta = meta
+class PathLiteral:
+    """Represents a quoted path value written with backticks. The inner may be any path-shaped object."""
+    def __init__(self, inner: 'GetPath | SetPath | DelPath | PipedPath | MultiSetPath'):
+        self.inner = inner
         self._str_repr: Optional[str] = None
-
-    def __getitem__(self, key: Union[int, slice]) -> Union[PathSegment, List[PathSegment]]:
-        return self.segments[key]
-
-    def to_str_repr(self) -> str:
-        """Returns the canonical string representation of the path."""
-        from slip.slip_printer import Printer
-        if self._str_repr is None:
-            self._str_repr = Printer().pformat(self)
-        return self._str_repr
-
-    def __repr__(self) -> str:
-        # Simple repr to avoid recursion with printer
-        return f"<GetPathLiteral segments={self.segments!r} meta={self.meta!r}>"
-
-    def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, GetPathLiteral):
-            return NotImplemented
-        return self.to_str_repr() == other.to_str_repr()
-
-    def __hash__(self) -> int:
-        return hash(self.to_str_repr())
-
-
-class SetPathLiteral:
-    """Represents a SLIP set-path literal value, e.g. `` `a.b:` ``."""
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
-        if not segments:
-            raise ValueError("SetPathLiteral must have at least one segment.")
-        self.segments = segments
-        self.meta = meta
-        self._str_repr: Optional[str] = None
-
-    def __getitem__(self, key: Union[int, slice]) -> Union[PathSegment, List[PathSegment]]:
-        return self.segments[key]
 
     def to_str_repr(self) -> str:
         from slip.slip_printer import Printer
@@ -436,11 +421,10 @@ class SetPathLiteral:
         return self._str_repr
 
     def __repr__(self) -> str:
-        # Simple repr to avoid recursion with printer
-        return f"<SetPathLiteral segments={self.segments!r} meta={self.meta!r}>"
+        return f"<PathLiteral {self.to_str_repr()}>"
 
     def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, SetPathLiteral):
+        if not isinstance(other, PathLiteral):
             return NotImplemented
         return self.to_str_repr() == other.to_str_repr()
 
@@ -448,76 +432,13 @@ class SetPathLiteral:
         return hash(self.to_str_repr())
 
 
-class DelPathLiteral:
-    """Represents a SLIP del-path literal value, e.g. `` `~a.b` ``."""
-    def __init__(self, path: 'GetPathLiteral'):
-        self.path = path
 
-    def __repr__(self) -> str:
-        # Simple repr to avoid recursion with printer
-        return f"<DelPathLiteral path={self.path!r}>"
 
-    def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, DelPathLiteral):
-            return NotImplemented
-        return self.path == other.path
-
-    def __hash__(self) -> int:
-        return hash(self.path)
 
 
 # -----------------------------------------------------------------
-# New Literal Types
+# New Literal Types (deprecated in favor of PathLiteral)
 # -----------------------------------------------------------------
-
-class PipedPathLiteral:
-    """Literal form of a piped path, e.g. `` `|map` ``."""
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
-        if not segments:
-            raise ValueError("PipedPathLiteral requires at least one segment.")
-        self.segments = segments
-        self.meta = meta
-        self._str_repr: Optional[str] = None
-
-    def __getitem__(self, key):
-        return self.segments[key]
-
-    def to_str_repr(self) -> str:
-        from slip.slip_printer import Printer
-        if self._str_repr is None:
-            self._str_repr = Printer().pformat(self)
-        return self._str_repr
-
-    def __repr__(self):
-        return f"<PipedPathLiteral segments={self.segments!r} meta={self.meta!r}>"
-
-    def __eq__(self, other):
-        if not isinstance(other, PipedPathLiteral):
-            return NotImplemented
-        return self.to_str_repr() == other.to_str_repr()
-
-    def __hash__(self):
-        return hash(self.to_str_repr())
-
-
-class MultiSetPathLiteral:
-    """Literal form of a multi-set assignment target, e.g. `` `[a,b]:` ``."""
-    def __init__(self, targets: List['SetPath']):
-        if not targets:
-            raise ValueError("MultiSetPathLiteral requires at least one SetPath.")
-        self.targets = targets
-
-    def __iter__(self):
-        return iter(self.targets)
-
-    def __repr__(self):
-        return f"<MultiSetPathLiteral targets={self.targets!r}>"
-
-    def __eq__(self, other):
-        return isinstance(other, MultiSetPathLiteral) and self.targets == other.targets
-
-    def __hash__(self):
-        return hash(tuple(self.targets))
 
 
 class DelPath:

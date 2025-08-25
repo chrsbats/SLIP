@@ -20,7 +20,7 @@ import yaml
 from koine import Parser
 from slip.slip_transformer import SlipTransformer
 from slip.slip_interpreter import Evaluator
-from slip.slip_datatypes import Scope, Code, Response, GetPathLiteral, Name, SetPath, GetPath, PathNotFound, Group, List as SlipList
+from slip.slip_datatypes import Scope, Code, Response, PathLiteral, Name, SetPath, GetPath, PathNotFound, Group, List as SlipList
 
 # ===================================================================
 # 1. Core Data Structures & Global State
@@ -100,6 +100,37 @@ class SLIPHost(ABC):
         task.add_done_callback(lambda t: self.active_slip_tasks.discard(t))
 
 
+class _EffectsView(collections.abc.Sequence):
+    __slots__ = ("_backing", "_start", "_end")
+    def __init__(self, backing, start, end):
+        self._backing = backing
+        self._start = int(start)
+        self._end = int(end)
+    def __len__(self):
+        end = self._end
+        start = self._start
+        if end < start:
+            return 0
+        return end - start
+    def __getitem__(self, idx):
+        n = len(self)
+        if isinstance(idx, slice):
+            s_start, s_stop, s_step = idx.indices(n)
+            base = self._start
+            return [self._backing[base + k] for k in range(s_start, s_stop, s_step)]
+        if idx < 0:
+            idx += n
+        if idx < 0 or idx >= n:
+            raise IndexError
+        return self._backing[self._start + idx]
+    def __iter__(self):
+        base = self._start
+        for k in range(len(self)):
+            yield self._backing[base + k]
+    def __repr__(self):
+        # Avoid going through list(self) to prevent accidental re-entrancy
+        return repr(self._backing[self._start:self._end])
+
 # ===================================================================
 # 4. The Standard Library
 # ===================================================================
@@ -135,39 +166,56 @@ class StdLib:
     def _str_join(self, list_of_strings, separator): return separator.join(map(str, list_of_strings))
     # Backward compatibility for legacy callers/tests
     def _join(self, list_of_strings, separator): return self._str_join(list_of_strings, separator)
-    def _join_paths(self, first, *rest):
-        """
-        Join strings and/or path values into a single GetPathLiteral by concatenating segments.
-        Accepts any mix of:
-          - strings (or IString) like 'a.b' or 'c'
-          - runtime path values (GetPath, SetPath, DelPath, PipedPath, and their literal forms)
-        """
-        from slip.slip_datatypes import GetPathLiteral as GPL
-        # Normalize all inputs to GetPathLiteral via to-path
+    async def _join_paths(self, first, *rest, scope: Scope):
+        from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP
         all_args = (first,) + rest
         segments = []
         for a in all_args:
-            lit = self._to_path(a)
-            segments.extend(lit.segments)
-        return GPL(segments)
+            gp = self._to_getpath(a)
+            if not isinstance(gp, _GP):
+                raise TypeError("join on paths expects only path-like arguments")
+            segments.extend(gp.segments)
+        return _PL(_GP(segments))
     def _split(self, string, separator): return string.split(separator)
     def _find(self, haystack, needle, start=0):
         idx = haystack.find(needle, start)
         return idx if idx != -1 else None
     def _str_replace(self, string, old, new): return string.replace(old, new)
     # Back-compat for tests expecting _replace
-    def _replace(self, string, old, new): return self._str_replace(string, old, new)
+    #def _replace(self, string, old, new): return self._str_replace(string, old, new)
     def _indent(self, string, prefix): return textwrap.indent(string, prefix)
     def _dedent(self, string): return textwrap.dedent(string)
 
-    def _resource(self, path, *, scope: Scope):
-        from slip.slip_datatypes import GetPathLiteral as _GPL, GetPath as _GP
-        # Normalize to a runtime GetPath (preserve meta)
-        if isinstance(path, _GP):
-            gp = path
-        else:
-            lit = self._to_path(path)  # accepts string or GPL or GP
-            gp = _GP(lit.segments, getattr(lit, 'meta', None))
+    def _to_getpath(self, value):
+        from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name, IString as _IStr
+        # PathLiteral → inner (must be GetPath)
+        if isinstance(value, _PL):
+            inner = getattr(value, 'inner', None)
+            if isinstance(inner, _GP):
+                return inner
+            raise TypeError("call expects a function path (get-path) when using a path-literal")
+        # Already a runtime GetPath (not accepted by call per spec, but used by helpers)
+        if isinstance(value, _GP):
+            return value
+        # Strings → parse to GetPath (split on '.' and '/', but keep URL/special as one segment)
+        if isinstance(value, (str, _IStr)):
+            s = str(value).strip()
+            if not s:
+                raise ValueError("empty path string")
+            if ("://" in s) or s.startswith(("/", "../", "./", "|", "~")):
+                return _GP([_Name(s)])
+            import re as _re
+            parts = [p for p in _re.split(r"[./]", s) if p]
+            if not parts:
+                raise ValueError("invalid path string")
+            return _GP([_Name(p) for p in parts])
+        raise TypeError("expected a path-literal, get-path, or string")
+
+    async def _resource(self, path, *, scope: Scope):
+        from slip.slip_datatypes import GetPath as _GP
+        gp = self._to_getpath(path)
+        if not isinstance(gp, _GP):
+            raise TypeError("resource expects a path-like value")
         url = self.evaluator.path_resolver._extract_http_url(gp)
         if not url:
             raise TypeError("resource expects an http(s) URL path")
@@ -177,7 +225,7 @@ class StdLib:
         return r
 
     async def _normalize_resource(self, target, scope: Scope):
-        from slip.slip_datatypes import GetPath as _GP, GetPathLiteral as _GPL
+        from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL, IString as _IStr
         # Resource wrapper: Scope with 'url' and 'path'
         if isinstance(target, Scope) and "url" in getattr(target, "bindings", {}) and "path" in getattr(target, "bindings", {}):
             gp = target.bindings["path"]
@@ -185,13 +233,21 @@ class StdLib:
             cfg = await self.evaluator.path_resolver._meta_to_dict(getattr(gp, 'meta', None), scope)
             return gp, url, cfg
         # Path-like or string fallback
-        if isinstance(target, _GPL):
-            gp = _GP(target.segments, getattr(target, 'meta', None))
+        if isinstance(target, _PL):
+            inner = getattr(target, 'inner', None)
+            gp = inner if isinstance(inner, _GP) else None
         elif isinstance(target, _GP):
             gp = target
         else:
-            lit = self._to_path(target)
-            gp = _GP(lit.segments, getattr(lit, 'meta', None))
+            gp = None
+            if isinstance(target, _PL) and isinstance(getattr(target, 'inner', None), _GP):
+                gp = target.inner
+            elif isinstance(target, _GP):
+                gp = target
+            elif isinstance(target, (str, _IStr)):
+                gp = self._to_getpath(target)
+            if gp is None:
+                raise TypeError("target expects an http(s) URL path")
         url = self.evaluator.path_resolver._extract_http_url(gp)
         if not url:
             raise TypeError("target expects an http(s) URL path")
@@ -241,13 +297,122 @@ class StdLib:
     async def _del(self, target, *, scope: Scope):
         from slip.slip_http import http_delete
         _, url, cfg = await self._normalize_resource(target, scope)
+        # Ensure DELETE carries configured content-type header (for servers that inspect it)
+        ctype = cfg.get('content-type') or cfg.get('content_type')
+        if ctype:
+            headers = dict(cfg.get('headers', {}))
+            headers['Content-Type'] = ctype
+            cfg['headers'] = headers
         return await http_delete(url, cfg)
 
     # Optional compatibility alias; remove later if not needed
     async def _http_post(self, target, data, *, scope: Scope):
         return await self._post(target, data, scope=scope)
 
-    
+    async def _import(self, target, *, scope: Scope):
+        """
+        Load a SLIP module given either:
+          - a path-literal (backticked), or
+          - a string URL/locator (e.g., 'file:///abs/path/to/file.slip' or 'http://...').
+
+        This is a normal primitive: its argument is already evaluated by the evaluator.
+        It does not accept GetPath or Code values.
+        """
+        from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, IString as _IStr
+
+        ev = self.evaluator
+
+        # Determine locator from argument
+        url: str | None = None
+        file_loc: str | None = None
+        cache_key: object
+
+        if isinstance(target, _PL):
+            inner = getattr(target, 'inner', None)
+            if not isinstance(inner, _GP):
+                raise PathNotFound("import")
+            # Only accept a literal path produced by the parser (has source location).
+            # Paths constructed at runtime (e.g., via call on a string) lack .loc and are rejected.
+            if not hasattr(inner, "loc") or inner.loc is None:
+                raise PathNotFound("import")
+            url = ev.path_resolver._extract_http_url(inner)
+            file_loc = ev.path_resolver._extract_file_locator(inner)
+            if not url and not file_loc:
+                raise PathNotFound("import")
+            cache_key = target  # PathLiteral is hashable by its string repr
+        elif isinstance(target, (str, _IStr)):
+            s = str(target).strip()
+            if s.startswith("http://") or s.startswith("https://"):
+                url = s
+            elif s.startswith("file://"):
+                file_loc = s
+            else:
+                raise PathNotFound("import")
+            cache_key = s
+        else:
+            # Reject GetPath (which may evaluate to Code for file://.slip) and any other types
+            raise PathNotFound("import")
+
+        # Module cache
+        cache = getattr(ev, 'module_cache', None)
+        if cache is None:
+            cache = ev.module_cache = {}
+
+        if cache_key in cache:
+            return cache[cache_key]
+
+        # Load source
+        source_text: str | None = None
+        module_dir: str | None = None
+
+        if file_loc:
+            from slip.slip_file import _resolve_locator
+            import os
+            path = _resolve_locator(file_loc, getattr(ev, 'source_dir', None))
+            with open(path, "r", encoding="utf-8") as f:
+                source_text = f.read()
+            module_dir = os.path.dirname(path) or os.getcwd()
+        elif url:
+            from slip.slip_http import http_request
+            src = await http_request('GET', url, config={})
+            if isinstance(src, (bytes, bytearray)):
+                try:
+                    source_text = src.decode('utf-8')
+                except Exception:
+                    source_text = src.decode('utf-8', errors='replace')
+            elif isinstance(src, str):
+                source_text = src
+            else:
+                source_text = str(src)
+        else:
+            raise PathNotFound("import")
+
+        # Execute module in an isolated runner and export new/changed bindings
+        from slip.slip_runtime import ScriptRunner
+        runner = ScriptRunner()
+        if module_dir:
+            runner.source_dir = module_dir
+
+        await runner._initialize()
+        before_bindings = dict(runner.root_scope.bindings)
+
+        res = await runner.handle_script(source_text)
+        if res.status != "success":
+            raise RuntimeError(res.error_message or "Failed to load module")
+
+        after_bindings = runner.root_scope.bindings
+        export_names = [
+            name for name, val in after_bindings.items()
+            if (name not in before_bindings) or (before_bindings.get(name) is not val)
+        ]
+
+        mod_scope = Scope(parent=runner.root_scope)
+        for name in export_names:
+            mod_scope[name] = after_bindings[name]
+
+        cache[cache_key] = mod_scope
+        return mod_scope
+
     # --- List and Sequence Utilities ---
     def _slice_from(self, data, start): return data[start:]
     def _slice_to(self, data, end): return data[:end]
@@ -258,6 +423,11 @@ class StdLib:
     # --- Dictionary and Scopeironment Utilities ---
     def _keys(self, d): return list(d.keys() if isinstance(d, collections.abc.Mapping) else d.bindings.keys())
     def _values(self, d): return list(d.values() if isinstance(d, collections.abc.Mapping) else d.bindings.values())
+    def _items(self, d):
+        if isinstance(d, collections.abc.Mapping):
+            return [[k, v] for k, v in d.items()]
+        # Scope-like fallback: iterate .bindings
+        return [[k, v] for k, v in getattr(d, 'bindings', {}).items()]
 
     # --- Object Model ---
     def _scope(self, config: dict):
@@ -426,6 +596,7 @@ class StdLib:
                 raise TypeError("while requires code blocks for condition and body")
             body_code = body_val
 
+        iter_count = 0
         last = None
         while True:
             cond_val = await self.evaluator._eval(cond_block.ast, scope)
@@ -437,39 +608,123 @@ class StdLib:
             if isinstance(body_res, Response):
                 return body_res
             last = body_res
+            iter_count += 1
             if getattr(self.evaluator, 'is_in_task_context', False) or getattr(self.evaluator, 'task_context_count', 0) > 0:
-                await asyncio.sleep(0)  # cooperative yield without delay
+                if (iter_count % 10) == 0:
+                    await asyncio.sleep(0)  # cooperative yield periodically
         return last
 
     async def _foreach(self, args: list, *, scope: Scope):
         self.evaluator._dbg("foreach()", "argc", len(args), "types", [type(a).__name__ for a in args])
         if len(args) != 3:
-            raise TypeError(f"foreach expects 3 arguments (pattern, collection, body), got {len(args)}")
-        pattern, collection_expr, body_block = args
-        if not isinstance(body_block, Code):
-            raise TypeError("foreach requires a code block for the body")
-        # Evaluate collection expression in current scope
-        collection = await self.evaluator._eval(collection_expr, scope)
-        # Determine simple name pattern
-        if isinstance(pattern, GetPath) and len(pattern.segments) == 1 and isinstance(pattern.segments[0], Name):
-            var_name = pattern.segments[0].text
+            raise TypeError(f"foreach expects 3 arguments (vars-sig, collection, body), got {len(args)}")
+        vars_spec, collection_expr, body_arg = args
+
+        # Body may be a code literal or a variable holding Code
+        if isinstance(body_arg, Code):
+            body_code = body_arg
         else:
-            raise NotImplementedError("foreach currently supports a simple name pattern only")
-        # Iterate over collection
-        if isinstance(collection, collections.abc.Mapping):
-            iterable = collection.values()
-        elif isinstance(collection, Scope):
-            iterable = collection.bindings.values()
+            body_val = await self.evaluator._eval(body_arg, scope)
+            if isinstance(body_val, Response):
+                return body_val
+            if not isinstance(body_val, Code):
+                raise TypeError("foreach requires a code block for the body")
+            body_code = body_val
+
+        # Vars must be a sig literal with positional names
+        from slip.slip_datatypes import Sig as _Sig
+        if not isinstance(vars_spec, _Sig):
+            raise TypeError("foreach requires a sig literal for the variable pattern, e.g., {x} or {k, v}")
+        var_names = list(vars_spec.positional or [])
+        if not var_names:
+            raise TypeError("foreach variable sig must list at least one name")
+
+        # Evaluate the collection expression (or accept already-evaluated collections)
+        if isinstance(collection_expr, (list, dict)) \
+           or isinstance(collection_expr, collections.abc.Mapping) \
+           or isinstance(collection_expr, Scope):
+            collection = collection_expr
         else:
-            iterable = collection
-        for item in iterable:
-            scope[var_name] = item
-            res = await self.evaluator._eval(body_block.ast, scope)
+            collection = await self.evaluator._eval(collection_expr, scope)
+            if isinstance(collection, Response):
+                return collection
+
+        iter_count = 0
+        # Helper to run body and auto-yield in task context
+        async def _run_body():
+            nonlocal iter_count
+            res = await self.evaluator._eval(body_code.ast, scope)
             if isinstance(res, Response):
                 return res
+            iter_count += 1
             if getattr(self.evaluator, 'is_in_task_context', False) or getattr(self.evaluator, 'task_context_count', 0) > 0:
-                await asyncio.sleep(0)  # cooperative yield without delay
-        return None
+                if (iter_count % 10) == 0:
+                    await asyncio.sleep(0)
+            return None
+
+        # Mapping-like (dict) handling: {k} or {k, v}
+        if isinstance(collection, collections.abc.Mapping):
+            if len(var_names) == 1:
+                # For mappings (including SlipDict), single-var iteration yields keys.
+                for k in collection.keys():
+                    scope[var_names[0]] = k
+                    out = await _run_body()
+                    if isinstance(out, Response):
+                        return out
+            elif len(var_names) == 2:
+                for k, v in collection.items():
+                    scope[var_names[0]] = k
+                    scope[var_names[1]] = v
+                    out = await _run_body()
+                    if isinstance(out, Response):
+                        return out
+            else:
+                raise TypeError("foreach over a mapping supports {k} or {k, v} variable patterns")
+            return None
+
+        # Scope handling: iterate bindings as keys/items
+        from slip.slip_datatypes import Scope as _Scope
+        if isinstance(collection, _Scope):
+            if len(var_names) == 1:
+                for k in collection.bindings.keys():
+                    scope[var_names[0]] = k
+                    out = await _run_body()
+                    if isinstance(out, Response):
+                        return out
+            elif len(var_names) == 2:
+                for k, v in collection.bindings.items():
+                    scope[var_names[0]] = k
+                    scope[var_names[1]] = v
+                    out = await _run_body()
+                    if isinstance(out, Response):
+                        return out
+            else:
+                raise TypeError("foreach over a scope supports {k} or {k, v} variable patterns")
+            return None
+
+        # Sequence-like: {x} binds each element; {a, b, ...} destructures iterable elements
+        it = collection
+        if len(var_names) == 1:
+            for item in it:
+                scope[var_names[0]] = item
+                out = await _run_body()
+                if isinstance(out, Response):
+                    return out
+            return None
+        else:
+            for item in it:
+                try:
+                    parts = list(item)
+                except Exception:
+                    raise TypeError("foreach destructuring requires items to be iterable")
+                if len(parts) != len(var_names):
+                    raise TypeError(f"foreach destructuring arity mismatch: expected {len(var_names)}, got {len(parts)}")
+                for nm, val in zip(var_names, parts):
+                    scope[nm] = val
+                out = await _run_body()
+                if isinstance(out, Response):
+                    return out
+            return None
 
     def _fn(self, args: list, *, scope: Scope):
         from slip.slip_datatypes import SlipFunction, Sig as SigType
@@ -662,17 +917,66 @@ class StdLib:
                 except ValueError:
                     pass
 
-    def _response(self, status: GetPathLiteral, value: Any):
+    def _response(self, status: PathLiteral, value: Any):
         return Response(status, value)
 
-    def _respond(self, status: GetPathLiteral, value: Any):
+    def _respond(self, status: PathLiteral, value: Any):
         # Non-local exit: wrap the payload response in a special 'return' status
         # so the evaluator exits the current function body immediately and returns
         # the payload response as the function's value.
-        return Response(GetPathLiteral([Name("return")]), Response(status, value))
+        return Response(PathLiteral(GetPath([Name("return")])), Response(status, value))
 
     def _return(self, value: Any = None):
-        return Response(GetPathLiteral([Name("return")]), value)
+        return Response(PathLiteral(GetPath([Name("return")])), value)
+
+    async def _with_log(self, code, *, scope: Scope):
+        from slip.slip_datatypes import Code as _Code, Response as _Resp, PathLiteral as _PL, GetPath as _GP, Name as _Name
+        from slip.slip_runtime import SlipDict as _SlipDict
+
+        ev = self.evaluator
+
+        # Resolve argument to a Code block (allow variable that holds Code)
+        if not isinstance(code, _Code):
+            val = await ev._eval(code, scope)
+            if isinstance(val, _Resp):
+                # Propagate control-flow (e.g., return) upward
+                return val
+            if not isinstance(val, _Code):
+                raise TypeError("with-log requires a code block")
+            code = val
+
+        start = len(ev.side_effects)
+        try:
+            result = await ev._eval(code.ast, scope)
+        except Exception as e:
+            outcome = _Resp(_PL(_GP([_Name("err")])), str(e))
+        else:
+            # Normalize to a Response
+            if isinstance(result, _Resp):
+                # Unwrap return control-flow to its payload Response, if present
+                st = result.status
+                if (
+                    isinstance(st, _PL)
+                    and isinstance(getattr(st, "inner", None), _GP)
+                    and len(st.inner.segments) == 1
+                    and isinstance(st.inner.segments[0], _Name)
+                    and st.inner.segments[0].text == "return"
+                ):
+                    inner = result.value
+                    if isinstance(inner, _Resp):
+                        outcome = inner
+                    else:
+                        outcome = _Resp(_PL(_GP([_Name("ok")])), inner)
+                else:
+                    outcome = result
+            else:
+                outcome = _Resp(_PL(_GP([_Name("ok")])), result)
+
+        end = len(ev.side_effects)
+        out = _SlipDict()
+        out["outcome"] = outcome
+        out["effects"] = _EffectsView(ev.side_effects, start, end)
+        return out
 
     # --- Type and Conversion ---
     def _to_str(self, value):
@@ -693,43 +997,32 @@ class StdLib:
         except (ValueError, TypeError):
             return None
     def _to_bool(self, value): return bool(value)
-    def _to_path(self, value):
+    def _call(self, value):
         from slip.slip_datatypes import (
-            GetPathLiteral as GPL, GetPath, SetPath, DelPath, PipedPath,
-            SetPathLiteral, DelPathLiteral, PipedPathLiteral, MultiSetPath, Name, IString
+            PathLiteral as _PL, GetPath, SetPath, DelPath, PipedPath,
+            MultiSetPath, Name, IString
         )
-        # Normalize runtime path-like values to a GetPathLiteral
-        if isinstance(value, GPL):
+        # Normalize to a runtime path object (GetPath/SetPath/DelPath/PipedPath).
+        if isinstance(value, _PL):
+            return value.inner
+        if isinstance(value, (GetPath, SetPath, DelPath, PipedPath)):
             return value
-        if isinstance(value, GetPath):
-            return GPL(value.segments, getattr(value, 'meta', None))
-        if isinstance(value, SetPath):
-            return GPL(value.segments, getattr(value, 'meta', None))
-        if isinstance(value, SetPathLiteral):
-            return GPL(value.segments, getattr(value, 'meta', None))
-        if isinstance(value, DelPath):
-            gp = value.path
-            return GPL(gp.segments, getattr(gp, 'meta', None))
-        if isinstance(value, DelPathLiteral):
-            # Already a literal; unwrap the inner get-path literal
-            return value.path
-        if isinstance(value, PipedPath):
-            return GPL(value.segments, getattr(value, 'meta', None))
-        if isinstance(value, PipedPathLiteral):
-            return GPL(value.segments, getattr(value, 'meta', None))
         if isinstance(value, MultiSetPath):
-            raise TypeError("to-path does not support multi-set paths")
-        # Strings (including IString): split on dots or slashes into name segments
+            raise TypeError("call does not support multi-set paths")
         if isinstance(value, (str, IString)):
             raw = str(value).strip()
             if raw == "":
-                raise ValueError("to-path requires a non-empty string")
+                raise ValueError("call requires a non-empty string")
+            # If the string looks like a URL/special path token, keep it as a single segment.
+            if ("://" in raw) or raw.startswith(("/", "../", "./", "|", "~")):
+                return GetPath([Name(raw)])
+            # Otherwise, split on '.' or '/' into name segments.
             parts = [p for p in re.split(r'[./]', raw) if p]
             segments = [Name(p) for p in parts]
             if not segments:
-                raise ValueError("to-path produced empty path from string")
-            return GPL(segments)
-        raise TypeError(f"to-path cannot convert value of type {type(value).__name__}")
+                raise ValueError("call produced empty path from string")
+            return GetPath(segments)
+        raise TypeError(f"call cannot convert value of type {type(value).__name__}")
     def _copy(self, value): return copy.copy(value)
     def _clone(self, value):
         # Safe deep copy that avoids recursion issues with complex objects.
@@ -751,13 +1044,12 @@ class StdLib:
     def _type_of(self, value):
         from slip.slip_datatypes import (
             Scope, Code, IString, SlipFunction, GenericFunction,
-            GetPath, SetPath, DelPath, PipedPath,
-            GetPathLiteral as GPL, SetPathLiteral, DelPathLiteral, PipedPathLiteral, MultiSetPathLiteral, Name
+            GetPath, SetPath, DelPath, PipedPath, PathLiteral, MultiSetPath, Name
         )
         from slip.slip_runtime import SlipDict
 
         def lit(name: str):
-            return GPL([Name(name)])
+            return PathLiteral(GetPath([Name(name)]))
 
         if value is None:
             return lit('none')
@@ -778,7 +1070,7 @@ class StdLib:
             return lit('dict')
         if isinstance(value, Scope):
             return lit('scope')
-        if isinstance(value, (GetPath, SetPath, DelPath, PipedPath, GPL, SetPathLiteral, DelPathLiteral, PipedPathLiteral, MultiSetPathLiteral)):
+        if isinstance(value, (GetPath, SetPath, DelPath, PipedPath, PathLiteral, MultiSetPath)):
             return lit('path')
         if isinstance(value, (SlipFunction, GenericFunction)) or callable(value):
             return lit('function')
@@ -808,14 +1100,13 @@ class StdLib:
         from slip.slip_datatypes import (
             Sig, SlipFunction, GenericFunction, GetPath, Code,
             GetPath as _GP, SetPath as _SP, DelPath as _DP, PipedPath as _PP,
-            GetPathLiteral as _GPL, SetPathLiteral as _SPL, DelPathLiteral as _DPL,
-            PipedPathLiteral as _PPL, MultiSetPathLiteral as _MSPL
+            PathLiteral as _PL, MultiSetPath as _MSP
         )
         if not isinstance(func, (SlipFunction, GenericFunction)):
             raise TypeError("test expects a function or generic function")
 
         def _status(name: str):
-            return GetPathLiteral([Name(name)])
+            return PathLiteral(GetPath([Name(name)]))
 
         # Collect examples from the container and each method (to support inline chaining after fn)
         examples = []
@@ -872,7 +1163,7 @@ class StdLib:
                     if isinstance(v, (SlipFunction, GenericFunction)) or callable(v):
                         continue
                     # Skip path-like placeholders (operators, path literals, etc.)
-                    if isinstance(v, (_GP, _SP, _DP, _PP, _GPL, _SPL, _DPL, _PPL, _MSPL)):
+                    if isinstance(v, (_GP, _SP, _DP, _PP, _PL, _MSP)):
                         continue
                     # Skip signature objects used for typing/aliases
                     if isinstance(v, Sig):
@@ -969,7 +1260,7 @@ class StdLib:
     async def _test_all(self, *targets, scope: Scope):
         from slip.slip_datatypes import SlipFunction, GenericFunction
         def _status(name: str):
-            return GetPathLiteral([Name(name)])
+            return PathLiteral(GetPath([Name(name)]))
 
         # Determine scopes to scan; default to current lexical scope
         scopes = [s for s in targets if isinstance(s, Scope)] or [scope]
@@ -1008,13 +1299,86 @@ class StdLib:
             "details": failed_details,
         }
         status = "ok" if not failed_details else "err"
-        return Response(GetPathLiteral([Name(status)]), summary)
+        return Response(PathLiteral(GetPath([Name(status)])), summary)
 
-    async def _call(self, func, args, *, scope: Scope):
-        self.evaluator._dbg("_call", "target", getattr(func, "__name__", repr(func)), "argc", len(args), "args_types", [type(a).__name__ for a in args])
-        if not isinstance(args, list):
-            args = list(args)
-        return await self.evaluator.call(func, args, scope)
+    async def _call(self, target, args_list=None, *, scope: Scope):
+        """
+        call <path-literal|string> #[args...]
+        - Resolves the path to a value in the current scope and invokes it with args_list.
+        - If the path is a SetPath literal (`y:`), args_list must have one item; performs assignment and returns the value.
+        - If the path is a DelPath literal (`~y`), args_list must be empty; performs delete and returns None.
+        """
+        from slip.slip_datatypes import (
+            PathLiteral as _PL, GetPath as _GP, SetPath as _SP, DelPath as _DP,
+            IString as _IStr, SlipFunction as _SF, GenericFunction as _GF
+        )
+        # Normalize args: None => zero-arity call; otherwise require a list
+        if args_list is None:
+            args = []
+        elif isinstance(args_list, list):
+            args = args_list
+        else:
+            raise TypeError("call expects an argument list (#[]), e.g., call `f` #[a, b]")
+
+        # Only accept string or path-literal for the target
+        if isinstance(target, (str, _IStr)):
+            gp = self._to_getpath(target)
+            from slip.slip_datatypes import PathLiteral as _PL_OUT
+            return _PL_OUT(gp)
+
+        if isinstance(target, _PL):
+            inner = target.inner
+            # Dynamic set-path: (call `y:`) #[2]
+            if isinstance(inner, _SP):
+                if args_list is None:
+                    # No args provided: return the SetPath so caller can use it as an assignment head: (call `y:`) 2
+                    return inner
+                if len(args) != 1:
+                    raise TypeError("call on a set-path requires exactly one argument")
+                await self.evaluator.path_resolver.set(inner, args[0], scope)
+                return args[0]
+            # Dynamic del-path: (call `~y`) #[]
+            if isinstance(inner, _DP):
+                if args_list is not None and len(args) != 0:
+                    raise TypeError("call on a del-path does not take arguments")
+                await self.evaluator.path_resolver.delete(inner, scope)
+                return None
+            # Ordinary function lookup: path-literal must be a get-path
+            if isinstance(inner, _GP):
+                try:
+                    val = await self.evaluator.path_resolver.get(inner, scope)
+                except Exception:
+                    # Unresolvable → return the original literal (normalization)
+                    return target
+                # If resolved value is invocable → invoke
+                if isinstance(val, (_SF, _GF)) or callable(val):
+                    return await self.evaluator.call(val, args, scope)
+                # If resolved value is not callable:
+                # - with no args (None) or explicit empty list, return the value
+                if args_list is None or (isinstance(args, list) and len(args) == 0):
+                    return val
+                # - with any args provided, this is a type error
+                raise TypeError("call expects a function at the given path")
+            raise TypeError("call expects a function path (get-path) or set/del path literal")
+
+        # Prefer exact-arity, non-variadic method when calling a GenericFunction directly
+        if isinstance(target, _GF):
+            from slip.slip_datatypes import Sig as _Sig
+            exact = []
+            for m in target.methods:
+                s = getattr(m, 'meta', {}).get('type')
+                if isinstance(s, _Sig):
+                    base = len(getattr(s, 'positional', []) or []) + len(getattr(s, 'keywords', {}) or {})
+                    if getattr(s, 'rest', None) is None and base == len(args):
+                        exact.append(m)
+            if exact:
+                # Pick the most recently defined exact-arity method
+                return await self.evaluator.call(exact[-1], args, scope)
+
+        # Callable value or SLIP function container → invoke directly
+        if isinstance(target, (_SF, _GF)) or callable(target):
+            return await self.evaluator.call(target, args, scope)
+        raise TypeError("call expects a path-literal, string, or callable target")
 
 
 # ===================================================================
@@ -1320,7 +1684,7 @@ class ScriptRunner:
             self.evaluator.current_source = 'script'
             # Ensure evaluator has the current host for task registration each run
             self.evaluator.host_object = self.host_object
-            # Make source_dir available for fs:// resolution; default to CWD when unknown
+            # Make source_dir available for file:// resolution; default to CWD when unknown
             import os as _os
             self.evaluator.source_dir = self.source_dir or _os.getcwd()
             await self._initialize()
@@ -1387,7 +1751,7 @@ class ScriptRunner:
 
             if isinstance(result, Response):
                 # The 'return' status is a special control flow signal
-                if result.status == GetPathLiteral([Name("return")]):
+                if isinstance(result.status, PathLiteral) and isinstance(result.status.inner, GetPath) and len(result.status.inner.segments) == 1 and isinstance(result.status.inner.segments[0], Name) and result.status.inner.segments[0].text == "return":
                     return ExecutionResult(
                         status='success',
                         value=result.value,

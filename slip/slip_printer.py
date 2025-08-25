@@ -5,10 +5,9 @@ import collections.abc
 
 from slip.slip_datatypes import (
     Code, List, IString, SlipFunction, Response,
-    GetPathLiteral, SetPathLiteral, DelPathLiteral,
-    PipedPathLiteral, MultiSetPathLiteral,
+    PathLiteral,
     GetPath, SetPath, DelPath, PipedPath, Name, Index, Slice, FilterQuery, Group,
-    Root, Parent, Pwd, PathSegment, PostPath, ByteStream
+    Root, Parent, Pwd, PathSegment, PostPath, ByteStream, MultiSetPath
 )
 from slip.slip_runtime import SlipDict
 
@@ -55,12 +54,8 @@ class Printer:
             SetPath: self._pformat_set_path,
             DelPath: self._pformat_del_path,
             PostPath: self._pformat_post_path,
-            GetPathLiteral: self._pformat_get_path_literal,
-            SetPathLiteral: self._pformat_set_path_literal,
-            DelPathLiteral: self._pformat_del_path_literal,
+            PathLiteral: self._pformat_path_literal,
             PipedPath: self._pformat_piped_path,
-            PipedPathLiteral: self._pformat_piped_path_literal,
-            MultiSetPathLiteral: self._pformat_multi_set_path_literal,
             Name: self._pformat_name,
             Index: self._pformat_index,
             Slice: self._pformat_slice,
@@ -72,6 +67,7 @@ class Printer:
             Response: self._pformat_response,
             SlipFunction: self._pformat_slip_function,
             SlipDict: self._pformat_dict,
+            MultiSetPath: self._pformat_multi_set_path,
         }
 
     def _pformat_primitive(self, obj, level):
@@ -251,25 +247,23 @@ class Printer:
     def _pformat_post_path(self, obj, level):
         return f"{self._pformat_path_contents(obj, level)}<-"
 
-    def _pformat_get_path_literal(self, path, level):
-        return f"`{self._pformat_path_contents(path, level)}`"
+    def _pformat_path_literal(self, obj, level):
+        # obj.inner is a runtime path object (GetPath, SetPath, DelPath, PipedPath, or MultiSetPath)
+        inner_str = self.pformat(obj.inner, level)
+        return f"`{inner_str}`"
 
-    def _pformat_set_path_literal(self, path, level):
-        return f"`{self._pformat_path_contents(path, level)}:`"
+    def _pformat_multi_set_path(self, obj, level):
+        # MultiSetPath runtime printing mirrors the literal tuple form
+        return self._pformat_multi_set(('multi-set', obj.targets), level)
 
-    def _pformat_del_path_literal(self, path, level):
-        return f"`~{self._pformat_path_contents(path.path, level)}`"
+
+
 
     def _pformat_piped_path(self, obj, level):
         """Formats a runtime PipedPath value (e.g., produced by the transformer)."""
         return f"|{self._pformat_path_contents(obj, level)}"
 
-    def _pformat_piped_path_literal(self, path, level):
-        return f"`{self._pformat_path_contents(path, level)}`"
 
-    def _pformat_multi_set_path_literal(self, path, level):
-        inner = self._pformat_multi_set(('multi-set', path.targets), level)
-        return f"`{inner}`"
 
     def _pformat_path_contents(self, path, level):
         parts = []

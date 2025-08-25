@@ -231,6 +231,21 @@ GET_PATH_TEST_CASES = [
             {"tag": "meta", "children": [{"tag": "expr", "text": "m"}]}
         ]
     }),
+    ("file_url_path", "file:///tmp/math.slip", {
+        "tag": "get-path", "children": [
+            {"tag": "name", "text": "file:///tmp/math.slip"}
+        ]
+    }),
+    ("generic_scheme_git_url", "git://example.org/repo", {
+        "tag": "get-path", "children": [
+            {"tag": "name", "text": "git://example.org/repo"}
+        ]
+    }),
+    ("generic_scheme_db_url", "db://mydb/table", {
+        "tag": "get-path", "children": [
+            {"tag": "name", "text": "db://mydb/table"}
+        ]
+    }),
 ]
 
 

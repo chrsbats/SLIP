@@ -5,9 +5,9 @@ from koine import Parser
 from slip.slip_transformer import SlipTransformer
 from slip.slip_datatypes import (
     Code, List, IString,
-    GetPathLiteral, SetPathLiteral, DelPathLiteral,
+    PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group,
-    Root, Parent, Pwd, PipedPath, Sig
+    Root, Parent, Pwd, PipedPath, Sig, MultiSetPath
 )
 
 # --- Fixtures ---
@@ -49,12 +49,8 @@ def compare_asts(actual, expected):
         compare_asts(actual.nodes, expected.nodes)
     elif isinstance(actual, IString):
         assert str(actual) == str(expected)
-    elif isinstance(actual, GetPathLiteral):
-        assert actual == expected, "GetPathLiteral objects should be equal"
-    elif isinstance(actual, SetPathLiteral):
-        assert actual == expected, "SetPathLiteral objects should be equal"
-    elif isinstance(actual, DelPathLiteral):
-        assert actual == expected, "DelPathLiteral objects should be equal"
+    elif isinstance(actual, PathLiteral):
+        assert actual == expected, "PathLiteral objects should be equal"
     elif isinstance(actual, PipedPath):
         assert actual == expected, "PipedPath objects should be equal"
     elif isinstance(actual, GetPath):
@@ -87,25 +83,24 @@ TRANSFORMER_TEST_CASES = [
             IString("interp"),
             True,
             None,
-            GetPathLiteral([Name('a'), Name('b')])
+            PathLiteral(GetPath([Name('a'), Name('b')]))
         ]])
     ),
     (
         "set_path_literal",
         "`a.b:`",
-        Code([[SetPathLiteral([Name('a'), Name('b')])]])
+        Code([[PathLiteral(SetPath([Name('a'), Name('b')]))]])
     ),
     (
         "del_path_literal",
         "`~a.b`",
-        Code([[DelPathLiteral(GetPathLiteral([Name('a'), Name('b')]))]])
+        Code([[PathLiteral(DelPath(GetPath([Name('a'), Name('b')])))]])
     ),
     (
         "get_path_literal_with_meta",
         "`a#(m:1)`",
-        Code([[GetPathLiteral(
-            [Name('a')],
-            meta=Group([[SetPath([Name('m')]), 1]]))
+        Code([[PathLiteral(
+            GetPath([Name('a')], meta=Group([[SetPath([Name('m')]), 1]])))
         ]])
     ),
     (
@@ -191,6 +186,11 @@ TRANSFORMER_TEST_CASES = [
         "filter_query_transformer",
         "items[> 20]",
         Code([[GetPath([Name('items'), FilterQuery('>', [20])])]])
+    ),
+    (
+        "path_literals_piped_and_multiset",
+        "`|map` `[a,b]:`",
+        Code([[PathLiteral(PipedPath([Name('map')]))], [PathLiteral(MultiSetPath([SetPath([Name('a')]), SetPath([Name('b')])]))]])
     )
 ]
 

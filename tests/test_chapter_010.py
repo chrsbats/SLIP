@@ -141,9 +141,9 @@ async def test_splice_in_run_spreads_list_into_args():
 
 
 @pytest.mark.asyncio
-async def test_to_path_converts_string_to_path_literal():
+async def test_call_converts_string_call_literal():
     src = """
-    p: to-path 'a.b'
+    p: call 'a.b'
     eq p `a.b`
     """
     res = await run_slip(src)
@@ -151,9 +151,9 @@ async def test_to_path_converts_string_to_path_literal():
 
 
 @pytest.mark.asyncio
-async def test_to_path_normalizes_runtime_path_value_to_literal():
+async def test_call_normalizes_runtime_path_value_to_literal():
     src = """
-    p: to-path `a.b`
+    p: call `a.b`
     eq p `a.b`
     """
     res = await run_slip(src)

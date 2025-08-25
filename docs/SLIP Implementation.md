@@ -438,6 +438,10 @@ To maintain the declarative nature of signatures, the `sig` sub-parser **must** 
 
 These restrictions ensure that the `sig` node is a simple, static container of information that the transformer and evaluator can rely on without needing to execute complex code.
 
+### 3.5. Using sig values as metadata arguments
+
+A sig literal is an unevaluated, declarative structure. Beyond function definitions, SLIP uses sig as the canonical way to pass meta-parameters to functions that bind variables dynamically (e.g., `foreach {vars} …`, `for {i} …`). The evaluator passes Sig objects through unchanged; callees inspect `Sig.positional`/`Sig.keywords` to bind names.
+
 ---
 
 ## Part II: Evaluation and Semantics
@@ -548,13 +552,12 @@ The core control flow and container constructor functions (`if`, `while`, `forea
   5.  **Task Yielding:** If the `while` loop is running inside a `task`, it must yield control to the host event loop (`sleep 0`) at the beginning of each iteration to ensure cooperative multitasking.
 
 - **`foreach` Implementation:**
-  - `foreach <pattern> <collection> <body-block>`
-  1.  The evaluator first evaluates the `<collection>` expression to get an iterable value (e.g., a `list` or `dict`).
-  2.  It then iterates over this collection. For each item:
-      a. It performs a destructuring assignment, binding the item (or `[key, value]` pair for a `dict`) to the unevaluated `<pattern>`.
-      b. It `runs` the `<body-block>`.
-  3.  The primitive's return value is `none`. The loop variable(s) bound in the `<pattern>` will retain the value from the final iteration.
-  4.  **Task Yielding:** Like `while`, `foreach` must also yield to the event loop on each iteration when running inside a `task`.
+  - `foreach <var-spec: sig> <collection> <body-block>`
+    1.  The first argument must be a Sig literal; its positional names (e.g., `["item"]` or `["k","v"]`) form the binding pattern. It is not evaluated.
+    2.  Evaluate the collection; iterate; destructure/bind per iteration.
+    3.  Run the body Code each iteration; auto‑yield in task contexts.
+
+Note (library helper): `for {i} start end [body]` follows the same convention. The first argument is a Sig literal with one positional name. This keeps meta-parameters uniform and obvious at the call site.
 
 ---
 
@@ -649,6 +652,16 @@ Both string types support automatic de-denting to allow for clean, indented mult
 
 ---
 
+### Byte stream literals (runtime behavior)
+- The evaluator constructs bytes from typed lists:
+  - u8/i8 write single bytes (i8 wraps to 0–255).
+  - u16/i16, u32/i32, u64/i64 pack little‑endian integers.
+  - f32/f64 pack little‑endian IEEE floats.
+  - b1 packs bits MSB‑first per byte; the last partial byte is left‑padded.
+- `to-str` decodes bytes using UTF‑8 (replacement on errors).
+- File I/O: `file://…` writes these bytes verbatim.
+- See tests/test_bytestream_literals.py for coverage.
+
 ## Chapter 6: Views and the Query Engine
 
 This chapter details the implementation of the Query DSL, which is invoked when a `QuerySegment` (`[...]`) is present in a path. It also describes the "vectorized pluck" operation, a key semantic rule that makes the query system powerful and consistent.
@@ -706,6 +719,10 @@ A view is "materialized" (i.e., the query is finally executed) only when the eva
   2.  It iterates through the `QueryNode`s in its `query_path` list.
   3.  For each `QueryNode`, it applies the corresponding operation (filter, slice, index, or key lookup) to the current intermediate data.
   4.  The final result after all operations have been applied is returned.
+
+Note on filter predicate evaluation
+
+Only dot-prefixed names (.field) resolve against the current item within a filter. Bare names are lexical only. The evaluator normalizes .field to field and rewrites bare names to ../name so evaluation in the item overlay cannot shadow lexical names. If evaluating in the overlay scope fails (e.g., legacy pipeline predicates), the runtime falls back to the historical behavior of evaluating the predicate as a pipeline with the item used as the left-hand side (e.g., [item] + predicate). The older “vectorized pluck then filter” style like players.hp[> 100] is deprecated in favor of object-relative predicates.
 
 ### 6.5. Writable Views
 
@@ -1099,3 +1116,32 @@ To ensure cooperative multitasking and prevent a single script from freezing the
   - This brief pause returns control to the host's event loop, allowing other tasks to run before the loop continues.
 
 This automatic yielding is a critical safety feature and a non-negotiable part of the `task` implementation.
+
+### 15.5. with-log: Structured Capture of Outcome and Effects
+
+The with-log primitive wraps the execution of a code block, capturing the emitted events and returning them alongside a normalized outcome.
+
+API:
+- with-log <code> → returns a dict-like object with:
+  - outcome: Response(PathLiteral(`ok|err|...`), value)
+  - effects: list of events emitted during the run
+
+Algorithm (host/runtime reference):
+1) Validate/resolve argument to a Code object.
+2) Record the current length of evaluator.side_effects (start index).
+3) Execute the block via evaluator._eval(code.ast, scope):
+   - On successful completion:
+     - If the result is a Response:
+       - If it is a return response (status == `return`):
+         - If inner value is a Response, outcome := inner.
+         - Else outcome := response ok inner.
+       - Else outcome := the response as-is.
+     - If the result is not a Response, outcome := response ok result.
+   - On exception:
+     - outcome := response err "<message>" (message is the raised error’s string).
+4) effects := copy of evaluator.side_effects[start:].
+5) Return a new dict-like object (e.g., SlipDict) with keys "outcome" and "effects".
+
+Notes:
+- with-log does not remove entries from the global side_effects list; it returns a snapshot slice of the events generated during the wrapped execution only.
+- The block runs in the current lexical scope; any writes inside the block affect that scope just like a normal run.

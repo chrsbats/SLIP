@@ -6,13 +6,13 @@ from slip.slip_serialize import deserialize, serialize
 # to avoid circular import during module load.
 
 def _resolve_locator(locator: str, base_dir: Optional[str]) -> str:
-    # locator is like 'fs://...', strip scheme
-    assert locator.startswith("fs://"), locator
-    rest = locator[5:]  # after 'fs://'
+    # locator is like 'file://...', strip scheme
+    assert locator.startswith("file://"), locator
+    rest = locator[7:]  # after 'file://'
     # Absolute filesystem root
     if rest.startswith("/"):
-        # fs:///<abs-path> or fs:/// only
-        # fs:/// → '/'
+        # file:///<abs-path> or file:/// only
+        # file:/// → '/'
         return "/" + rest.lstrip("/")
     # Home directory
     if rest.startswith("~"):
@@ -31,7 +31,7 @@ def _resolve_locator(locator: str, base_dir: Optional[str]) -> str:
     base = base_dir or os.getcwd()
     return os.path.normpath(os.path.join(base, rest))
 
-async def fs_get(locator: str, config: Optional[Dict[str, Any]] = None, *, base_dir: Optional[str] = None):
+async def file_get(locator: str, config: Optional[Dict[str, Any]] = None, *, base_dir: Optional[str] = None):
     path = _resolve_locator(locator, base_dir)
     cfg = dict(config or {})
     encoding = cfg.get("encoding")  # optional, if provided forces text decode
@@ -65,25 +65,23 @@ async def fs_get(locator: str, config: Optional[Dict[str, Any]] = None, *, base_
             return deserialize(data, fmt=fmt)
         # SLIP modules: evaluate and return a scope of module bindings
         if ext == ".slip":
-            # Lazy imports to avoid circular imports during module load
+            # Return a Code block (do not execute). Use 'import `file://...`' to load modules.
             from slip.slip_runtime import ScriptRunner
-            from slip.slip_datatypes import Scope
             with open(path, "r", encoding="utf-8") as f:
                 src = f.read()
             runner = ScriptRunner()
-            # Ensure relative fs:// lookups inside the module resolve to this file’s directory
+            # Ensure relative file:// lookups inside the module resolve to this file’s directory
             runner.source_dir = os.path.dirname(path) or os.getcwd()
-            # Capture pre-existing bindings to compute module exports
-            before = set(runner.root_scope.bindings.keys())
-            res = await runner.handle_script(src)
-            if res.status != "success":
-                raise RuntimeError(res.error_message or "Failed to load .slip module")
-            after = set(runner.root_scope.bindings.keys())
-            exports = after - before
-            mod = Scope(parent=runner.root_scope)
-            for name in exports:
-                mod[name] = runner.root_scope.bindings[name]
-            return mod
+            parse_out = runner.parser.parse(src)
+            ast_node = parse_out['ast'] if isinstance(parse_out, dict) and 'ast' in parse_out else parse_out
+            code_obj = runner.transformer.transform(ast_node)
+            # Attach source metadata so |import can cache and set module_dir
+            try:
+                code_obj.source_locator = locator
+                code_obj.source_path = path
+            except Exception:
+                pass
+            return code_obj
         # Text files
         if ext in (".txt", ".md"):
             with open(path, "r", encoding="utf-8") as f:
@@ -95,7 +93,7 @@ async def fs_get(locator: str, config: Optional[Dict[str, Any]] = None, *, base_
     # Not found
     raise FileNotFoundError(path)
 
-async def fs_put(locator: str, data: Any, config: Optional[Dict[str, Any]] = None, *, base_dir: Optional[str] = None):
+async def file_put(locator: str, data: Any, config: Optional[Dict[str, Any]] = None, *, base_dir: Optional[str] = None):
     path = _resolve_locator(locator, base_dir)
     cfg = dict(config or {})
     encoding = cfg.get("encoding")
@@ -155,7 +153,7 @@ async def fs_put(locator: str, data: Any, config: Optional[Dict[str, Any]] = Non
     with open(path, "w", encoding="utf-8") as f:
         f.write(str(data))
 
-async def fs_delete(locator: str, config: Optional[Dict[str, Any]] = None, *, base_dir: Optional[str] = None):
+async def file_delete(locator: str, config: Optional[Dict[str, Any]] = None, *, base_dir: Optional[str] = None):
     path = _resolve_locator(locator, base_dir)
     if os.path.isfile(path):
         os.remove(path)

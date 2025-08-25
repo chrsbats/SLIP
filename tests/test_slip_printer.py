@@ -2,9 +2,9 @@ import pytest
 from slip.slip_printer import Printer
 from slip.slip_datatypes import (
     Code, List, IString, SlipFunction, Response,
-    GetPathLiteral, SetPathLiteral, DelPathLiteral,
+    PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group,
-    PipedPath, Root, Parent, Pwd, Scope
+    PipedPath, Root, Parent, Pwd, Scope, MultiSetPath
 )
 from slip.slip_runtime import SlipObject
 
@@ -23,22 +23,22 @@ FORMAT_TEST_CASES = [
     ("none", None, "none"),
     (
         "simple_get_path_literal",
-        GetPathLiteral([Name("a"), Name("b")]),
+        PathLiteral(GetPath([Name("a"), Name("b")])),
         "`a.b`"
     ),
     (
         "complex_get_path_literal",
-        GetPathLiteral([Parent, Name("data"), Index([1]), Group([[GetPath([Name('k')])]])]),
+        PathLiteral(GetPath([Parent, Name("data"), Index([1]), Group([[GetPath([Name('k')])]])])),
         "`../data[1](k)`"
     ),
     (
         "simple_set_path_literal",
-        SetPathLiteral([Name("a"), Name("b")]),
+        PathLiteral(SetPath([Name("a"), Name("b")])),
         "`a.b:`"
     ),
     (
         "simple_del_path_literal",
-        DelPathLiteral(GetPathLiteral([Name("a")])),
+        PathLiteral(DelPath(GetPath([Name("a")]))),
         "`~a`"
     ),
     (
@@ -111,7 +111,7 @@ FORMAT_TEST_CASES = [
     ),
     (
         "response",
-        Response(GetPathLiteral([Name("ok")]), 42),
+        Response(PathLiteral(GetPath([Name("ok")])), 42),
         "response `ok` 42"
     ),
     (
@@ -140,27 +140,27 @@ FORMAT_TEST_CASES = [
     ),
     (
         "slice",
-        GetPathLiteral([Name("items"), Slice([1], [5])]),
+        PathLiteral(GetPath([Name("items"), Slice([1], [5])])),
         "`items[1:5]`"
     ),
     (
         "slice_open_end",
-        GetPathLiteral([Name("items"), Slice([1], None)]),
+        PathLiteral(GetPath([Name("items"), Slice([1], None)])),
         "`items[1:]`"
     ),
     (
         "slice_open_start",
-        GetPathLiteral([Name("items"), Slice(None, [5])]),
+        PathLiteral(GetPath([Name("items"), Slice(None, [5])])),
         "`items[:5]`"
     ),
     (
         "slice_empty",
-        GetPathLiteral([Name("items"), Slice(None, None)]),
+        PathLiteral(GetPath([Name("items"), Slice(None, None)])),
         "`items[:]`"
     ),
     (
         "filter_query_path_literal",
-        GetPathLiteral([Name("items"), FilterQuery('>', [20])]),
+        PathLiteral(GetPath([Name("items"), FilterQuery('>', [20])])),
         "`items[> 20]`"
     )
 ]
