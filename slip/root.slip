@@ -69,9 +69,9 @@ replace: fn {s: `string`, old: `string`, new: `string`} [
 ]
 
 -- Unions: ordered sequence-like and mapping-like
-ordered: { code, list, dict, scope }
-mapping: { dict, scope }
-number: { int, float }
+ordered: { code or list or dict or scope }
+mapping: { dict or scope }
+number: { int or float }
 
 -- List-like variant: replace items equal to old[0] with new[0] (works for Code and List)
 replace: fn {src: `ordered`, old: `ordered`, new: `ordered`} [
@@ -221,6 +221,124 @@ is-schema?: fn {obj} [
     is-a? obj Schema
 ]
 
+-- Marker constructors for schemas
+default: fn {value} [
+  #{
+    __marker__: `default`,
+    value: value
+  }
+]
+
+optional: fn {type} [
+  #{
+    __marker__: `optional`,
+    type: type
+  }
+]
+
+-- Helpers for validation
+has-key?: fn {m: `mapping`, key} [
+  probe: do [ m[key] ]
+  if [probe.outcome.status = ok] [ true ] [ false ]
+]
+
+is-default-marker?: fn {x} [
+  logical-and (is-dict? x) (logical-and (has-key? x "__marker__") (eq x["__marker__"] `default`))
+]
+
+is-optional-marker?: fn {x} [
+  logical-and (is-dict? x) (logical-and (has-key? x "__marker__") (eq x["__marker__"] `optional`))
+]
+
+type-name-from-type: fn {ptype: `path`} [
+  ptype.inner.segments[0].text
+]
+
+value-type-name: fn {v} [
+  (type-name-from-type (type-of v))
+]
+
+collect-schema-fields: fn {sch: `scope`} [
+  chain: #[]
+  cur: sch
+  while [cur] [
+    chain: add #[cur] chain
+    cur: cur.meta.parent
+  ]
+  chain: reverse chain
+  fields: #{}
+  foreach {s} chain [
+    foreach {k, v} (items s) [
+      fields[k]: v
+    ]
+  ]
+  fields
+]
+
+-- Validate data against a schema, applying defaults and honoring optional fields.
+validate: fn {data: `mapping`, sch: `scope`} [
+  fields: collect-schema-fields sch
+  out: #{}
+  errs: #[]
+  foreach {k, spec} (items fields) [
+    present: has-key? data k
+    if [present] [
+      v: data[k]
+      if [is-optional-marker? spec] [
+        t: spec["type"]
+        if [is-schema? t] [
+          res: validate v t
+          if [eq res.status ok] [ out[k]: res.value ] [
+            errs: add errs res.value
+          ]
+        ] [
+          if [is-path? t] [
+            if [eq (type-of v) t] [ out[k]: v ] [
+              errs: add errs #[ #{ field: k, error: i"expected type '{type-name-from-type t}', got '{value-type-name v}'" } ]
+            ]
+          ] [
+            out[k]: v
+          ]
+        ]
+      ] [
+        if [is-default-marker? spec] [
+          out[k]: v
+        ] [
+          if [is-schema? spec] [
+            res: validate v spec
+            if [eq res.status ok] [ out[k]: res.value ] [
+              errs: add errs res.value
+            ]
+          ] [
+            if [is-path? spec] [
+              if [eq (type-of v) spec] [ out[k]: v ] [
+                errs: add errs #[ #{ field: k, error: i"expected type '{type-name-from-type spec}', got '{value-type-name v}'" } ]
+              ]
+            ] [
+              out[k]: v
+            ]
+          ]
+        ]
+      ]
+    ] [
+      if [is-default-marker? spec] [
+        out[k]: spec["value"]
+      ] [
+        if [is-optional-marker? spec] [
+          none
+        ] [
+          errs: add errs #[ #{ field: k, error: "field is required" } ]
+        ]
+      ]
+    ]
+  ]
+  if [eq (len errs) 0] [
+    response ok out
+  ] [
+    response err errs
+  ]
+]
+
 -- The canonical way to create a new instance of an object.
 -- This is a generic function that dispatches on arity.
 create: fn {} [ scope #{} ]
@@ -232,14 +350,67 @@ create: fn {prototype, config-block} [
 
 -- --- Control Flow ---
 
+-- Extract a single, untyped parameter name from a sig like {x}.
+-- Errors if the sig has types/keywords, a rest parameter, a return annotation,
+-- or does not have exactly one positional parameter. Returns the name string.
+extract-simple-param: fn {vars} [
+    probe: do [
+        #{
+            pos: vars.positional,
+            kws: vars.keywords,
+            rest: vars.rest,
+            ret: vars.return_annotation
+        }
+    ]
+    if [probe.outcome.status = err] [
+        respond err "extract-simple-param expects a sig literal (e.g., {x})"
+    ]
+    info: probe.outcome.value
+    if [info.ret != none] [
+        respond err "extract-simple-param: return annotation is not allowed"
+    ]
+    if [info.rest] [
+        respond err "extract-simple-param: rest parameter is not allowed"
+    ]
+    if [(len info.kws) > 0] [
+        respond err "extract-simple-param: typed parameters/keywords are not allowed"
+    ]
+    if [(len info.pos) != 1] [
+        respond err "extract-simple-param: expected exactly one positional parameter"
+    ]
+    info.pos[0]
+]
+
 -- Provides a conditional branch without a required 'else' block.
 when: fn {condition, then-block} [
-    if [run condition] then-block []
+    if [run-with condition current-scope] then-block []
 ]
 
 -- Provides an infinite loop. This is an alias for `while [true] [...]`.
 loop: fn {body-block} [
     while [true] body-block
+]
+
+-- A simple counted loop: for {i} <start> <end> [body]
+-- - The signature must be a single, untyped positional (e.g., {i}); otherwise errors.
+-- - Iterates from start toward end by +1 or -1 depending on ordering.
+-- - The loop is end-exclusive (runs while i < end when counting up, or i > end when counting down).
+-- - The loop variable is bound in the current scope each iteration.
+-- - Returns none (use while to collect/return a value if needed).
+for: fn {vars, start, end, body-block} [
+    var-name: extract-simple-param vars
+    -- Capture the caller’s lexical scope (parent of this function call scope)
+    for-scope: current-scope
+    for-scope: for-scope["meta"]["parent"]
+    step: if [start <= end] [1] [-1]
+    i: start
+    while [if [step > 0] [i < end] [i > end]] [
+        -- On each iteration, set the loop variable in the current scope.
+        for-scope[var-name]: i
+        run-with body-block for-scope
+        i: i + step
+    ]
+    none
 ]
 
 -- A multi-branch conditional, like a switch statement. It takes a list of
@@ -258,12 +429,12 @@ cond: fn {clauses} [
         [condition-block, result-expr]: clause
 
         -- Execute the condition block. If it's truthy...
-        if [run condition-block] [
+        if [run-with condition-block current-scope] [
             -- ...return the associated result.
             -- If the result expression is a code block, run it. Otherwise,
             -- it's a literal, so return it directly.
             if [is-code? result-expr] [
-                return (run result-expr)
+                return (run-with result-expr current-scope)
             ] [
                 return result-expr
             ]

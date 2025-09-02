@@ -2,6 +2,7 @@
 Transforms the raw parser AST into a semantic AST using slip_datatypes.
 """
 
+
 from slip.slip_datatypes import (
     Code, List, IString,
     PathLiteral,
@@ -142,8 +143,22 @@ class SlipTransformer:
                 # Note: #{...} is the 'dict' tag. It contains expressions to be evaluated.
                 # The evaluator will handle creating a dict from these.
                 return ('dict', self.transform(children))
+            case 'sig-conjunction' | 'sig-and':
+                # Direct conjunction node from grammar: normalize to ('and', items)
+                items = [self.transform(c) for c in children]
+                return ('and', items)
+            case 'sig-union':
+                # Normalize union node to ('union', [...]) for use in annotations/values
+                items = [self.transform(c) for c in children]
+                return ('union', items)
             # Sig literal: construct a Sig object
             case 'sig':
+                # Top-level union-only sig alias: { A or B or C }
+                for ch in children:
+                    if isinstance(ch, dict) and ch.get('tag') == 'sig-union':
+                        items = [self.transform(c) for c in (ch.get('children') or [])]
+                        sig = Sig(items, {}, None, None)
+                        return self._attach_loc(sig, node)
                 positional: list[str] = []
                 keywords: dict[str, object] = {}
                 rest: str | None = None
@@ -271,31 +286,64 @@ class SlipTransformer:
         raise NotImplementedError("Unsupported query-segment type: " + str(itag))
 
     def _transform_sig_value(self, val_node):
-        # Koine sig_value is an expr leaf with a 'text' payload.
+        # Fast-path for structured nodes coming from the sig grammar (e.g., sig-union).
+        if isinstance(val_node, dict) and val_node.get('tag') != 'expr':
+            return self.transform(val_node)
+
+        # The sig subgrammar encodes simple values as a leaf 'expr' with a 'text' payload.
+        # Parse a minimal subset needed for typing/dispatch:
+        #  - booleans/none
+        #  - numbers
+        #  - quoted strings (raw and i-string)
+        #  - backticked names: `int`, `string`, etc -> GetPath(Name(...))
+        #  - parenthesized conjunctions: (A and B and C) -> ('and', [GetPath(Name(A)), ...])
+        #  - bare names: Foo -> GetPath(Name('Foo'))
         if isinstance(val_node, dict) and val_node.get('tag') == 'expr' and 'text' in val_node:
-            return self._parse_simple_literal(val_node['text'])
+            s = val_node.get('text')
+            if isinstance(s, str):
+                t = s.strip()
+
+                # booleans/none
+                if t == "true":
+                    return True
+                if t == "false":
+                    return False
+                if t == "none":
+                    return None
+
+                # quoted strings
+                if len(t) >= 2 and t[0] == "'" and t[-1] == "'":
+                    return t[1:-1]
+                if len(t) >= 2 and t[0] == '"' and t[-1] == '"':
+                    return IString(t[1:-1])
+
+                # numbers
+                try:
+                    if any(ch in t for ch in ('.', 'e', 'E')):
+                        return float(t)
+                    return int(t)
+                except ValueError:
+                    pass
+
+                # parenthesized conjunctions: (A and B and C)
+                if len(t) >= 2 and t[0] == "(" and t[-1] == ")":
+                    inner = t[1:-1].strip()
+                    # Split on ' and ' (single spaces) which matches our test cases
+                    parts = [p.strip() for p in inner.split(" and ") if p.strip()]
+                    if len(parts) >= 2:
+                        return ('and', [GetPath([Name(p)]) for p in parts])
+
+                # backticked primitive/type names: `int`, `string`, etc.
+                if len(t) >= 2 and t[0] == "`" and t[-1] == "`":
+                    name = t[1:-1].strip()
+                    return GetPath([Name(name)])
+
+                # fallback: treat as a simple path name
+                return GetPath([Name(t)])
+
+        # Anything else: delegate to normal transform (e.g., unions already structured)
         return self.transform(val_node)
 
-    def _parse_simple_literal(self, s: str):
-        s = s.strip()
-        # booleans/none
-        if s == "true": return True
-        if s == "false": return False
-        if s == "none": return None
-        # strings
-        if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
-            return s[1:-1]
-        if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-            return IString(s[1:-1])
-        # numbers
-        try:
-            if '.' in s:
-                return float(s)
-            return int(s)
-        except ValueError:
-            pass
-        # fallback: treat as a simple path name
-        return GetPath([Name(s)])
 
     def _extract_sig_name(self, node):
         # Accepts nodes that may be leaf with 'text' or a 'name' child

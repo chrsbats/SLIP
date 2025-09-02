@@ -183,7 +183,7 @@ async def test_import_and_channels_and_current_scope_missing_errors_cleanly():
     assert_ok(res, 42)
 
     # current-scope present: returns a scope
-    res = await runner.handle_script("is-scope? (current-scope)")
+    res = await runner.handle_script("is-scope? current-scope")
     assert_ok(res, True)
 
 

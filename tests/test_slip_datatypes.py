@@ -4,7 +4,7 @@ from slip.slip_datatypes import (
     PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, Group,
     Root, Parent, Pwd, PipedPath, MultiSetPath,
-    SlipBlock, PathSegment
+    SlipBlock, PathSegment, Sig
 )
 
 # --- Scope Tests ---
@@ -368,3 +368,25 @@ def test_path_literal_del_path_equality_and_hash():
     assert d1 == d2
     assert hash(d1) == hash(d2)
     assert d1 != d3
+
+# --- New tests for Sig with union/conjunction annotations ---
+
+def test_sig_with_union_keyword_value():
+    a = GetPath([Name("A")])
+    b = GetPath([Name("B")])
+    s1 = Sig([], {"x": ("union", [a, b])}, None, None)
+    s2 = Sig([], {"x": ("union", [GetPath([Name("A")]), GetPath([Name("B")])])}, None, None)
+    assert s1 == s2
+    # Basic repr smoke check (should include 'Sig(' and 'union')
+    r = repr(s1)
+    assert "Sig(" in r
+    assert "union" in r
+
+def test_sig_with_conjunction_keyword_value():
+    p = GetPath([Name("Player")])
+    onf = GetPath([Name("OnFire")])
+    s1 = Sig([], {"p": ("and", [p, onf])}, None, None)
+    s2 = Sig([], {"p": ("and", [GetPath([Name("Player")]), GetPath([Name("OnFire")])])}, None, None)
+    assert s1 == s2
+    r = repr(s1)
+    assert "and" in r

@@ -1,4 +1,4 @@
-## SLIP Implementation Specification v1.0
+## SLIP Implementation Specification v0.1
 
 ### Introduction
 
@@ -153,6 +153,7 @@ The grammar defines a path as having two main parts: an optional prefix and a ma
 This allows the grammar to parse `/`, `/a/b`, and `a/b` correctly.
 
 - **A `component-chain` is:**
+
   1. A sequence of one or more `path-component`s, separated by `.` or `/`.
 
 - **A `path-component` is:**
@@ -273,14 +274,13 @@ A standard `(...)` evaluation group used as a segment within a path. This allows
 - **Koine AST:** The parser produces a `group` node directly as a segment in the path's children list.
   ```yaml
   # Part of the children list for user.(get-key)
-  ...
-    - tag: group
-      children:
-        - tag: expr
-          children:
-            - tag: get-path
-              text: get-key
-  ...
+  ---
+  - tag: group
+    children:
+      - tag: expr
+        children:
+          - tag: get-path
+            text: get-key
   ```
 
 ### 2.4. Configuration Segment
@@ -332,7 +332,7 @@ The result of a successful parse is a single `sig` node. This node contains a li
 This is the simplest form, consisting of a comma-separated list of simple names.
 
 - **Source (Function Parameters):** `{x, y, z}`
-- **Source (Type Union):** `{int, string}`
+- **Source (Type Union):** `{int or string}`
 - **Koine AST:**
   ```yaml
   tag: sig
@@ -653,6 +653,7 @@ Both string types support automatic de-denting to allow for clean, indented mult
 ---
 
 ### Byte stream literals (runtime behavior)
+
 - The evaluator constructs bytes from typed lists:
   - u8/i8 write single bytes (i8 wraps to 0–255).
   - u16/i16, u32/i32, u64/i64 pack little‑endian integers.
@@ -782,84 +783,132 @@ When assigning a `Function` (SlipFunction) without explicit typed annotations bu
   - If no clones are produced (e.g., no usable keyword examples), fall back to adding the original untyped function.
 
 Notes:
+
 - Positional-only examples (e.g., `{x, y -> want}`) are not used for synthesis; they remain for documentation/testing.
 - Container-level examples (attached to the `GenericFunction`) are not synthesized; they are discovered by the test runner only.
 
 ### 7.2. The `DispatchRule` (Internal Representation)
 
-While not a user-facing concept, the interpreter should pre-process each method's signature into a more efficient internal representation for dispatch checks. This can be done when the method is first added to the `GenericFunction`.
+While not a user-facing concept, the interpreter should pre-process each method's signature into a more efficient internal form for applicability and scoring. This can be done when the method is first added to the `GenericFunction`.
 
-- **Core Structure (Python):**
+Core structure (Python-ish shape):
 
-  ```python
-  class DispatchRule:
-      def __init__(self, method: Function):
-          # A direct reference to the method's implementation.
-          self.method = method
+- `method`: a reference to the SlipFunction
+- `arity`: the total number of fixed (non-rest) parameters
+- `compiled_sig`: pre-compiled per-parameter annotations suitable for fast checks, e.g.:
+  - For scope annotations: a record identifying the scope object to match and its precomputed “family” (prototype/mixin closure) if helpful.
+  - For primitive annotations: a record identifying the primitive name (int, float, string, …).
+  - For unions/conjunctions: nested compiled items.
+- `guards`: the list of guard Code blocks (if any)
 
-          # The parsed signature from the method's `meta.type` property.
-          sig = method.meta['type'] # This is a Signature object
+Note: The compiled form is not a score; it only encodes what the annotation means so we can:
 
-          # The number of required arguments.
-          self.arity = len(sig.positional_args) + len(sig.keyword_args)
+- run the applicability check quickly (all required types present in the argument’s family), and
+- build the coverage fraction for that parameter during scoring:
+  coverage_j = size(signature_family_for_param_j) / size(argument_family_for_arg_j)
 
-          # A pre-compiled list of TypeID sets for fast type checking.
-          # Each element in the list is a set of integers (TypeIDs).
-          self.type_id_sets = self._compile_type_ids(sig)
+### 7.3. The Dispatch Algorithm (Applicability + Lexicographic Scoring)
 
-          # A reference to the unevaluated AST for the guard clauses.
-          self.guards = method.meta.get("guards") # This would be a SlipList of Code objects
-  ```
+#### 7.3.1 Candidate Collection (Applicability Gates)
 
-- The `_compile_type_ids` helper function is responsible for performing the lexical lookup and `TypeID` resolution for each type annotation in the signature, as described in Chapter 8.
+For each method in the generic function:
 
-Note: Primitive annotations produced by example synthesis are simple single-name get-paths (e.g., `string`, `int`, `path`) and are matched using the same primitive type-name mapping used by the dispatcher’s type checks. Scope annotations still resolve via lexical lookup in the method’s closure (with shadowing).
+1. Arity gate
 
-### 7.3. The Dispatch Algorithm: Specificity First
+- Partition methods by whether the call’s argument count matches the method’s fixed arity (exact tier) or is ≥ fixed arity when rest is present (variadic tier).
+- Consider only the highest-preference tier that has any candidates (exact over variadic). If neither tier has candidates, fall back to untyped methods if your implementation supports them; otherwise “No matching method”.
 
-This is the core logic of the function call evaluator. When a generic function is called with a list of arguments, the interpreter executes a two‑step process: candidate collection (filtering) and ranking/selection, followed by execution.
+2. Type/annotation applicability
 
-#### 7.3.1. Candidate Collection
+- For each explicitly typed, non-variadic parameter:
+  - Resolve the annotation to its “required types” (scope(s), primitives, or union/conjunction thereof).
+  - Compute the argument’s family set (for scopes: the set containing the instance, its ancestors, all mixins and their ancestors; for primitives: a singleton identifying the primitive).
+  - The parameter is applicable iff all required types for that parameter are present in the argument’s family set (unions are satisfied if any branch is applicable).
+- If any typed parameter is inapplicable, the method is not a candidate.
 
-1. Initialize an empty `candidates` list.
-2. Iterate all `DispatchRule`s in the `GenericFunction.methods` list.
-3. For each rule, perform preliminary checks:
-   - Arity check: does the provided argument count equal `rule.arity`?
-   - Type/match check per annotated parameter:
-     - Resolve the annotation to its target Scope (or use the stored `type_id`/Scope captured at definition time).
-     - For the actual argument:
-       - If it is not a `Scope`, only untyped params can match it.
-       - Otherwise compute a match for this parameter using the three match kinds, in order:
-         1) Exact instance: argument is the same Scope object (identity).
-         2) Mixin capability: the annotated Scope appears in `arg.meta.mixins` or along a mixin’s own `meta.parent` chain.
-         3) Prototype inheritance: the annotated Scope appears on the argument’s `meta.parent` chain.
-       - If none of the above match, this rule is not a candidate.
-     - For union annotations (e.g., `{A, B}`), compute the best match among members using the same rules.
-   - Guard check: if the rule has guards, evaluate them; all must be truthy.
-4. If all checks pass, add the rule and its per‑argument match data to `candidates`.
+3. Guards
 
-#### 7.3.2. Ranking and Selection
+- If the method has guard blocks, evaluate them (once) with parameters bound. If any guard is falsey, the method is not a candidate.
 
-- Compute a score for each candidate by summing per‑argument tuples `(kind_rank, distance)`:
-  - exact: `(0, 0)`
-  - mixin: `(1, d)` where `d = 0` for a direct mixin, otherwise the number of parent steps on the mixin object to reach the annotated scope
-  - inherit: `(2, d)` where `d` is the number of parent steps from the instance to the annotated prototype
-- Compare candidates by their total score using lexicographic ordering:
-  1) Lower total `kind_rank` is selected.
-  2) If tied, lower total `distance` is selected.
-  3) If still tied, the earlier definition order (the method that appears first in `methods`) is selected.
-- Optionally, for ties between mixin matches with the same score, prefer the candidate whose matching mixin appears earlier in the target object’s `meta.mixins` list.
+All methods that pass these gates form the candidate set for scoring.
 
-#### 7.3.3. Execution
+#### 7.3.2 Scoring and Selection (Lexicographical Score Vectors)
 
-1. Take the winning `DispatchRule` (let `winner = rule.method`).
-2. Create a new `Scope` for the call; set its `lexical_parent` to `winner.closure`.
-3. Bind provided arguments to the parameter names in the new scope.
-4. Evaluate the method body AST within this scope to obtain `result`.
-5. Handle the result:
-   - If `result` is a `Response` with status `` `return` ``, the call’s value is the inner `value`.
-   - Otherwise, the call’s value is `result` itself.
-6. Return this final value.
+For each candidate method, build a Score Vector V of length equal to the number of call arguments. For index j:
+
+- If parameter j is explicitly typed and non-variadic:
+  - Let S_j be the signature family for parameter j (union of family sets for all required types in that position, de-duplicated).
+  - Let A_j be the argument’s family set for the j-th argument.
+  - The coverage fraction is:
+    coverage_j = |S_j| / |A_j|
+- If parameter j is untyped or covered by the variadic rest, define coverage_j = 0.0
+
+Compare candidates by their Score Vectors lexicographically, left-to-right:
+
+- At the first index k where vectors differ, the candidate with the greater coverage_k wins.
+- If all positions are equal, proceed to tie-breaking.
+
+This vector-based, lexicographic comparison is stable and fair: a change to later arguments (e.g., adding an unrelated mixin) does not affect the outcome if an earlier argument already distinguishes the candidates.
+
+Example:
+
+- [1.0, 0.5] beats [0.25, 1.0] because 1.0 > 0.25 at position 0; later positions do not matter.
+
+Note: This scoring is identical to the Language Reference’s “Lexicographical Vector Comparison” (Chapter 6.3 and Appendix D). Implementers should verify test cases using that spec’s examples.
+
+#### 7.3.3 Tie-Breaking
+
+If two or more candidates have identical Score Vectors:
+
+1. Guarded over plain
+
+- Prefer the candidate that has guard(s) over candidates without guards.
+
+2. Greater detail (signature specificity)
+
+- Prefer the candidate with the larger total count of required types across all parameters (e.g., conjunctions contribute more detail than single types).
+
+3. Larger signature family size
+
+- Prefer the candidate whose union of signature families across all parameters is larger.
+
+4. Final resolution
+
+- If a tie still remains, raise “Ambiguous method call”.
+
+#### 7.3.4 Worked Example (Lexicographic Comparison)
+
+Call: interact my_player my_weapon
+
+Methods:
+
+- A: fn {p: Player, i: Item}
+- B: fn {b: Being, w: Weapon}
+
+Assume family sizes:
+
+- Player family size = 4 (e.g., Player, Character, Being, Object)
+- Being family size = 4
+- Item family size = 2 (Item, Object)
+- Weapon family size = 2 (Weapon, Item)
+
+Score vectors:
+
+- A: [|{Player,...}|/|A_p|, |{Item,...}|/|A_i|] = [4/4, 2/2] = [1.0, 1.0] (or [1.0, 0.5] if Item family is 1 of 2; adjust per your family definition)
+- B: [|{Being,...}|/|A_p|, |{Weapon,...}|/|A_i|] = [1/4, 2/2] = [0.25, 1.0]
+
+Compare lexicographically:
+
+- First elements: 1.0 vs 0.25 → A wins immediately.
+
+Add unrelated mixin IsLegendary to the weapon (weapon family size increases):
+
+- A: [4/4, 1/3] = [1.0, 0.33]
+- B: [1/4, 2/3] = [0.25, 0.66]
+
+Compare again:
+
+- First elements: 1.0 vs 0.25 → A still wins. Outcome is stable.
 
 ---
 
@@ -1117,19 +1166,21 @@ To ensure cooperative multitasking and prevent a single script from freezing the
 
 This automatic yielding is a critical safety feature and a non-negotiable part of the `task` implementation.
 
-### 15.5. with-log: Structured Capture of Outcome and Effects
+### 15.5. do: Structured Capture of Outcome and Effects
 
-The with-log primitive wraps the execution of a code block, capturing the emitted events and returning them alongside a normalized outcome.
+The do primitive wraps the execution of a code block, capturing the emitted events and returning them alongside a normalized outcome.
 
 API:
-- with-log <code> → returns a dict-like object with:
+
+- do <code> → returns a dict-like object with:
   - outcome: Response(PathLiteral(`ok|err|...`), value)
   - effects: list of events emitted during the run
 
 Algorithm (host/runtime reference):
-1) Validate/resolve argument to a Code object.
-2) Record the current length of evaluator.side_effects (start index).
-3) Execute the block via evaluator._eval(code.ast, scope):
+
+1. Validate/resolve argument to a Code object.
+2. Record the current length of evaluator.side_effects (start index).
+3. Execute the block via evaluator.\_eval(code.ast, scope):
    - On successful completion:
      - If the result is a Response:
        - If it is a return response (status == `return`):
@@ -1139,9 +1190,118 @@ Algorithm (host/runtime reference):
      - If the result is not a Response, outcome := response ok result.
    - On exception:
      - outcome := response err "<message>" (message is the raised error’s string).
-4) effects := copy of evaluator.side_effects[start:].
-5) Return a new dict-like object (e.g., SlipDict) with keys "outcome" and "effects".
+4. effects := copy of evaluator.side_effects[start:].
+5. Return a new dict-like object (e.g., SlipDict) with keys "outcome" and "effects".
 
 Notes:
-- with-log does not remove entries from the global side_effects list; it returns a snapshot slice of the events generated during the wrapped execution only.
+
+- do does not remove entries from the global side_effects list; it returns a snapshot slice of the events generated during the wrapped execution only.
 - The block runs in the current lexical scope; any writes inside the block affect that scope just like a normal run.
+
+## Appendix A: Abstract Syntax Tree (AST) Reference
+
+This appendix provides a formal reference for the structure of the Abstract Syntax Tree (AST) that the SLIP parser generates. The evaluator's behavior is driven by the tags and structure of these nodes. The fundamental structure is a "tagged list," where the first element is a string that identifies the node's type.
+
+Note on notation
+- In examples, <type value> (e.g., <number 10>) represents literal value tokens like numbers and user-facing strings.
+- Structural parts of the AST are represented as tagged lists like [tag ...].
+- For brevity, the literal string or number values inside path components (e.g., the 'user' in [name 'user'] or the 5 in [slice 5 10]) are shown directly.
+
+### Expressions and Code
+
+An expression is represented by a list tagged with expr. A code block is tagged with code. The difference is that the evaluator executes an [expr ...] immediately, while a [code ...] is treated as a literal value.
+
+- Source: (add 1 2)
+  - AST: [expr [get-path [name 'add']], <number 1>, <number 2>]
+
+- Source: [add 1 2]
+  - AST: [code [expr [get-path [name 'add']], <number 1>, <number 2>]]
+  - Note: A code block contains a list of zero or more expr nodes. An empty code block is valid.
+
+### Container Literals
+
+- Source: #[1, 2] (List)
+  - AST: [list <number 1>, <number 2>]
+  - The evaluator processes this by evaluating each element and collecting the results into a list object.
+
+- Source: #{ a: 1 } (Dictionary)
+  - AST: [dict [expr [set-path [name 'a']], <number 1>]]
+  - The evaluator executes the expressions inside a new dict-like object and returns it.
+
+- Source: { a: int } (Signature)
+  - AST: [sig [sig-kwarg [sig-key 'a'] [get-path [name 'int']]]]
+  - The sig block is not evaluated; it is parsed into a literal sig data structure.
+
+### Paths and Assignment
+
+Paths and assignment patterns are represented by distinct AST nodes.
+
+#### The get-path Node (for Reading)
+
+- AST Structure: [get-path <segment1>, <segment2>, ..., configuration: [dict ...]]
+- configuration: An optional dictionary-like structure parsed from a #(…) suffix for transient options.
+- Segments:
+  - [root]: leading /
+  - [name '...']: dot- or slash-separated name
+  - [query-segment …]: bracketed query (index/key, slice, filter)
+  - [parent]: ../
+  - [group …]: dynamic segment (…)
+
+Examples:
+- Source: user.name
+  - AST: [get-path [name 'user'], [name 'name']]
+
+#### The piped-path Node
+
+- AST Structure: [piped-path <segment1>, <segment2>, ...]
+- Segments: same as get-path
+- Source: |user.name
+  - AST: [piped-path [name 'user'], [name 'name']]
+
+#### The set-path Node (for Writing)
+
+- Simple assignment like user.name: "John" is parsed as a set-path node, which the transformer converts into a SetPath object before evaluation.
+  - Segments: same as get-path
+  - configuration: optional #(…) block, same semantics as for get-path
+  - Source: user.name: "John"
+  - AST passed to evaluator: a SetPath object and a string value
+
+- Destructuring: [a, b]: #[10, 20] is parsed as a multi-set path and converted into a MultiSetPath object before evaluation.
+  - AST passed to evaluator: a MultiSetPath object and a List object
+
+### Query Segments (Structure Recap)
+
+Parsing precedence inside [...] must try:
+1) slice-query before
+2) filter-query before
+3) simple-query
+
+- Slice Query
+  - Source: [1:4], [:end]
+  - AST: [query-segment [slice-query [start-expr [expr …]] [end-expr [expr …]]]]
+
+- Filter Query
+  - Source: [> 100], [= "active"]
+  - AST: [query-segment [filter-query [operator '>'] [rhs-expr [expr …]]]]
+
+- Index/Key Query
+  - Source: [0], ["name"], [my-variable]
+  - AST: [query-segment [simple-query [expr …]]]
+
+### Group Segment
+
+Groups can appear as a path segment for dynamic access:
+- Source: user.(get-key).name
+- AST fragment:
+  - [group [expr [get-path [name 'get-key']]]]
+
+### Configuration Segment
+
+The #( … ) block immediately following a path is represented as a meta/configuration child on the path node and is not part of the segment list.
+
+- Source: a/b#(timeout: 2)
+- AST: [get-path [name 'a'], [name 'b'], configuration: [dict …]]
+
+Notes
+- The SLIP transformer normalizes these parser nodes into the runtime datatypes (GetPath, SetPath, DelPath, PipedPath, MultiSetPath, Group, Index, Slice, FilterQuery, PathLiteral, etc.) before evaluation.
+- See Part I (Parsing and Transformation) for how Koine AST nodes map to runtime datatypes and how subgrammars are wired.

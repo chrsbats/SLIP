@@ -163,7 +163,11 @@ class PathResolver:
         """Evaluates a path segment to determine the key for a lookup."""
         match segment:
             case Name():
-                return segment.text
+                txt = segment.text
+                # Normalize leading-dot names like ".outcome" after groups into "outcome"
+                if isinstance(txt, str) and txt.startswith('.') and len(txt) > 1:
+                    return txt[1:]
+                return txt
             case Index():
                 return await self.evaluator.eval(segment.expr_ast, scope)
             case Slice():
@@ -186,11 +190,24 @@ class PathResolver:
         txt = loc.get('text') if isinstance(loc, dict) else None
         if isinstance(txt, str) and (txt.startswith("http://") or txt.startswith("https://")):
             u = txt.rstrip()
-            # Strip any inline metadata (e.g., "#(...)") that may be present in the token text
-            # Be robust: cut at the first '#' to handle tokens like "...#:" as well.
-            hash_idx = u.find("#")
-            if hash_idx != -1:
-                u = u[:hash_idx]
+            # Cut at the first occurrence of known SLIP suffix markers
+            cut_at = len(u)
+            for ch in ("#", "["):
+                idx = u.find(ch)
+                if idx != -1:
+                    cut_at = min(cut_at, idx)
+            u = u[:cut_at]
+            # If a dot-chained SLIP name follows the URL path (after the first '/'),
+            # treat it as a SLIP segment, not part of the URL.
+            scheme_i = u.find("://")
+            if scheme_i != -1:
+                slash_i = u.find("/", scheme_i + 3)
+                if slash_i != -1:
+                    # Only strip dots occurring in the path portion (not in the host)
+                    dot_i = u.find(".", slash_i + 1)
+                    if dot_i != -1:
+                        u = u[:dot_i]
+            # Trailing colon from set-path tokens
             if isinstance(path, SetPath) or u.endswith(":"):
                 u = u.rstrip(":")
             if os.environ.get("SLIP_HTTP_DEBUG"):
@@ -204,10 +221,22 @@ class PathResolver:
             s0 = segments[0].text
             if isinstance(s0, str) and (s0.startswith("http://") or s0.startswith("https://")):
                 u = s0
-                # Trim any inline metadata fragment, e.g., "#(...)"
-                hash_idx = u.find("#")
-                if hash_idx != -1:
-                    u = u[:hash_idx]
+                # Cut at the first occurrence of known SLIP suffix markers
+                cut_at = len(u)
+                for ch in ("#", "["):
+                    idx = u.find(ch)
+                    if idx != -1:
+                        cut_at = min(cut_at, idx)
+                u = u[:cut_at]
+                # If a dot-chained SLIP name follows the URL path (after the first '/'),
+                # treat it as a SLIP segment, not part of the URL.
+                scheme_i = u.find("://")
+                if scheme_i != -1:
+                    slash_i = u.find("/", scheme_i + 3)
+                    if slash_i != -1:
+                        dot_i = u.find(".", slash_i + 1)
+                        if dot_i != -1:
+                            u = u[:dot_i]
                 if isinstance(path, SetPath) or u.endswith(":"):
                     u = u.rstrip(":")
                 if os.environ.get("SLIP_HTTP_DEBUG"):
@@ -228,6 +257,9 @@ class PathResolver:
             hash_idx = u.find("#")
             if hash_idx != -1:
                 u = u[:hash_idx]
+            br_idx = u.find("[")
+            if br_idx != -1:
+                u = u[:br_idx]
             if isinstance(path, SetPath) or u.endswith(":"):
                 u = u.rstrip(":")
             # Canonicalize bare and relative forms
@@ -262,6 +294,68 @@ class PathResolver:
                     pass
                 return u
         return None
+
+    def _has_http_trailing_segments(self, path: GetPath | SetPath | PostPath) -> bool:
+        """
+        Returns True if the original token text indicates trailing SLIP segments
+        (dot-chained names or bracketed queries) after an http(s) URL.
+        This catches cases where the parser kept those in the first segment.
+        """
+        segments = getattr(path, 'segments', None) or []
+        if len(segments) > 1:
+            return True
+        loc = getattr(path, 'loc', None) or {}
+        txt = loc.get('text') if isinstance(loc, dict) else None
+        if isinstance(txt, str) and (txt.startswith("http://") or txt.startswith("https://")):
+            scheme_i = txt.find("://")
+            if scheme_i != -1:
+                slash_i = txt.find("/", scheme_i + 3)
+                if slash_i != -1:
+                    # Any bracket after the first slash indicates trailing query segments
+                    if txt.find("[", slash_i + 1) != -1:
+                        return True
+                    # A dot after the first slash (before any '#') indicates dot-chained SLIP name
+                    stop = txt.find("#", slash_i + 1)
+                    if stop == -1:
+                        stop = len(txt)
+                    if txt.find(".", slash_i + 1, stop) != -1:
+                        return True
+        # Fallback: inspect the first Name segment text when loc.text is unavailable or incomplete
+        segments = getattr(path, 'segments', None) or []
+        if segments and isinstance(segments[0], Name):
+            s0 = segments[0].text
+            if isinstance(s0, str) and (s0.startswith("http://") or s0.startswith("https://")):
+                scheme_i = s0.find("://")
+                if scheme_i != -1:
+                    slash_i = s0.find("/", scheme_i + 3)
+                    if slash_i != -1:
+                        # Any bracket after the first slash indicates trailing query segments
+                        if s0.find("[", slash_i + 1) != -1:
+                            return True
+                        # A dot after the first slash (before any '#') indicates dot-chained SLIP name
+                        stop = s0.find("#", slash_i + 1)
+                        if stop == -1:
+                            stop = len(s0)
+                        if s0.find(".", slash_i + 1, stop) != -1:
+                            return True
+        return False
+
+    def _has_file_trailing_segments(self, path: GetPath | SetPath | PostPath) -> bool:
+        """
+        Returns True if a file:// path includes any trailing SLIP segments.
+        Treats bracketed queries as trailing; dot detection is avoided to not
+        confuse filename extensions.
+        """
+        segments = getattr(path, 'segments', None) or []
+        if len(segments) > 1:
+            return True
+        loc = getattr(path, 'loc', None) or {}
+        txt = loc.get('text') if isinstance(loc, dict) else None
+        if isinstance(txt, str) and txt.startswith("file://"):
+            # Any bracket after the scheme indicates a query segment in source
+            if "[" in txt:
+                return True
+        return False
 
     async def _meta_to_dict(self, meta_group: Group | None, scope: Scope) -> dict:
         if not isinstance(meta_group, Group):
@@ -318,16 +412,64 @@ class PathResolver:
         # TODO: Handle path.meta for things like API timeouts
         url = self._extract_http_url(path)
         if url:
+            # Enforce two-step policy: no trailing segments on HTTP GET
+            if self._has_http_trailing_segments(path):
+                raise TypeError("http get does not support trailing path segments; bind the response then filter")
             from slip.slip_http import http_get  # local import to avoid hard dependency until needed
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
-            return await http_get(url, cfg)
+
+            def _resp_mode(c: dict) -> str | None:
+                m = c.get('response-mode')
+                # Legacy flags
+                try:
+                    if m is None:
+                        if c.get('lite') is True:
+                            return 'lite'
+                        if c.get('full') is True:
+                            return 'full'
+                except Exception:
+                    pass
+                try:
+                    from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name, IString as _IStr
+                    if isinstance(m, (str, _IStr)):
+                        s = str(m).strip().strip('`').lower()
+                        return s if s in ('lite', 'full', 'none') else None
+                    if isinstance(m, _PL):
+                        inner = getattr(m, 'inner', None)
+                        if isinstance(inner, _GP) and len(inner.segments) == 1 and isinstance(inner.segments[0], _Name):
+                            s = inner.segments[0].text
+                            if isinstance(s, str):
+                                s = s.strip().strip('`').lower()
+                                return s if s in ('lite', 'full', 'none') else None
+                    if isinstance(m, _GP) and len(m.segments) == 1 and isinstance(m.segments[0], _Name):
+                        s = m.segments[0].text
+                        if isinstance(s, str):
+                            s = s.strip().strip('`').lower()
+                            return s if s in ('lite', 'full', 'none') else None
+                except Exception:
+                    pass
+                return None
+
+            mode = _resp_mode(cfg)
+            raw = await http_get(url, cfg)
+            if mode == 'lite' and isinstance(raw, tuple) and len(raw) == 3:
+                status, value, headers = raw
+                return [status, value]
+            if mode == 'full' and isinstance(raw, tuple) and len(raw) == 3:
+                status, value, headers = raw
+                return {'status': status, 'value': value, 'meta': {'headers': headers}}
+            return raw
         file_loc = self._extract_file_locator(path)
         if file_loc:
+            # Enforce two-step policy: no trailing segments on file GET
+            if self._has_file_trailing_segments(path):
+                raise TypeError("file get does not support trailing path segments; bind the response then filter")
             from slip.slip_file import file_get
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
             base_dir = getattr(self.evaluator, 'source_dir', None)
             try:
-                return await file_get(file_loc, cfg, base_dir=base_dir)
+                data = await file_get(file_loc, cfg, base_dir=base_dir)
+                return data
             except FileNotFoundError:
                 raise PathNotFound(file_loc)
         # Resolve the path normally
@@ -359,6 +501,8 @@ class PathResolver:
         # TODO: Handle path.meta for generic function dispatch
         url = self._extract_http_url(path)
         if url:
+            if self._has_http_trailing_segments(path):
+                raise TypeError("http write does not support trailing path segments")
             from slip.slip_http import http_put
             from slip.slip_serialize import serialize as _ser
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
@@ -388,6 +532,8 @@ class PathResolver:
             return  # assignment expression will still return the RHS value upstream
         file_loc = self._extract_file_locator(path)
         if file_loc:
+            if len(getattr(path, 'segments', []) or []) > 1:
+                raise TypeError("file write does not support trailing path segments")
             from slip.slip_file import file_put
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
             await file_put(file_loc, value, cfg, base_dir=getattr(self.evaluator, 'source_dir', None))
@@ -416,6 +562,8 @@ class PathResolver:
     async def post(self, path: PostPath, value: Any, scope: Scope):
         url = self._extract_http_url(GetPath(path.segments, getattr(path, 'meta', None)))
         if url:
+            if self._has_http_trailing_segments(path):
+                raise TypeError("http post does not support trailing path segments")
             from slip.slip_http import http_post
             from slip.slip_serialize import serialize as _ser
             cfg = await self._meta_to_dict(getattr(path, 'meta', None), scope)
@@ -440,7 +588,47 @@ class PathResolver:
                     payload = str(value)
             else:
                 payload = value if isinstance(value, (str, bytes, bytearray)) else str(value)
-            return await http_post(url, payload, cfg)
+            raw = await http_post(url, payload, cfg)
+            # Package per response-mode if requested
+            def _resp_mode(c: dict) -> str | None:
+                m = c.get('response-mode')
+                # Legacy flags
+                try:
+                    if m is None:
+                        if c.get('lite') is True:
+                            return 'lite'
+                        if c.get('full') is True:
+                            return 'full'
+                except Exception:
+                    pass
+                try:
+                    from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name, IString as _IStr
+                    if isinstance(m, (str, _IStr)):
+                        s = str(m).strip().strip('`').lower()
+                        return s if s in ('lite', 'full', 'none') else None
+                    if isinstance(m, _PL):
+                        inner = getattr(m, 'inner', None)
+                        if isinstance(inner, _GP) and len(inner.segments) == 1 and isinstance(inner.segments[0], _Name):
+                            s = inner.segments[0].text
+                            if isinstance(s, str):
+                                s = s.strip().strip('`').lower()
+                                return s if s in ('lite', 'full', 'none') else None
+                    if isinstance(m, _GP) and len(m.segments) == 1 and isinstance(m.segments[0], _Name):
+                        s = m.segments[0].text
+                        if isinstance(s, str):
+                            s = s.strip().strip('`').lower()
+                            return s if s in ('lite', 'full', 'none') else None
+                except Exception:
+                    pass
+                return None
+            mode = _resp_mode(cfg)
+            if mode == 'lite' and isinstance(raw, tuple) and len(raw) == 3:
+                status, value, headers = raw
+                return [status, value]
+            if mode == 'full' and isinstance(raw, tuple) and len(raw) == 3:
+                status, value, headers = raw
+                return {'status': status, 'value': value, 'meta': {'headers': headers}}
+            return raw
         # Non-HTTP post-paths are not supported
         raise TypeError("post-path expects an http(s) URL")
 
@@ -449,18 +637,136 @@ class PathResolver:
         # TODO: Handle path.path.meta for things like soft-delete
         url = self._extract_http_url(path.path)
         if url:
+            if self._has_http_trailing_segments(path.path):
+                raise TypeError("http delete does not support trailing path segments")
             from slip.slip_http import http_delete
             cfg = await self._meta_to_dict(getattr(path.path, 'meta', None), scope)
-            await http_delete(url, cfg)
-            return
+
+            def _resp_mode(c: dict) -> str | None:
+                m = c.get('response-mode')
+                # Legacy flags
+                try:
+                    if m is None:
+                        if c.get('lite') is True:
+                            return 'lite'
+                        if c.get('full') is True:
+                            return 'full'
+                except Exception:
+                    pass
+                try:
+                    from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name, IString as _IStr
+                    if isinstance(m, (str, _IStr)):
+                        s = str(m).strip().strip('`').lower()
+                        return s if s in ('lite', 'full', 'none') else None
+                    if isinstance(m, _PL):
+                        inner = getattr(m, 'inner', None)
+                        if isinstance(inner, _GP) and len(inner.segments) == 1 and isinstance(inner.segments[0], _Name):
+                            s = inner.segments[0].text
+                            if isinstance(s, str):
+                                s = s.strip().strip('`').lower()
+                                return s if s in ('lite', 'full', 'none') else None
+                    if isinstance(m, _GP) and len(m.segments) == 1 and isinstance(m.segments[0], _Name):
+                        s = m.segments[0].text
+                        if isinstance(s, str):
+                            s = s.strip().strip('`').lower()
+                            return s if s in ('lite', 'full', 'none') else None
+                except Exception:
+                    pass
+                return None
+
+            raw = await http_delete(url, cfg)
+            mode = _resp_mode(cfg)
+            if mode == 'lite' and isinstance(raw, tuple) and len(raw) == 3:
+                status, value, headers = raw
+                return [status, value]
+            if mode == 'full' and isinstance(raw, tuple) and len(raw) == 3:
+                status, value, headers = raw
+                return {'status': status, 'value': value, 'meta': {'headers': headers}}
+            return raw
         file_loc = self._extract_file_locator(path.path)
         if file_loc:
+            if len(getattr(path.path, 'segments', []) or []) > 1:
+                raise TypeError("file delete does not support trailing path segments")
             from slip.slip_file import file_delete
             cfg = await self._meta_to_dict(getattr(path.path, 'meta', None), scope)
             await file_delete(file_loc, cfg, base_dir=getattr(self.evaluator, 'source_dir', None))
             return
-        container, key = await self._resolve(path.path, scope)
-        del container[key]
+        # Build a breadcrumb chain to support post-delete pruning
+        target = path.path
+        # Determine starting container and segments (mirror _resolve)
+        if target.segments and target.segments[0] is Root:
+            container = scope
+            while isinstance(container, Scope) and container.parent:
+                container = container.parent
+            segments = target.segments[1:]
+        else:
+            container = scope
+            segments = target.segments
+
+        # Walk to the leaf, tracking (owner, key, child) steps for pruning
+        chain = []
+        for seg in segments[:-1]:
+            if seg is Parent:
+                if not isinstance(container, Scope) or not container.parent:
+                    raise KeyError("Path traversal failed: cannot use parent segment ('../') on non-Scope or root Scope.")
+                container = container.parent
+                continue
+            if seg is Pwd:
+                continue
+            key = await self._get_segment_key(seg, scope)
+            next_container = container[key] if not isinstance(container, Scope) else container[key]
+            chain.append((container, key, next_container))
+            container = next_container
+
+        # Perform the deletion at the leaf
+        final_key = await self._get_segment_key(segments[-1], scope)
+        del container[final_key]
+
+        # Cascade prune: if a Scope becomes empty, remove it from its owner; repeat upward
+        try:
+            dbg = bool(os.environ.get("SLIP_PRUNE_DEBUG"))
+            cur = container
+            i = len(chain) - 1
+            if dbg:
+                try:
+                    print(f"[PRUNE] start: chain_len={len(chain)} leaf_empty={isinstance(cur, Scope) and len(cur.bindings)==0}", file=sys.stderr)
+                except Exception:
+                    pass
+            while isinstance(cur, Scope) and len(cur.bindings) == 0 and i >= 0:
+                owner, owner_key, child = chain[i]
+                if not isinstance(owner, Scope) or not isinstance(owner_key, str):
+                    if dbg:
+                        try:
+                            otype = type(owner).__name__
+                            print(f"[PRUNE] stop: owner_type={otype} owner_key_type={type(owner_key).__name__}", file=sys.stderr)
+                        except Exception:
+                            pass
+                    break
+                try:
+                    if dbg:
+                        try:
+                            print(f"[PRUNE] del owner[{owner_key!r}] (owner_bindings_before={list(owner.bindings.keys())})", file=sys.stderr)
+                        except Exception:
+                            pass
+                    del owner[owner_key]
+                except Exception:
+                    if dbg:
+                        try:
+                            print(f"[PRUNE] stop: failed to delete key {owner_key!r} from owner", file=sys.stderr)
+                        except Exception:
+                            pass
+                    break
+                cur = owner
+                i -= 1
+                if dbg:
+                    try:
+                        print(f"[PRUNE] ascended: now_empty={len(cur.bindings)==0} next_i={i}", file=sys.stderr)
+                    except Exception:
+                        pass
+        except Exception:
+            # Pruning is best-effort; never fail the delete if pruning encounters an issue
+            pass
+        return
 
     async def _resolve_value(self, path: GetPath, scope: Scope) -> Any:
         """Resolves a GetPath to a concrete value, handling filter queries inline."""
@@ -623,26 +929,89 @@ class PathResolver:
         # For non-list containers, return a simple View placeholder for future materialization.
         return View(container, [segment])
 
+    async def _apply_segments(self, container, segments, scope: Scope):
+        """Apply SLIP path segments to an already-fetched container (list/dict/scope/etc.)."""
+        cur = container
+        for segment in segments:
+            match segment:
+                case _ if (segment is Parent):
+                    if not isinstance(cur, Scope) or not cur.parent:
+                        raise KeyError("Path traversal failed: cannot use parent segment ('../') on non-Scope or root Scope.")
+                    cur = cur.parent
+                    continue
+                case _ if (segment is Pwd):
+                    continue
+                case FilterQuery():
+                    cur = await self._apply_filter(cur, segment, scope)
+                    continue
+            if isinstance(cur, list) and isinstance(segment, Name):
+                plucked = []
+                for item in cur:
+                    if isinstance(item, Scope):
+                        try:
+                            plucked.append(item[segment.text])
+                        except KeyError:
+                            raise PathNotFound(segment.text)
+                    elif isinstance(item, collections.abc.Mapping):
+                        try:
+                            plucked.append(item[segment.text])
+                        except KeyError:
+                            raise PathNotFound(segment.text)
+                    else:
+                        try:
+                            plucked.append(getattr(item, segment.text))
+                        except Exception:
+                            raise TypeError(f"Cannot pluck field {segment.text!r} from item of type {type(item).__name__}")
+                cur = plucked
+                continue
+            key = await self._get_segment_key(segment, scope)
+            if isinstance(segment, Name) and not isinstance(cur, (Scope, collections.abc.Mapping)):
+                try:
+                    cur = getattr(cur, key)
+                    continue
+                except AttributeError:
+                    pass
+            try:
+                cur = cur[key]
+            except KeyError:
+                raise PathNotFound(str(key))
+        return cur
+
+    def _parse_vectorized_target(self, set_path: SetPath):
+        """
+        Recognize vectorized write targets in either order:
+          A) ... Name, FilterQuery      (e.g., players.hp[< 50]: ...)
+          B) ... FilterQuery, Name      (e.g., players[.hp < 50].hp: ...)
+        Returns (base_segments, field_name, filter_query, meta) or None.
+        """
+        segs = list(getattr(set_path, 'segments', []) or [])
+        if len(segs) < 2:
+            return None
+        last = segs[-1]
+        prev = segs[-2]
+        meta = getattr(set_path, 'meta', None)
+        from slip.slip_datatypes import Name as _Name, FilterQuery as _FQ
+        if isinstance(last, _FQ) and isinstance(prev, _Name):
+            return segs[:-2], prev.text, last, meta
+        if isinstance(last, _Name) and isinstance(prev, _FQ):
+            return segs[:-2], last.text, prev, meta
+        return None
+
     async def set_vectorized_update(self, set_path: SetPath, update_expr_terms: list, scope: Scope):
         """
         Vectorized per-element update for patterns like: players.hp[< 50]: + 10
-        Shape supported:
-          - trailing FilterQuery
-          - the segment before the filter is a Name (field),
-          - the prefix resolves to a list container (e.g., players).
+        Supports both:
+          - ... Name, FilterQuery
+          - ... FilterQuery, Name
         Returns list of new values written.
         """
-        segs = list(set_path.segments)
-        if not segs or not isinstance(segs[-1], FilterQuery):
-            raise NotImplementedError("vectorized update requires a trailing filter segment")
-        filt = segs.pop()
-
-        if not segs or not isinstance(segs[-1], Name):
-            raise NotImplementedError("vectorized update expects a Name field before the filter")
-        field_name = segs.pop().text
+        parsed = self._parse_vectorized_target(set_path)
+        if not parsed:
+            raise NotImplementedError("vectorized update requires a trailing name/filter pair")
+        base_segs, field_name, filt, meta = parsed
 
         # Resolve the base container (e.g., 'players')
-        base_container = await self._resolve_value(GetPath(segs, getattr(set_path, 'meta', None)), scope)
+        base_container = await self._resolve_value(GetPath(base_segs, meta), scope)
         if not isinstance(base_container, list):
             raise TypeError("vectorized update base must be a list")
 
@@ -744,21 +1113,19 @@ class PathResolver:
     async def set_vectorized_assign(self, set_path: SetPath, value_expr_terms: list, scope: Scope):
         """
         Vectorized assignment for patterns like:
-          - players.hp[< 50]: 50         (broadcast)
-          - players.hp[< 50]: #[51, 52]  (elementwise when lengths match)
-        Same shape constraints as set_vectorized_update.
+          - players.hp[< 50]: 50
+          - players[.hp < 50].hp: * 1.1
+        Supports both:
+          - ... Name, FilterQuery
+          - ... FilterQuery, Name
         Returns list of new values written.
         """
-        segs = list(set_path.segments)
-        if not segs or not isinstance(segs[-1], FilterQuery):
-            raise NotImplementedError("vectorized assign requires a trailing filter segment")
-        filt = segs.pop()
+        parsed = self._parse_vectorized_target(set_path)
+        if not parsed:
+            raise NotImplementedError("vectorized assign requires a trailing name/filter pair")
+        base_segs, field_name, filt, meta = parsed
 
-        if not segs or not isinstance(segs[-1], Name):
-            raise NotImplementedError("vectorized assign expects a Name field before the filter")
-        field_name = segs.pop().text
-
-        base_container = await self._resolve_value(GetPath(segs, getattr(set_path, 'meta', None)), scope)
+        base_container = await self._resolve_value(GetPath(base_segs, meta), scope)
         if not isinstance(base_container, list):
             raise TypeError("vectorized assign base must be a list")
 
@@ -911,6 +1278,99 @@ class Evaluator:
             return result.value
         return result
 
+    async def _expand_code_literal(self, code: Code, scope: Scope) -> list[list]:
+        """
+        Perform definition-time template expansion on a Code literal:
+        - (inject X): evaluate X now in the current lexical scope and substitute the value verbatim
+        - (splice X):
+            * inside an expression: X must evaluate to a list; splice elements into the arg list
+            * as a standalone expression: X may evaluate to a list or a Code; splice contents as sibling expressions
+        Returns a new list-of-expressions suitable for Code(nodes).
+        """
+        async def preprocess_expr(terms: list) -> list:
+            out: list = []
+            for term in terms:
+                # Detect (inject ...) or (splice ...) forms: a Group with a single inner expression
+                if isinstance(term, Group) and term.nodes and len(term.nodes) == 1:
+                    inner_expr = term.nodes[0]
+                    if inner_expr and isinstance(inner_expr[0], GetPath):
+                        head = inner_expr[0]
+                        if len(head.segments) == 1 and isinstance(head.segments[0], Name):
+                            fname = head.segments[0].text
+                            args = inner_expr[1:]
+                            if fname == 'inject':
+                                if len(args) != 1:
+                                    raise TypeError("inject expects 1 argument")
+                                val = await self._eval(args[0], scope)
+                                out.append(val)
+                                continue
+                            if fname == 'splice':
+                                if len(args) != 1:
+                                    raise TypeError("splice expects 1 argument")
+                                val = await self._eval(args[0], scope)
+                                if isinstance(val, list):
+                                    out.extend(val)
+                                    continue
+                                raise TypeError("splice in expression requires a list")
+                # Recurse into nested Group (non-inject/splice)
+                if isinstance(term, Group):
+                    new_inner = []
+                    for expr in term.nodes:
+                        new_inner.append(await preprocess_expr(expr))
+                    new_group = Group(new_inner)
+                    if hasattr(term, 'loc'):
+                        try: new_group.loc = term.loc
+                        except Exception: pass
+                    out.append(new_group)
+                    continue
+                # Recurse into list literal elements
+                if isinstance(term, SlipList):
+                    new_items = []
+                    for expr in term.nodes:
+                        new_items.append(await preprocess_expr(expr))
+                    new_list = SlipList(new_items)
+                    if hasattr(term, 'loc'):
+                        try: new_list.loc = term.loc
+                        except Exception: pass
+                    out.append(new_list)
+                    continue
+                # Recurse into dict constructor tuple ('dict', [exprs])
+                match term:
+                    case ('dict', exprs):
+                        new_exprs = [await preprocess_expr(expr) for expr in exprs]
+                        out.append(('dict', new_exprs))
+                        continue
+                # Default: keep term as-is
+                out.append(term)
+            return out
+
+        out_exprs: list[list] = []
+        for expr in code.ast:
+            # Whole-expression splice: [(splice ...)]
+            if len(expr) == 1:
+                t = expr[0]
+                if isinstance(t, Group) and t.nodes and len(t.nodes) == 1:
+                    inner = t.nodes[0]
+                    if inner and isinstance(inner[0], GetPath):
+                        head = inner[0]
+                        if len(head.segments) == 1 and isinstance(head.segments[0], Name) and head.segments[0].text == 'splice':
+                            args = inner[1:]
+                            if len(args) != 1:
+                                raise TypeError("splice expects 1 argument")
+                            val = await self._eval(args[0], scope)
+                            if isinstance(val, Code):
+                                nested = await self._expand_code_literal(val, scope)
+                                out_exprs.extend(nested)
+                                continue
+                            if isinstance(val, list):
+                                for item in val:
+                                    out_exprs.append([item])
+                                continue
+                            raise TypeError("splice in statement requires code or list")
+            # Normal expression: recursively preprocess all nested terms
+            out_exprs.append(await preprocess_expr(expr))
+        return out_exprs
+
     async def _eval(self, node: Any, scope: Scope) -> Any:
         """Recursive dispatcher for evaluating any AST node."""
         self.current_node = node
@@ -1019,7 +1479,20 @@ class Evaluator:
                         sp = expr[0]
                         if len(sp.segments) == 1 and isinstance(sp.segments[0], Name):
                             key = sp.segments[0].text
-                            val = await self._eval_expr(expr[1:], temp_scope)
+                            rhs_terms = expr[1:]
+                            # Normalize i-string sugar inside dict values:
+                            # allow "key: i\"...\"" syntax by treating [GetPath('i'), IString(...)] as a single IString value
+                            if (
+                                len(rhs_terms) == 2
+                                and isinstance(rhs_terms[0], GetPath)
+                                and len(rhs_terms[0].segments) == 1
+                                and isinstance(rhs_terms[0].segments[0], Name)
+                                and rhs_terms[0].segments[0].text == 'i'
+                                and isinstance(rhs_terms[1], IString)
+                            ):
+                                val = rhs_terms[1]
+                            else:
+                                val = await self._eval_expr(rhs_terms, temp_scope)
                             temp_scope[key] = val
                             continue
                     # Fallback: evaluate any other expressions for their value/side-effects
@@ -1029,10 +1502,15 @@ class Evaluator:
                     out[k] = v
                 return out
 
-            case Code():
-                # Code is an unevaluated literal. It should be executed only by
-                # primitives like run/run-with, if/while/foreach, list, dict, or fn.
-                return node
+            case Code() as code:
+                # Definition-time expansion of inject/splice to produce a pure Code value
+                exprs = await self._expand_code_literal(code, scope)
+                new_code = Code(exprs)
+                try:
+                    new_code._expanded = True  # marker for run/run-with fast-path
+                except Exception:
+                    pass
+                return new_code
 
             case IString():
                 # Auto‑dedent and render with Mustache using the current lexical scope as context.
@@ -1081,11 +1559,7 @@ class Evaluator:
                         update_style = False
 
                 # Vectorized write: LHS ending with a filter on a plucked field
-                is_vectorized_target = (
-                    len(head_uneval.segments) >= 2
-                    and isinstance(head_uneval.segments[-1], FilterQuery)
-                    and isinstance(head_uneval.segments[-2], Name)
-                )
+                is_vectorized_target = self.path_resolver._parse_vectorized_target(head_uneval) is not None
                 if is_vectorized_target:
                     if update_style:
                         # Apply RHS as per-element update seeded with each old value
@@ -1242,7 +1716,29 @@ class Evaluator:
 
                     if isinstance(existing, GenericFunction):
                         if methods_to_add:
+                            # Merge by signature: add new methods and merge examples for duplicates
+                            sig_map = {}
+                            for m in existing.methods:
+                                s = getattr(m, 'meta', {}).get('type')
+                                if s is not None:
+                                    sig_map[repr(s)] = m
+                            to_add = []
                             for m in methods_to_add:
+                                s = getattr(m, 'meta', {}).get('type')
+                                key = repr(s) if s is not None else None
+                                if key is not None and key in sig_map:
+                                    # Merge examples into existing method
+                                    try:
+                                        dst_ex = sig_map[key].meta.setdefault('examples', [])
+                                        src_ex = getattr(m, 'meta', {}).get('examples') or []
+                                        dst_ex.extend(x for x in src_ex if x not in dst_ex)
+                                    except Exception:
+                                        pass
+                                    continue
+                                to_add.append(m)
+                                if key is not None:
+                                    sig_map[key] = m
+                            for m in to_add:
                                 existing.add_method(m)
                             await self.path_resolver.set(head_uneval, existing, scope)
                             return existing
@@ -1256,7 +1752,21 @@ class Evaluator:
                             name = head_uneval.segments[-1].text
                         gf = GenericFunction(name)
                         if methods_to_add:
+                            # Merge duplicates by signature and keep all examples
+                            sig_map = {}
                             for m in methods_to_add:
+                                s = getattr(m, 'meta', {}).get('type')
+                                key = repr(s) if s is not None else None
+                                if key is None or key not in sig_map:
+                                    sig_map[key] = m
+                                else:
+                                    try:
+                                        dst_ex = sig_map[key].meta.setdefault('examples', [])
+                                        src_ex = getattr(m, 'meta', {}).get('examples') or []
+                                        dst_ex.extend(x for x in src_ex if x not in dst_ex)
+                                    except Exception:
+                                        pass
+                            for m in sig_map.values():
                                 gf.add_method(m)
                         else:
                             gf.add_method(value)
@@ -1357,8 +1867,8 @@ class Evaluator:
                 if len(terms) > 1:
                     raise SyntaxError("del-path cannot be part of a larger expression.")
                 self.current_node = head_uneval
-                await self.path_resolver.delete(head_uneval, scope)
-                return None
+                result = await self.path_resolver.delete(head_uneval, scope)
+                return result
 
         # If not assignment, it's a value/call expression.
         remaining_terms = terms
@@ -1540,7 +2050,152 @@ class Evaluator:
                 if isinstance(remaining_terms[0], GetPath) and len(remaining_terms[0].segments) == 1 and isinstance(remaining_terms[0].segments[0], Name):
                     name = remaining_terms[0].segments[0].text
 
-                evaluated_args = [await self._eval(arg, scope) for arg in arg_terms] if arg_terms else []
+                from slip.slip_datatypes import GetPath as _GP, Name as _Name, Code as _Code
+                evaluated_args = []
+                i = 0
+
+                async def _apply_chain(base_val, segs):
+                    cur = base_val
+                    applied = 0
+                    for seg in segs:
+                        try:
+                            cur = await self.path_resolver._apply_segments(cur, [seg], scope)
+                            applied += 1
+                        except Exception:
+                            break
+                    return cur, applied
+
+                while i < len(arg_terms):
+                    base_term = arg_terms[i]
+                    base_val = await self._eval(base_term, scope)
+
+                    # Collect consecutive single-name get-paths that could form a property chain.
+                    segs = []
+                    j = i + 1
+                    allow_bare = isinstance(base_term, (Group, _Code))
+                    term_seg_counts = []
+                    while j < len(arg_terms):
+                        t = arg_terms[j]
+                        if not isinstance(t, _GP):
+                            break
+                        segs_list = list(getattr(t, 'segments', []) or [])
+                        if not segs_list:
+                            break
+
+                        # Case 1: single-name get-path
+                        if len(segs_list) == 1 and isinstance(segs_list[0], _Name):
+                            name_txt = segs_list[0].text
+                            if isinstance(name_txt, str) and name_txt.startswith('.') and len(name_txt) > 1:
+                                # .field after any base
+                                segs.append(_Name(name_txt[1:]))
+                                term_seg_counts.append(1)
+                                j += 1
+                                continue
+                            if allow_bare:
+                                # Bare name allowed after Group/Code base: ( ... ).field
+                                segs.append(_Name(name_txt))
+                                term_seg_counts.append(1)
+                                j += 1
+                                continue
+                            break
+
+                        # Case 2: multi-name get-path in the immediate next term; fold contiguous name segments
+                        if j == i + 1 and all(isinstance(s, _Name) for s in segs_list):
+                            first_txt = segs_list[0].text
+                            if (isinstance(first_txt, str) and first_txt.startswith('.') and len(first_txt) > 1) or allow_bare:
+                                # Normalize each name (strip leading '.' if present)
+                                added = 0
+                                for s in segs_list:
+                                    txt = s.text
+                                    if isinstance(txt, str) and txt.startswith('.') and len(txt) > 1:
+                                        segs.append(_Name(txt[1:]))
+                                    else:
+                                        segs.append(_Name(txt))
+                                    added += 1
+                                term_seg_counts.append(added)
+                                j += 1
+                                continue
+
+                        break
+
+                    if segs:
+                        # Optional debug: show collected segments per arg term
+                        self._dbg("FOLD collect",
+                                  "base_type", type(base_term).__name__,
+                                  "segs", [getattr(s, "text", None) for s in segs],
+                                  "term_counts", term_seg_counts)
+                        cur, applied = await _apply_chain(base_val, segs)
+                        if applied > 0:
+                            # Determine how many arg terms were fully consumed by the applied segments
+                            terms_used = 0
+                            remaining = applied
+                            for c in term_seg_counts:
+                                if remaining >= c:
+                                    terms_used += 1
+                                    remaining -= c
+                                else:
+                                    break
+                            self._dbg("FOLD apply", "applied", applied, "terms_used", terms_used)
+                            evaluated_args.append(cur)
+                            i = i + 1 + terms_used
+                            continue
+
+                    # No usable chain → keep base as-is and don’t consume the next term
+                    evaluated_args.append(base_val)
+                    i += 1
+                # Auto‑invoke zero‑arity callables when they appear as arguments (e.g., 'keys current-scope')
+                async def _autocall_if_zero_arity(v):
+                    def _should_autocall_zero_arity(v):
+                        try:
+                            from slip.slip_datatypes import GenericFunction as _GF, SlipFunction as _SF, Sig as _Sig, Code as _Code
+                            if isinstance(v, _GF):
+                                for m in v.methods:
+                                    s = getattr(m, 'meta', {}).get('type')
+                                    if isinstance(s, _Sig):
+                                        base = len(s.positional) + len(s.keywords)
+                                        if base == 0 and s.rest is None:
+                                            return True
+                                    else:
+                                        if isinstance(m.args, _Code) and len(m.args.nodes) == 0:
+                                            return True
+                                return False
+                            if isinstance(v, _SF):
+                                s = getattr(v, 'meta', {}).get('type')
+                                if isinstance(s, _Sig):
+                                    base = len(s.positional) + len(s.keywords)
+                                    return base == 0 and s.rest is None
+                                if isinstance(v.args, _Code) and len(v.args.nodes) == 0:
+                                    return True
+                                return False
+                        except Exception:
+                            pass
+                        # Python callable fallback
+                        try:
+                            import inspect
+                            sig = inspect.signature(v)
+                            req = [
+                                p for p in sig.parameters.values()
+                                if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                                and p.default is inspect._empty
+                            ]
+                            return len(req) == 0
+                        except Exception:
+                            return False
+                    if _should_autocall_zero_arity(v):
+                        return await self.call(v, [], scope)
+                    return v
+                def _is_call_primitive(fn):
+                    try:
+                        import inspect as _inspect
+                        if _inspect.ismethod(fn):
+                            self_obj = getattr(fn, "__self__", None)
+                            if getattr(self_obj, "__class__", None).__name__ == "StdLib" and getattr(fn, "__name__", "") == "_call":
+                                return True
+                    except Exception:
+                        pass
+                    return False
+                if evaluated_args and not _is_call_primitive(head_val):
+                    evaluated_args = [await _autocall_if_zero_arity(a) for a in evaluated_args]
                 self._dbg(
                     "CALL prefix",
                     getattr(head_val, "__class__", type(head_val)).__name__,
@@ -1608,7 +2263,32 @@ class Evaluator:
             op_val = await self._eval(raw_op_term, scope)
 
             # Keep resolving/unwrapping aliases until we find a PipedPath.
+            visited_ops = set()
+            steps = 0
             while not isinstance(op_val, PipedPath):
+                steps += 1
+                if steps > 50:
+                    err = RecursionError("maximum operator resolution depth exceeded")
+                    try:
+                        err.slip_obj = raw_op_term
+                    except Exception:
+                        pass
+                    raise err
+                # Detect simple self-referential loops on get-path objects
+                try:
+                    key = getattr(op_val, "to_str_repr", lambda: repr(op_val))()
+                    if key in visited_ops:
+                        err = RecursionError("operator resolution cycle detected")
+                        try:
+                            err.slip_obj = raw_op_term
+                        except Exception:
+                            pass
+                        raise err
+                    visited_ops.add(key)
+                except Exception:
+                    # best-effort; ignore if op_val has no stable repr
+                    pass
+
                 # Normalize ambiguous '/' token parsed as Root into operator name '/'
                 if isinstance(op_val, GetPath) and len(op_val.segments) == 1 and op_val.segments[0] is Root:
                     op_val = GetPath([Name('/')], op_val.meta)
@@ -1623,7 +2303,16 @@ class Evaluator:
                     break
                 # Resolve GetPath references from scope (e.g., '+' -> '|add')
                 if isinstance(op_val, GetPath):
-                    op_val = await self._eval(op_val, scope)
+                    next_val = await self._eval(op_val, scope)
+                    # Guard against pathological self-aliases that re-yield the same get-path
+                    if isinstance(next_val, GetPath) and getattr(next_val, "to_str_repr", lambda: None)() == getattr(op_val, "to_str_repr", lambda: None)():
+                        err = RecursionError("operator resolution cycle detected")
+                        try:
+                            err.slip_obj = raw_op_term
+                        except Exception:
+                            pass
+                        raise err
+                    op_val = next_val
                     continue
                 # Unwrap simple Group/Code wrappers
                 if isinstance(op_val, Group) and op_val.nodes and isinstance(op_val.nodes[0], list) and op_val.nodes[0]:
@@ -1740,59 +2429,7 @@ class Evaluator:
                 k += 1 + span
                 continue
 
-            # Special-case: attach examples without calling into StdLib for Sig RHS
-            if not unary_mode and func_name == 'example':
-                rhs_term = remaining_terms[k + 1]
-                if isinstance(rhs_term, Sig):
-                    from slip.slip_datatypes import SlipFunction as _SF, GenericFunction as _GF
-                    target = result
-                    if isinstance(target, (_SF, _GF)):
-                        # Attach example to target.meta.examples
-                        meta = getattr(target, 'meta', None)
-                        if meta is None:
-                            try:
-                                target.meta = {}
-                                meta = target.meta
-                            except Exception:
-                                pass
-                        if isinstance(meta, dict):
-                            examples = meta.setdefault('examples', [])
-                            examples.append(rhs_term)
-                            result = target
-                            k += 2
-                            continue
-                # If target isn’t a function/generic, fall through to normal call
 
-            # Special-case: attach guards without calling into StdLib when RHS is a Code block
-            if not unary_mode and func_name == 'guard':
-                rhs_term = remaining_terms[k + 1]
-                # Accept a literal Code block or a variable that evaluates to Code
-                cond_code = rhs_term if isinstance(rhs_term, Code) else None
-                if cond_code is None:
-                    try:
-                        maybe = await self._eval(rhs_term, scope)
-                        if isinstance(maybe, Code):
-                            cond_code = maybe
-                    except Exception:
-                        cond_code = None
-                if cond_code is not None:
-                    target = result
-                    from slip.slip_datatypes import SlipFunction as _SF, GenericFunction as _GF
-                    if isinstance(target, (_SF, _GF)):
-                        meta = getattr(target, 'meta', None)
-                        if meta is None:
-                            try:
-                                target.meta = {}
-                                meta = target.meta
-                            except Exception:
-                                meta = None
-                        if isinstance(meta, dict):
-                            guards_list = meta.setdefault('guards', [])
-                            guards_list.append(cond_code)
-                            result = target
-                            k += 2
-                            continue
-                # If not a Code block, fall through to normal call
 
             # Normal infix: evaluate RHS and call the function
             self.current_node = remaining_terms[k + 1]
@@ -1878,94 +2515,442 @@ class Evaluator:
                 cur = cur.parent
             return False
 
-        offset = len(sig.positional)
-        idx = 0
-        for _, type_spec in sig.keywords.items():
-            # Normalize path-literal annotations to runtime get-path form
-            if isinstance(type_spec, PathLiteral):
-                type_spec = type_spec.inner
-
-            arg_i = offset + idx
-            if arg_i >= len(args):
-                return False
-            val = args[arg_i]
-
-            # Try to resolve a scope annotation first (prototype/type dispatch)
+        async def _spec_ok(spec, val) -> bool:
+            # Unwrap path-literals
+            if isinstance(spec, PathLiteral):
+                spec = spec.inner
+            # Recursive forms
+            if isinstance(spec, tuple) and len(spec) > 0:
+                tag = spec[0]
+                parts = list(spec[1] or [])
+                if tag == 'and':
+                    for p in parts:
+                        if not await _spec_ok(p, val):
+                            return False
+                    return True
+                if tag == 'union':
+                    for p in parts:
+                        if await _spec_ok(p, val):
+                            return True
+                    return False
+            # Resolve to Scope or primitive name
+            resolved = None
             target_scope = None
-            resolved_val = None
-            # Normalize backticked single-name annotations like `list-like` to plain name for resolution
-            if isinstance(type_spec, GetPath) and len(type_spec.segments) == 1 and isinstance(type_spec.segments[0], Name):
-                ntext = type_spec.segments[0].text
-                if isinstance(ntext, str) and len(ntext) >= 2 and ntext[0] == '`' and ntext[-1] == '`':
-                    type_spec = GetPath([Name(ntext[1:-1])], getattr(type_spec, 'meta', None))
-            if isinstance(type_spec, GetPath):
-                # Resolve in method closure first, then in current scope
+            if isinstance(spec, GetPath):
+                # Normalize backticked single-name to plain name for primitive check
+                if len(spec.segments) == 1 and isinstance(spec.segments[0], Name):
+                    ntext = spec.segments[0].text
+                    if isinstance(ntext, str) and len(ntext) >= 2 and ntext[0] == '`' and ntext[-1] == '`':
+                        spec = GetPath([Name(ntext[1:-1])], getattr(spec, 'meta', None))
                 try:
-                    resolved_val = await self.path_resolver.get(type_spec, method.closure)
+                    resolved = await self.path_resolver.get(spec, method.closure)
                 except Exception:
                     try:
-                        resolved_val = await self.path_resolver.get(type_spec, scope)
+                        resolved = await self.path_resolver.get(spec, scope)
                     except Exception:
-                        resolved_val = None
-            elif isinstance(type_spec, Scope):
-                target_scope = type_spec
-
-            # If the resolved value is a Scope (prototype or mixin), enforce capability match
-            if isinstance(resolved_val, Scope) or isinstance(target_scope, Scope):
-                target = resolved_val if isinstance(resolved_val, Scope) else target_scope
-                if not isinstance(val, Scope):
-                    return False
-                if not _scope_matches(val, target):
-                    return False
-                idx += 1
-                continue
-
-            # Union alias: if the resolved annotation is a Sig, treat its positional names as a set of allowed primitive types
-            if isinstance(resolved_val, Sig):
-                allowed: set[str] = set()
-                for item in getattr(resolved_val, 'positional', []) or []:
-                    n = None
-                    if isinstance(item, str):
-                        n = item
-                    else:
-                        try:
-                            # Accept simple GetPath names as well
-                            if isinstance(item, GetPath) and len(item.segments) == 1 and isinstance(item.segments[0], Name):
-                                n = item.segments[0].text
-                        except Exception:
-                            n = None
+                        resolved = None
+            elif isinstance(spec, Scope):
+                target_scope = spec
+            # Scope requirement
+            if isinstance(resolved, Scope) or isinstance(target_scope, Scope):
+                target = resolved if isinstance(resolved, Scope) else target_scope
+                return isinstance(val, Scope) and _scope_matches(val, target)
+            # Primitive requirement via single-name annotation
+            ann_name = None
+            if isinstance(spec, GetPath) and len(spec.segments) == 1 and isinstance(spec.segments[0], Name):
+                ann_name = spec.segments[0].text
+            if ann_name in PRIMITIVES:
+                return _type_name(val) == ann_name
+            # Sig alias (union of primitives/scopes)
+            if isinstance(resolved, Sig):
+                allowed = set()
+                for item in getattr(resolved, 'positional', []) or []:
+                    n = item if isinstance(item, str) else (
+                        item.segments[0].text if isinstance(item, GetPath) and len(item.segments) == 1 and isinstance(item.segments[0], Name) else None
+                    )
                     if isinstance(n, str) and len(n) >= 2 and n[0] == '`' and n[-1] == '`':
                         n = n[1:-1]
                     if isinstance(n, str):
                         allowed.add(n)
-                if allowed and _type_name(val) not in allowed:
-                    return False
-                idx += 1
-                continue
+                return bool(allowed) and (_type_name(val) in allowed)
+            # Unknown/unsupported element
+            return False
 
-            # If not a Scope annotation, check for primitive type path annotation like `string`, `int`, `path`, ...
-            ann_name = None
-            if isinstance(type_spec, GetPath) and len(type_spec.segments) == 1 and isinstance(type_spec.segments[0], Name):
-                ann_name = type_spec.segments[0].text
-                # Signature annotations often come from backticked path literals in sigs: `string`, `int`, etc.
-                # Normalize by stripping surrounding backticks so we can match primitive names.
-                if isinstance(ann_name, str) and len(ann_name) >= 2 and ann_name[0] == '`' and ann_name[-1] == '`':
-                    ann_name = ann_name[1:-1]
-
-            if ann_name in PRIMITIVES:
-                if _type_name(val) != ann_name:
-                    return False
-                idx += 1
-                continue
-
-            # Unknown/unsupported annotation form -> ignore constraint
+        offset = len(sig.positional)
+        idx = 0
+        for _, type_spec in sig.keywords.items():
+            arg_i = offset + idx
+            if arg_i >= len(args):
+                return False
+            val = args[arg_i]
+            # Unified recursive matcher handles primitives, scopes, Sig aliases,
+            # and nested ('and', ...)/('union', ...) combinations.
+            if not await _spec_ok(type_spec, val):
+                return False
             idx += 1
 
         return True
 
+    def _primitive_type_name(self, val) -> str:
+        from slip.slip_datatypes import (
+            Scope, Code, IString, SlipFunction, GenericFunction,
+            GetPath, SetPath, DelPath, PipedPath, PathLiteral, MultiSetPath
+        )
+        if val is None: return 'none'
+        if isinstance(val, bool): return 'boolean'
+        if isinstance(val, int) and not isinstance(val, bool): return 'int'
+        if isinstance(val, float): return 'float'
+        if isinstance(val, IString): return 'i-string'
+        if isinstance(val, str): return 'string'
+        if isinstance(val, list): return 'list'
+        if isinstance(val, (dict, collections.abc.Mapping)): return 'dict'
+        if isinstance(val, Scope): return 'scope'
+        if isinstance(val, (GetPath, SetPath, DelPath, PipedPath, PathLiteral, MultiSetPath)): return 'path'
+        if isinstance(val, (SlipFunction, GenericFunction)) or callable(val): return 'function'
+        if isinstance(val, Code): return 'code'
+        return 'string'
+
+    def _scope_family(self, scope_obj) -> set:
+        from slip.slip_datatypes import Scope as _Scope
+        if not isinstance(scope_obj, _Scope):
+            return set()
+        # cache on the scope itself
+        try:
+            fam = scope_obj.meta.get('_family')
+            if fam:
+                return fam
+        except Exception:
+            pass
+        seen = set()
+        stack = [scope_obj]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            # parent
+            p = cur.meta.get('parent')
+            if isinstance(p, _Scope):
+                stack.append(p)
+            # mixins
+            for m in cur.meta.get('mixins', []) or []:
+                if isinstance(m, _Scope):
+                    stack.append(m)
+        try:
+            scope_obj.meta['_family'] = seen
+        except Exception:
+            pass
+        return seen
+
+    def _value_family(self, val) -> tuple[set, int]:
+        # Returns (family_set, size) where size is used as denominator in coverage
+        from slip.slip_datatypes import Scope as _Scope
+        if isinstance(val, _Scope):
+            fam = self._scope_family(val)
+            return fam, len(fam) if fam else 1
+        # primitives → singleton size
+        return {self._primitive_type_name(val)}, 1
+
+    def _compile_annotation_item(self, item, method_closure, current_scope):
+        # Normalize a single annotation element into a compiled form
+        from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL, Name as _Name, Sig as _Sig, Scope as _Scope
+        # Path literal -> inner
+        if isinstance(item, _PL):
+            item = item.inner
+        # Single-name get-path → may resolve to scope or primitive name
+        if isinstance(item, _GP) and len(item.segments) == 1 and isinstance(item.segments[0], _Name):
+            n = item.segments[0].text
+            # strip backticks
+            if isinstance(n, str) and len(n) >= 2 and n[0] == '`' and n[-1] == '`':
+                n = n[1:-1]
+            # Try resolve to Scope at definition time (closure first, then current scope)
+            try:
+                v = method_closure[n]
+            except Exception:
+                try:
+                    v = current_scope[n]
+                except Exception:
+                    v = None
+            from slip.slip_datatypes import Scope as _Scope2
+            if isinstance(v, _Scope2):
+                return {'kind': 'scope', 'scope': v}
+            # else treat as primitive name
+            return {'kind': 'prim', 'name': n}
+        # Already a Scope
+        if isinstance(item, _Scope):
+            return {'kind': 'scope', 'scope': item}
+        # Nested union (Sig) in annotation → union
+        if isinstance(item, _Sig):
+            # compile each positional child
+            compiled = []
+            for pos in getattr(item, 'positional', []) or []:
+                compiled.append(self._compile_annotation_item(pos, method_closure, current_scope))
+            return {'kind': 'union', 'items': compiled}
+        # Tuple ('and', [...])
+        if isinstance(item, tuple) and len(item) > 0 and item[0] == 'and':
+            compiled = [self._compile_annotation_item(x, method_closure, current_scope) for x in item[1]]
+            # flatten and dedupe by identity
+            flat = []
+            for it in compiled:
+                if it.get('kind') == 'and':
+                    flat.extend(it['items'])
+                else:
+                    flat.append(it)
+            return {'kind': 'and', 'items': flat}
+        # Tuple ('union', [...])
+        if isinstance(item, tuple) and len(item) > 0 and item[0] == 'union':
+            compiled = [self._compile_annotation_item(x, method_closure, current_scope) for x in item[1]]
+            return {'kind': 'union', 'items': compiled}
+        # Fallback: re-run through GP normalization
+        return self._compile_annotation_item(self._to_getpath_like(item), method_closure, current_scope)
+
+    def _to_getpath_like(self, value):
+        # Minimal helper to convert strings to GetPath(Name(...)) for annotation compilation
+        from slip.slip_datatypes import GetPath as _GP, Name as _Name, PathLiteral as _PL
+        if isinstance(value, _GP):
+            return value
+        if isinstance(value, _PL):
+            return value.inner
+        if isinstance(value, str):
+            return _GP([_Name(value)])
+        return value
+
+    def _compile_method_signature(self, method, current_scope):
+        # Early-bound compilation; cache on method.meta['_compiled_sig']
+        from slip.slip_datatypes import Sig as _Sig, Code as _Code
+        meta = getattr(method, 'meta', {}) or {}
+        sig = meta.get('type')
+        if not isinstance(sig, _Sig):
+            return None
+        cache = meta.get('_compiled_sig')
+        if cache:
+            return cache
+        # Build positional count and typed keywords in declaration order
+        pos_count = len(sig.positional or [])
+        compiled_kws = []
+        for name, ann in (sig.keywords or {}).items():
+            compiled_kws.append((
+                name if isinstance(name, str) else getattr(name, 'text', str(name)),
+                self._compile_annotation_item(ann, method.closure, current_scope)
+            ))
+        out = {'positional': pos_count, 'keywords': compiled_kws, 'rest': sig.rest is not None}
+        meta['_compiled_sig'] = out
+        return out
+
+    def _annotation_applicability_and_coverage(self, compiled_ann, arg_val) -> tuple[bool, float, int, int]:
+        """
+        Returns (applicable, coverage_score, detail_count, signature_family_size)
+        - coverage_score in [0,1]
+        - detail_count used for tie-breaker 2 (total required types count)
+        """
+        kind = compiled_ann.get('kind')
+        arg_fam, arg_size = self._value_family(arg_val)
+
+        def scope_ok(scope_t):
+            return scope_t in arg_fam
+
+        def scope_family(scope_t):
+            fam = self._scope_family(scope_t)
+            return fam if fam else {scope_t}
+
+        if kind == 'prim':
+            name = compiled_ann['name']
+            # First, handle real primitives
+            if self._primitive_type_name(arg_val) == name:
+                return True, 1.0, 1, 1
+            # If name is not a real primitive, attempt scope-name matching against the argument's family.
+            try:
+                from slip.slip_datatypes import Scope as _Scope
+            except Exception:
+                _Scope = None
+            if _Scope and isinstance(arg_val, _Scope):
+                arg_fam, arg_size = self._value_family(arg_val)
+                # Match by meta.name of any scope in the argument's family
+                for s in arg_fam:
+                    try:
+                        sname = s.meta.get('name')
+                    except Exception:
+                        sname = None
+                    if sname == name:
+                        # Treat this like a scope match; use the signature side family size for coverage
+                        fam = self._scope_family(s)
+                        fam_size = len(fam) if fam else 1
+                        cov = fam_size / max(1, arg_size)
+                        return True, cov, 1, fam_size
+            # No match
+            return False, 0.0, 0, 0
+        if kind == 'scope':
+            fam = scope_family(compiled_ann['scope'])
+            applicable = compiled_ann['scope'] in arg_fam
+            cov = (len(fam) / max(1, arg_size)) if applicable else 0.0
+            return applicable, cov, 1, len(fam)
+        if kind == 'and':
+            # all members must be applicable; accumulate signature family size
+            scope_union = set()
+            prim_count = 0
+            union_fam_sum = 0
+            detail = 0
+            for it in compiled_ann['items']:
+                ok, _cov, dcnt, fam_sz = self._annotation_branch_applicable(it, arg_val)
+                if not ok:
+                    return False, 0.0, 0, 0
+                if it['kind'] == 'scope':
+                    scope_union |= self._scope_family(it['scope'])
+                    detail += 1
+                elif it['kind'] == 'prim':
+                    prim_count += 1
+                    detail += 1
+                elif it['kind'] in ('and', 'union'):
+                    # Include the chosen branch’s family size and detail
+                    union_fam_sum += fam_sz
+                    detail += dcnt
+                else:
+                    detail += 1
+            fam_size = len(scope_union) + prim_count + union_fam_sum
+            cov = fam_size / max(1, arg_size)
+            return True, cov, detail, fam_size
+        if kind == 'union':
+            # pick the best matching branch
+            best = (False, 0.0, 0, 0)
+            for it in compiled_ann['items']:
+                ok, cov, dcnt, fam_sz = self._annotation_applicability_and_coverage(it, arg_val)
+                if ok and (cov > best[1]):
+                    best = (ok, cov, dcnt, fam_sz)
+            return best
+        # Fallback: treat as non-applicable
+        return False, 0.0, 0, 0
+
+    # small helper used by _annotation_applicability_and_coverage for 'and' branches
+    def _annotation_branch_applicable(self, compiled_ann, arg_val):
+        return self._annotation_applicability_and_coverage(compiled_ann, arg_val)
+
+    async def _legacy_dispatch_generic(self, func: GenericFunction, args: list, scope: Scope):
+        # This is the logic from the older 'match func: GenericFunction()' branch.
+        def _build_guard_scope(method: SlipFunction):
+            call_scope = Scope(parent=method.closure)
+            s = getattr(method, 'meta', {}).get('type')
+            if isinstance(s, Sig):
+                for param_name, arg_val in zip(s.positional, args):
+                    name = param_name if isinstance(param_name, str) else getattr(param_name, 'text', str(param_name))
+                    call_scope[name] = arg_val
+                offset = len(s.positional)
+                for i, param_name in enumerate(s.keywords.keys()):
+                    if offset + i < len(args):
+                        name = param_name if isinstance(param_name, str) else getattr(param_name, 'text', str(param_name))
+                        call_scope[name] = args[offset + i]
+                if s.rest is not None:
+                    name = s.rest if isinstance(s.rest, str) else getattr(s.rest, 'text', str(s.rest))
+                    base = len(s.positional) + len(s.keywords)
+                    call_scope[name] = args[base:] if len(args) > base else []
+            elif isinstance(method.args, Code):
+                params = method.args.nodes
+                for param_expr, arg_val in zip(params, args):
+                    pn = param_expr
+                    if isinstance(pn, list) and len(pn) == 1:
+                        pn = pn[0]
+                    if isinstance(pn, GetPath) and len(pn.segments) == 1 and isinstance(pn.segments[0], Name):
+                        call_scope[pn.segments[0].text] = arg_val
+            return call_scope
+
+        guarded_exact: list[SlipFunction] = []
+        plain_exact: list[SlipFunction] = []
+        for m in reversed(func.methods):
+            s = getattr(m, 'meta', {}).get('type')
+            if not isinstance(s, Sig):
+                continue
+            base = len(s.positional) + len(s.keywords)
+            if s.rest is not None or len(args) != base:
+                continue
+            if not await self._sig_types_match(s, m, args, scope):
+                continue
+            guards = getattr(m, 'meta', {}).get('guards') or []
+            if guards:
+                guard_scope = _build_guard_scope(m)
+                ok = True
+                for g in guards:
+                    val = await self._eval(g.ast, guard_scope) if isinstance(g, Code) else await self._eval(g, guard_scope)
+                    if isinstance(val, Response) and isinstance(val.status, PathLiteral) and isinstance(val.status.inner, GetPath) and len(val.status.inner.segments) == 1 and isinstance(val.status.inner.segments[0], Name) and val.status.inner.segments[0].text == "return":
+                        val = val.value
+                    if not val:
+                        ok = False
+                        break
+                if ok:
+                    guarded_exact.append(m)
+            else:
+                plain_exact.append(m)
+        if guarded_exact:
+            return await self.call(guarded_exact[0], args, scope)
+        if plain_exact:
+            return await self.call(plain_exact[0], args, scope)
+
+        exact_nonvar_guarded: list[SlipFunction] = []
+        exact_nonvar_plain: list[SlipFunction] = []
+        variadic_ok_guarded: list[tuple[int, SlipFunction]] = []
+        variadic_ok_plain: list[tuple[int, SlipFunction]] = []
+        no_sig_guarded: list[SlipFunction] = []
+        no_sig_plain: list[SlipFunction] = []
+
+        for m in func.methods:
+            s = getattr(m, 'meta', {}).get('type')
+            guards = getattr(m, 'meta', {}).get('guards') or []
+            types_ok = True
+            base = 0
+            if isinstance(s, Sig):
+                base = len(s.positional) + len(s.keywords)
+                types_ok = await self._sig_types_match(s, m, args, scope)
+            guard_ok = True
+            if guards:
+                guard_scope = _build_guard_scope(m)
+                for g in guards:
+                    val = await self._eval(g.ast, guard_scope) if isinstance(g, Code) else await self._eval(g, guard_scope)
+                    if isinstance(val, Response) and isinstance(val.status, PathLiteral) and isinstance(val.status.inner, GetPath) and len(val.status.inner.segments) == 1 and isinstance(val.status.inner.segments[0], Name) and val.status.inner.segments[0].text == "return":
+                        val = val.value
+                    if not val:
+                        guard_ok = False
+                        break
+            if not guard_ok:
+                continue
+            if isinstance(s, Sig):
+                if s.rest is None and len(args) == base and types_ok:
+                    (exact_nonvar_guarded if guards else exact_nonvar_plain).append(m)
+                elif s.rest is not None and len(args) >= base and types_ok:
+                    (variadic_ok_guarded if guards else variadic_ok_plain).append((base, m))
+            else:
+                (no_sig_guarded if guards else no_sig_plain).append(m)
+
+        if exact_nonvar_guarded:
+            return await self.call(exact_nonvar_guarded[-1], args, scope)
+        if exact_nonvar_plain:
+            return await self.call(exact_nonvar_plain[-1], args, scope)
+        if variadic_ok_guarded:
+            max_base = max(b for b, _ in variadic_ok_guarded)
+            options = [m for b, m in variadic_ok_guarded if b == max_base]
+            return await self.call(options[-1], args, scope)
+        if variadic_ok_plain:
+            max_base = max(b for b, _ in variadic_ok_plain)
+            options = [m for b, m in variadic_ok_plain if b == max_base]
+            return await self.call(options[-1], args, scope)
+        if no_sig_guarded:
+            return await self.call(no_sig_guarded[-1], args, scope)
+        # Fallback: try core- prefixed builtin (e.g., has-key? -> core-has-key?)
+        try:
+            name = getattr(func, "name", None)
+            if isinstance(name, str):
+                from slip.slip_datatypes import GetPath as _GP, Name as _Name
+                core_path = _GP([_Name(f"core-{name}")])
+                alt = await self.path_resolver.get(core_path, scope)
+                return await self.call(alt, args, scope)
+        except Exception:
+            pass
+        err = TypeError("No matching method")
+        try:
+            err.slip_detail = "No matching method"
+        except Exception:
+            pass
+        raise err
+
     async def call(self, func: Any, args: List[Any], scope: Scope):
         """Calls a callable (SlipFunction or Python function)."""
-        from slip.slip_datatypes import GenericFunction, Sig as SigType
         self._dbg("Evaluator.call", type(func).__name__, "argc", len(args))
         # Normalize arguments: unwrap 'return' responses so nested calls receive values.
         if isinstance(args, list):
@@ -1973,6 +2958,183 @@ class Evaluator:
                 (a.value if isinstance(a, Response) and isinstance(a.status, PathLiteral) and isinstance(a.status.inner, GetPath) and len(a.status.inner.segments) == 1 and isinstance(a.status.inner.segments[0], Name) and a.status.inner.segments[0].text == "return" else a)
                 for a in args
             ]
+
+        if isinstance(func, GenericFunction):
+            self._dbg("GF call", func.name, "argc", len(args), "methods", len(func.methods))
+
+            def _build_guard_scope(method: SlipFunction):
+                call_scope = Scope(parent=method.closure)
+                s = getattr(method, 'meta', {}).get('type')
+                if isinstance(s, Sig):
+                    for param_name, arg_val in zip(s.positional, args):
+                        name = param_name if isinstance(param_name, str) else getattr(param_name, 'text', str(param_name))
+                        call_scope[name] = arg_val
+                    offset = len(s.positional)
+                    for i, param_name in enumerate(s.keywords.keys()):
+                        if offset + i < len(args):
+                            name = param_name if isinstance(param_name, str) else getattr(param_name, 'text', str(param_name))
+                            call_scope[name] = args[offset + i]
+                    if s.rest is not None:
+                        name = s.rest if isinstance(s.rest, str) else getattr(s.rest, 'text', str(s.rest))
+                        base = len(s.positional) + len(s.keywords)
+                        call_scope[name] = args[base:] if len(args) > base else []
+                return call_scope
+
+            exact, variadic, untyped = [], [], []
+            for m in func.methods:
+                s = getattr(m, 'meta', {}).get('type')
+                if isinstance(s, Sig):
+                    base = len(s.positional) + len(s.keywords)
+                    if s.rest is None and len(args) == base:
+                        exact.append(m)
+                    elif s.rest is not None and len(args) >= base:
+                        variadic.append(m)
+                else:
+                    untyped.append(m)
+
+            if exact:
+                tier = exact
+            elif variadic:
+                tier = variadic
+            else:
+                tier = untyped
+
+            guarded = []
+            plain = []
+            for m in tier:
+                guards = getattr(m, 'meta', {}).get('guards') or []
+                if not guards:
+                    plain.append(m)
+                    continue
+                call_scope = _build_guard_scope(m)
+                ok = True
+                for g in guards:
+                    val = await self._eval(g.ast, call_scope) if hasattr(g, 'ast') else await self._eval(g, call_scope)
+                    if isinstance(val, Response):
+                        st = val.status
+                        if (
+                            isinstance(st, PathLiteral)
+                            and isinstance(getattr(st, "inner", None), GetPath)
+                            and len(st.inner.segments) == 1
+                            and isinstance(st.inner.segments[0], Name)
+                            and st.inner.segments[0].text == "return"
+                        ):
+                            val = val.value
+                    if not val:
+                        ok = False
+                        break
+                if ok:
+                    guarded.append(m)
+
+            candidates = guarded + plain
+
+            if not candidates:
+                # Lenient fallback: If no candidates in the primary tier, try exact-arity
+                # methods by truncating extra arguments from the right.
+                exact_guarded = []
+                exact_plain = []
+                for m in func.methods:
+                    s = getattr(m, 'meta', {}).get('type')
+                    if not isinstance(s, Sig):
+                        continue
+                    base = len(s.positional) + len(s.keywords)
+                    if s.rest is not None:
+                        continue
+                    if len(args) < base:
+                        continue
+                    # Check types/guards against truncated args
+                    trunc_args = args[:base]
+                    types_ok = await self._sig_types_match(s, m, trunc_args, scope)
+                    if not types_ok:
+                        continue
+                    guards = getattr(m, 'meta', {}).get('guards') or []
+                    if guards:
+                        call_scope = _build_guard_scope(m)
+                        ok = True
+                        for g in guards:
+                            val = await self._eval(g.ast, call_scope) if hasattr(g, 'ast') else await self._eval(g, call_scope)
+                            if isinstance(val, Response):
+                                st = val.status
+                                if (
+                                    isinstance(st, PathLiteral)
+                                    and isinstance(getattr(st, "inner", None), GetPath)
+                                    and len(st.inner.segments) == 1
+                                    and isinstance(st.inner.segments[0], Name)
+                                    and st.inner.segments[0].text == "return"
+                                ):
+                                    val = val.value
+                            if not val:
+                                ok = False
+                                break
+                        if ok:
+                            exact_guarded.append((m, trunc_args))
+                    else:
+                        exact_plain.append((m, trunc_args))
+                # Prefer most recently defined guarded, then plain
+                if exact_guarded:
+                    m, trunc_args = exact_guarded[-1]
+                    return await self.call(m, trunc_args, scope)
+                if exact_plain:
+                    m, trunc_args = exact_plain[-1]
+                    return await self.call(m, trunc_args, scope)
+                # Fallback to legacy dispatcher if lenient mode also found nothing
+                return await self._legacy_dispatch_generic(func, args, scope)
+
+            def score_method(m):
+                s = getattr(m, 'meta', {}).get('type')
+                if not isinstance(s, Sig):
+                    return (0.0, 0, 0, bool(getattr(m, 'meta', {}).get('guards') or []))
+                comp = self._compile_method_signature(m, scope)
+                pos_n = comp['positional']
+                typed = comp['keywords']
+                total = 0.0
+                detail = 0
+                fam_sum = 0
+                for idx, (_nm, ann) in enumerate(typed):
+                    arg_i = pos_n + idx
+                    if arg_i >= len(args):
+                        return (-1.0, 0, 0, False)
+                    ok, cov, dcnt, fam_sz = self._annotation_applicability_and_coverage(ann, args[arg_i])
+                    if not ok:
+                        return (-1.0, 0, 0, False)
+                    total += cov
+                    detail += dcnt
+                    fam_sum += fam_sz
+                has_guard = bool(getattr(m, 'meta', {}).get('guards') or [])
+                return (total, detail, fam_sum, has_guard)
+
+            scored = []
+            for m in candidates:
+                sc, det, famsz, has_guard = score_method(m)
+                if sc >= 0.0:
+                    scored.append((sc, det, famsz, has_guard, m))
+
+            if not scored:
+                # Fallback to legacy dispatcher
+                return await self._legacy_dispatch_generic(func, args, scope)
+
+            max_score = max(s for s, *_ in scored)
+            best = [t for t in scored if t[0] == max_score]
+            if len(best) > 1:
+                guarded_best = [t for t in best if t[3]]
+                if guarded_best:
+                    best = guarded_best
+            if len(best) > 1:
+                max_detail = max(t[1] for t in best)
+                best = [t for t in best if t[1] == max_detail]
+            if len(best) > 1:
+                max_fam = max(t[2] for t in best)
+                best = [t for t in best if t[2] == max_fam]
+            if len(best) != 1:
+                err = TypeError("Ambiguous method call")
+                try:
+                    err.slip_detail = "Ambiguous method call: candidates have tied scores."
+                except Exception:
+                    pass
+                raise err
+
+            chosen = best[0][4]
+            return await self.call(chosen, args, scope)
 
         match func:
             case GenericFunction():
@@ -1982,7 +3144,7 @@ class Evaluator:
                 def _build_guard_scope(method: SlipFunction):
                     call_scope = Scope(parent=method.closure)
                     s = getattr(method, 'meta', {}).get('type')
-                    if isinstance(s, SigType):
+                    if isinstance(s, Sig):
                         # Bind positional
                         for param_name, arg_val in zip(s.positional, args):
                             name = param_name if isinstance(param_name, str) else getattr(param_name, 'text', str(param_name))
@@ -2014,7 +3176,7 @@ class Evaluator:
 
                 for m in reversed(func.methods):  # most recent first
                     s = getattr(m, 'meta', {}).get('type')
-                    if not isinstance(s, SigType):
+                    if not isinstance(s, Sig):
                         continue
                     base = len(s.positional) + len(s.keywords)
                     if s.rest is not None or len(args) != base:
@@ -2063,7 +3225,7 @@ class Evaluator:
                     guards = getattr(m, 'meta', {}).get('guards') or []
                     types_ok = True
                     base = 0
-                    if isinstance(s, SigType):
+                    if isinstance(s, Sig):
                         base = len(s.positional) + len(s.keywords)
                         types_ok = await self._sig_types_match(s, m, args, scope)
                         self._dbg("GF method", getattr(m, 'name', None) or repr(m), "base", base, "rest", bool(s.rest), "types_ok", types_ok)
@@ -2081,7 +3243,7 @@ class Evaluator:
                     if not guard_ok:
                         continue  # skip this method entirely
 
-                    if isinstance(s, SigType):
+                    if isinstance(s, Sig):
                         if s.rest is None and len(args) == base and types_ok:
                             (exact_nonvar_guarded if guards else exact_nonvar_plain).append(m)
                         elif s.rest is not None and len(args) >= base and types_ok:
@@ -2132,14 +3294,14 @@ class Evaluator:
                 sig_obj = None
                 if hasattr(func, 'meta'):
                     mt = func.meta.get('type')
-                    if isinstance(mt, SigType):
+                    if isinstance(mt, Sig):
                         sig_obj = mt
                 # Extra safety: if meta.type wasn't set for some reason, but args holds a Sig, use it.
-                if sig_obj is None and isinstance(func.args, SigType):
+                if sig_obj is None and isinstance(func.args, Sig):
                     sig_obj = func.args
 
                 self._dbg("SlipFunction call", repr(func), "argc", len(args), "has_sig", bool(sig_obj))
-                if isinstance(sig_obj, SigType):
+                if isinstance(sig_obj, Sig):
                     sig = sig_obj
                     # Normalize parameter name to a plain string
                     def _pname(n):

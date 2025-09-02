@@ -225,3 +225,66 @@ async def test_primitive_typed_dispatch_matches_path_literal():
     res = await run_slip(src)
     assert_ok(res, ['p', 'p', 'p'])
 
+
+@pytest.mark.asyncio
+async def test_del_path_prunes_empty_scopes_cascading():
+    src = """
+    -- Build three nested scopes A.B.C with a single leaf x
+    A: scope #{
+      B: scope #{
+        C: scope #{
+          x: 1
+        }
+      }
+    }
+    -- Delete the leaf; C becomes empty -> prune C from B, B becomes empty -> prune from A, A becomes empty -> prune from root
+    ~A.B.C.x
+    -- Probing A should now error since it was pruned
+    probeA: do [ A ]
+    eq probeA.outcome.status err
+    """
+    res = await run_slip(src)
+    assert_ok(res, True)
+
+
+@pytest.mark.asyncio
+async def test_del_pruning_stops_when_parent_not_empty():
+    src = """
+    -- A.B has two keys: C (which will be emptied) and k (to keep B non-empty)
+    A: scope #{
+      B: scope #{
+        C: scope #{
+          x: 1
+        },
+        k: 2
+      }
+    }
+    -- Delete the only field in C; C should be pruned but B remains due to 'k'
+    ~A.B.C.x
+    -- B should still exist and keep key 'k'
+    existsB: eq (do [ A.B ]).outcome.status ok
+    kval: A.B.k
+    #[ existsB, kval ]
+    """
+    res = await run_slip(src)
+    assert_ok(res, [True, 2])
+
+@pytest.mark.asyncio
+async def test_group_then_multiname_chain_preserves_trailing_ok_argument():
+    src = """
+    -- Build nested scopes without any delete operation
+    A: scope #{
+      B: scope #{
+        k: 2
+      }
+    }
+    -- This is the minimal reproduction of the folding bug:
+    -- (do [ A.B ]) produces a response ok/value; we then chain
+    -- .outcome.status via folding from a Group base, and must NOT
+    -- skip the trailing 'ok' argument to 'eq'.
+    res: eq (do [ A.B ]).outcome.status ok
+    res
+    """
+    res = await run_slip(src)
+    assert_ok(res, True)
+

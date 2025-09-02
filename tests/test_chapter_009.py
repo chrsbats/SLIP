@@ -42,7 +42,7 @@ async def test_validate_helper_is_currently_missing_errors_cleanly():
     raw |validate UserSchema
     """
     res = await run_slip(src)
-    assert_error(res, "PathNotFound: validate")
+    assert_ok(res)
 
     # Prefix call form should also error cleanly
     src2 = """
@@ -51,7 +51,7 @@ async def test_validate_helper_is_currently_missing_errors_cleanly():
     validate raw UserSchema
     """
     res2 = await run_slip(src2)
-    assert_error(res2, "PathNotFound: validate")
+    assert_ok(res2)
 
 
 @pytest.mark.asyncio
@@ -65,9 +65,8 @@ async def test_default_and_optional_markers_missing_errors_cleanly():
     }
     """
     res = await run_slip(src)
-    # We only assert the presence of one of the missing helpers; either may surface first.
-    # Prefer default first since it appears earlier in the config.
-    assert_error(res, "PathNotFound: default")
+    # Now that default/optional are implemented, the schema definition should succeed.
+    assert_ok(res)
 
 
 @pytest.mark.asyncio

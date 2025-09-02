@@ -468,6 +468,91 @@ TEST_CASES = [
             ]}
         ]
     }),
+    ("sig_union_in_fn_annotation", "f: fn {x: {A or B}} []", {
+        'tag': 'code',
+        'children': [
+            {
+                'tag': 'expr',
+                'children': [
+                    {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'f'}]},
+                    {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'fn'}]},
+                    {
+                        'tag': 'sig',
+                        'children': [
+                            {
+                                'tag': 'sig-kwarg',
+                                'children': {
+                                    'sig-key': {'tag': 'name', 'text': 'x'},
+                                    'value': {
+                                        'tag': 'sig-union',
+                                        'children': [
+                                            {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'A'}]},
+                                            {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'B'}]}
+                                        ]
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {'tag': 'code', 'children': []}
+                ]
+            }
+        ]
+    }),
+    ("sig_mixed_and_or_in_fn_annotation_union_of_and",
+     "f: fn {x: (Player and OnFire) or Poisoned} []",
+     {
+         'tag': 'code',
+         'children': [
+             {'tag': 'expr', 'children': [
+                 {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'f'}]},
+                 {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'fn'}]},
+                 {'tag': 'sig', 'children': [
+                     {'tag': 'sig-kwarg', 'children': {
+                         'sig-key': {'tag': 'name', 'text': 'x'},
+                         'value': {
+                             'tag': 'sig-union',
+                             'children': [
+                                 {'tag': 'sig-and', 'children': [
+                                     {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'Player'}]},
+                                     {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'OnFire'}]}
+                                 ]},
+                                 {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'Poisoned'}]}
+                             ]
+                         }
+                     }}
+                 ]},
+                 {'tag': 'code', 'children': []}
+             ]}
+         ]
+     }),
+    ("sig_mixed_and_or_in_fn_annotation_and_with_union",
+     "f: fn {x: Player and (OnFire or Poisoned)} []",
+     {
+         'tag': 'code',
+         'children': [
+             {'tag': 'expr', 'children': [
+                 {'tag': 'set-path', 'children': [{'tag': 'name', 'text': 'f'}]},
+                 {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'fn'}]},
+                 {'tag': 'sig', 'children': [
+                     {'tag': 'sig-kwarg', 'children': {
+                         'sig-key': {'tag': 'name', 'text': 'x'},
+                         'value': {
+                             'tag': 'sig-and',
+                             'children': [
+                                 {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'Player'}]},
+                                 {'tag': 'sig-union', 'children': [
+                                     {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'OnFire'}]},
+                                     {'tag': 'get-path', 'children': [{'tag': 'name', 'text': 'Poisoned'}]}
+                                 ]}
+                             ]
+                         }
+                     }}
+                 ]},
+                 {'tag': 'code', 'children': []}
+             ]}
+         ]
+     }),
 ]
 
 # --- Pytest Test Function ---

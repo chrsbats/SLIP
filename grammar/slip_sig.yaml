@@ -2,12 +2,19 @@ start_rule: sig
 rules:
   sig:
     ast: { tag: "sig" }
-    sequence:
-      - { rule: WS_OPT }
-      - optional: { rule: sig_params }
-      - { rule: WS_OPT }
-      - optional: { rule: sig_return }
-      - { rule: WS_OPT }
+    choice:
+      # Allow a top-level union/logic form: e.g., { A or B } or { A and B }
+      - sequence:
+          - { rule: WS_OPT }
+          - { rule: sig_logic }
+          - { rule: WS_OPT }
+      # Existing parameter-list form (positional/keywords/rest/return)
+      - sequence:
+          - { rule: WS_OPT }
+          - optional: { rule: sig_params }
+          - { rule: WS_OPT }
+          - optional: { rule: sig_return }
+          - { rule: WS_OPT }
 
   sig_params:
     ast: { promote: true }
@@ -42,8 +49,87 @@ rules:
       - { rule: sig_value, ast: { name: "value" } }
 
   sig_value:
+    ast: { promote: true }
+    choice:
+      - { rule: sig_union }
+      - { rule: sig_logic }
+      - { rule: sig_value_atom }
+
+  sig_logic:
+    ast: { promote: true }
+    choice:
+      - { rule: sig_and_chain }
+      - { rule: sig_or_chain }
+
+  sig_primary:
+    ast: { promote: true }
+    choice:
+      - sequence:
+          - { literal: "(", ast: { discard: true } }
+          - { rule: WS_OPT }
+          - { rule: sig_logic }
+          - { rule: WS_OPT }
+          - { literal: ")", ast: { discard: true } }
+      - { rule: union_item }
+
+  sig_and_chain:
+    ast: { tag: "sig-and", promote: true }
+    sequence:
+      - { rule: sig_primary }
+      - one_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: WS_OPT }
+            - { rule: AND_KW }
+            - { rule: WS_OPT }
+            - { rule: sig_primary }
+
+  sig_or_chain:
+    ast: { tag: "sig-union", promote: true }
+    sequence:
+      - { rule: sig_primary }
+      - one_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: WS_OPT }
+            - { rule: OR_KW }
+            - { rule: WS_OPT }
+            - { rule: sig_primary }
+
+  sig_value_atom:
     ast: { tag: "expr", leaf: true }
     regex: '(?:(?!->)[^,}])+'
+
+  sig_union:
+    ast: { tag: "sig-union" }
+    sequence:
+      - { literal: "{", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: union_item }
+      - zero_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: WS_OPT }
+            - { rule: OR_KW }
+            - { rule: WS_OPT }
+            - { rule: union_item }
+      - { rule: WS_OPT }
+      - { literal: "}", ast: { discard: true } }
+
+  union_item:
+    ast: { promote: true }
+    subgrammar:
+      file: "slip_path.yaml"
+      rule: "embedded_get_path"
+      placeholder: { ast: { tag: "get-path", leaf: true }, regex: '[^,}\s)]+' }
+
+  OR_KW:
+    ast: { discard: true }
+    literal: "or"
+
+  AND_KW:
+    ast: { discard: true }
+    literal: "and"
 
   sig_rest:
     ast: { tag: "sig-rest-arg", leaf: true }

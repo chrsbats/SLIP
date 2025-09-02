@@ -191,6 +191,46 @@ TRANSFORMER_TEST_CASES = [
         "path_literals_piped_and_multiset",
         "`|map` `[a,b]:`",
         Code([[PathLiteral(PipedPath([Name('map')]))], [PathLiteral(MultiSetPath([SetPath([Name('a')]), SetPath([Name('b')])]))]])
+    ),
+    (
+        "sig_kwarg_union_value_literal",
+        "{x: {A or B}}",
+        Code([[Sig([], {'x': ('union', [GetPath([Name('A')]), GetPath([Name('B')])])}, None, None)]])
+    ),
+    (
+        "sig_kwarg_conjunction_group",
+        "{p: (Player and OnFire)}",
+        Code([[Sig([], {'p': ('and', [GetPath([Name('Player')]), GetPath([Name('OnFire')])])}, None, None)]])
+    ),
+    (
+        "fn_with_sig_union_annotation",
+        "f: fn {x: {A or B}} []",
+        Code([[
+            SetPath([Name('f')]),
+            GetPath([Name('fn')]),
+            Sig([], {'x': ('union', [GetPath([Name('A')]), GetPath([Name('B')])])}, None, None),
+            Code([])
+        ]])
+    ),
+    (
+        "sig_kwarg_mixed_union_of_and",
+        "{x: (Player and OnFire) or Poisoned}",
+        Code([[Sig([], {
+            'x': ('union', [
+                ('and', [GetPath([Name('Player')]), GetPath([Name('OnFire')])]),
+                GetPath([Name('Poisoned')])
+            ])
+        }, None, None)]])
+    ),
+    (
+        "sig_kwarg_mixed_and_with_union",
+        "{x: Player and (OnFire or Poisoned)}",
+        Code([[Sig([], {
+            'x': ('and', [
+                GetPath([Name('Player')]),
+                ('union', [GetPath([Name('OnFire')]), GetPath([Name('Poisoned')])])
+            ])
+        }, None, None)]])
     )
 ]
 

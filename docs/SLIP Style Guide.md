@@ -31,12 +31,12 @@ SLIP uses distinct naming conventions to signal the intended role of a variable.
 
     // Correct: A validation schema is a `schema`.
     UserSchema: schema #{
-        name: string,
-        age: (optional number)
+        name: `string`,
+        age: (optional `number`)
     }
 
     // Correct: A type alias is a `sig`.
-    UserID: {string, int}
+    UserID: {string or int}
     ```
 
 *   **`UPPER-KEBAB-CASE` for Application Constants:** Names representing fixed, constant values specific to an application or domain **MUST** use `UPPER-KEBAB-CASE`.

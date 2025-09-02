@@ -90,7 +90,7 @@ async def test_code_block_is_unevaluated_until_run():
     x
     """
     res = await run_slip(src)
-    assert_ok(res, 2)
+    assert_ok(res, 1)
 
 @pytest.mark.asyncio
 async def test_code_block_type_is_code():

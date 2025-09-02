@@ -21,10 +21,10 @@ def assert_error(res, contains: str | None = None):
 
 
 @pytest.mark.asyncio
-async def test_with_log_captures_effects_and_ok_value():
+async def test_do_captures_effects_and_ok_value():
     src = """
     emit "debug" "before"
-    r: with-log [
+    r: do [
       emit "debug" "in-1"
       emit "debug" "in-2"
       7
@@ -37,10 +37,10 @@ async def test_with_log_captures_effects_and_ok_value():
 
 
 @pytest.mark.asyncio
-async def test_with_log_unwraps_return_and_preserves_response():
+async def test_do_unwraps_return_and_preserves_response():
     src = """
-    r1: with-log [ respond ok 123 ]
-    r2: with-log [ response err "bad" ]
+    r1: do [ respond ok 123 ]
+    r2: do [ response err "bad" ]
     #[ r1.outcome.status = ok, r1.outcome.value, r2.outcome.status = err, r2.outcome.value ]
     """
     res = await run_slip(src)
@@ -48,9 +48,9 @@ async def test_with_log_unwraps_return_and_preserves_response():
 
 
 @pytest.mark.asyncio
-async def test_with_log_captures_err_on_exception():
+async def test_do_captures_err_on_exception():
     src = """
-    r: with-log [ add "a" 1 ]
+    r: do [ add "a" 1 ]
     #[ r.outcome.status = err ]
     """
     res = await run_slip(src)
@@ -58,13 +58,13 @@ async def test_with_log_captures_err_on_exception():
 
 
 @pytest.mark.asyncio
-async def test_with_log_accepts_code_variable():
+async def test_do_accepts_code_variable():
     src = """
     blk: [
       emit "debug" "v"
       1
     ]
-    r: with-log blk
+    r: do blk
     #[ r.outcome.status = ok, r.outcome.value, len r.effects, r.effects[0].message ]
     """
     res = await run_slip(src)
@@ -72,7 +72,7 @@ async def test_with_log_accepts_code_variable():
 
 
 @pytest.mark.asyncio
-async def test_with_log_requires_code_argument_errors():
-    src = "with-log 1"
+async def test_do_requires_code_argument_errors():
+    src = "do 1"
     res = await run_slip(src)
-    assert_error(res, "with-log")
+    assert_error(res, "do")

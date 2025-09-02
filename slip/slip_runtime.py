@@ -131,6 +131,25 @@ class _EffectsView(collections.abc.Sequence):
         # Avoid going through list(self) to prevent accidental re-entrancy
         return repr(self._backing[self._start:self._end])
 
+class _ResponseView:
+    def __init__(self, evaluator):
+        self._ev = evaluator
+    @property
+    def status(self):
+        st = getattr(self._ev, "_response_state", None) or {}
+        return st.get("status")
+    @property
+    def value(self):
+        st = getattr(self._ev, "_response_state", None) or {}
+        return st.get("value")
+    @property
+    def effects(self):
+        return self._ev.side_effects
+    @property
+    def stacktrace(self):
+        st = getattr(self._ev, "_response_state", None) or {}
+        return st.get("stacktrace") or []
+
 # ===================================================================
 # 4. The Standard Library
 # ===================================================================
@@ -231,6 +250,10 @@ class StdLib:
             gp = target.bindings["path"]
             url = target.bindings["url"]
             cfg = await self.evaluator.path_resolver._meta_to_dict(getattr(gp, 'meta', None), scope)
+            # Normalize response-mode to a plain string for downstream HTTP
+            rm = self._response_mode_from_cfg(cfg)
+            if rm is not None:
+                cfg['response-mode'] = rm
             return gp, url, cfg
         # Path-like or string fallback
         if isinstance(target, _PL):
@@ -252,6 +275,10 @@ class StdLib:
         if not url:
             raise TypeError("target expects an http(s) URL path")
         cfg = await self.evaluator.path_resolver._meta_to_dict(getattr(gp, 'meta', None), scope)
+        # Normalize response-mode to a plain string for downstream HTTP
+        rm = self._response_mode_from_cfg(cfg)
+        if rm is not None:
+            cfg['response-mode'] = rm
         return gp, url, cfg
 
     def _prepare_payload(self, cfg: dict, data):
@@ -277,22 +304,81 @@ class StdLib:
                 return str(data)
         return data if isinstance(data, (str, bytes, bytearray)) else str(data)
 
+    def _response_mode_from_cfg(self, cfg: dict) -> str | None:
+        m = cfg.get('response-mode')
+        # Legacy flags
+        try:
+            if m is None:
+                if cfg.get('lite') is True:
+                    return 'lite'
+                if cfg.get('full') is True:
+                    return 'full'
+        except Exception:
+            pass
+        # Strings (incl. IString)
+        try:
+            from slip.slip_datatypes import IString as _IStr
+            if isinstance(m, (str, _IStr)):
+                s = str(m).strip().strip('`').lower()
+                return s if s in ('lite', 'full', 'none') else None
+        except Exception:
+            pass
+        # Path-literal / get-path
+        try:
+            from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name
+            if isinstance(m, _PL):
+                inner = getattr(m, 'inner', None)
+                if isinstance(inner, _GP) and len(inner.segments) == 1 and isinstance(inner.segments[0], _Name):
+                    s = inner.segments[0].text
+                    if isinstance(s, str):
+                        s = s.strip().strip('`').lower()
+                        return s if s in ('lite', 'full', 'none') else None
+            if isinstance(m, _GP) and len(m.segments) == 1 and isinstance(m.segments[0], _Name):
+                s = m.segments[0].text
+                if isinstance(s, str):
+                    s = s.strip().strip('`').lower()
+                    return s if s in ('lite', 'full', 'none') else None
+        except Exception:
+            pass
+        return None
+
+    def _bump_rev(self, s: Scope):
+        try:
+            s.meta['_rev'] = int(s.meta.get('_rev', 0)) + 1
+            s.meta.pop('_family', None)
+        except Exception:
+            pass
+
+    def _package_http_result(self, raw, mode: str | None):
+        if mode in (None, 'none'):
+            return raw
+        if isinstance(raw, tuple) and len(raw) == 3:
+            status, value, headers = raw
+            if mode == 'lite':
+                return [status, value]
+            if mode == 'full':
+                return {'status': status, 'value': value, 'meta': {'headers': headers}}
+        return raw
+
     async def _get(self, target, *, scope: Scope):
         from slip.slip_http import http_get
         _, url, cfg = await self._normalize_resource(target, scope)
-        return await http_get(url, cfg)
+        raw = await http_get(url, cfg)
+        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
 
     async def _put(self, target, data, *, scope: Scope):
         from slip.slip_http import http_put
         _, url, cfg = await self._normalize_resource(target, scope)
         payload = self._prepare_payload(cfg, data)
-        return await http_put(url, payload, cfg)
+        raw = await http_put(url, payload, cfg)
+        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
 
     async def _post(self, target, data, *, scope: Scope):
         from slip.slip_http import http_post
         _, url, cfg = await self._normalize_resource(target, scope)
         payload = self._prepare_payload(cfg, data)
-        return await http_post(url, payload, cfg)
+        raw = await http_post(url, payload, cfg)
+        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
 
     async def _del(self, target, *, scope: Scope):
         from slip.slip_http import http_delete
@@ -303,7 +389,8 @@ class StdLib:
             headers = dict(cfg.get('headers', {}))
             headers['Content-Type'] = ctype
             cfg['headers'] = headers
-        return await http_delete(url, cfg)
+        raw = await http_delete(url, cfg)
+        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
 
     # Optional compatibility alias; remove later if not needed
     async def _http_post(self, target, data, *, scope: Scope):
@@ -429,6 +516,35 @@ class StdLib:
         # Scope-like fallback: iterate .bindings
         return [[k, v] for k, v in getattr(d, 'bindings', {}).items()]
 
+    def _has_key_q(self, obj, key):
+        """
+        Predicate: does obj have the given key?
+        - For dict/mapping: `key in obj`
+        - For Scope: lookup via find_owner(key)
+        Accepts key as string or IString; other types are coerced to str.
+        """
+        from slip.slip_datatypes import Scope as _Scope, IString as _IStr
+        k = key
+        if isinstance(k, _IStr) or isinstance(k, str):
+            k = str(k)
+        else:
+            try:
+                k = str(k)
+            except Exception:
+                return False
+        if isinstance(obj, collections.abc.Mapping):
+            return k in obj
+        if isinstance(obj, _Scope):
+            try:
+                return obj.find_owner(k) is not None
+            except Exception:
+                return False
+        # For other objects, try attribute presence as a last resort
+        try:
+            return hasattr(obj, k)
+        except Exception:
+            return False
+
     # --- Object Model ---
     def _scope(self, config: dict):
         self.evaluator._dbg("scope()", "config_type", type(config).__name__)
@@ -447,12 +563,14 @@ class StdLib:
         if not isinstance(obj, Scope) or not isinstance(proto, Scope):
             raise TypeError("inherit expects (scope, scope)")
         obj.inherit(proto)
+        self._bump_rev(obj)
         return obj
 
     def _mixin(self, target: Scope, *sources: Scope):
         if not isinstance(target, Scope) or not all(isinstance(s, Scope) for s in sources):
             raise TypeError("mixin expects (scope, scope...)")
         target.add_mixin(*sources)
+        self._bump_rev(target)
         return target
 
     # --- System and Scopeironment ---
@@ -780,6 +898,9 @@ class StdLib:
 
     async def _preprocess_code_for_run(self, code: Code, caller_scope: Scope) -> list[list]:
         ev = self.evaluator
+        # If the code literal was already expanded at definition time, no preprocessing is needed.
+        if getattr(code, "_expanded", False):
+            return code.ast
 
         async def preprocess_expr(terms: list) -> list:
             out = []
@@ -873,11 +994,17 @@ class StdLib:
         return out_exprs
 
     async def _run(self, code: Code, *, scope: Scope):
-        # Preprocess using the caller’s scope (the current lexical scope)
-        exprs = await self._preprocess_code_for_run(code, scope)
+        # Hermetic sandbox: parent is the root scope; no runtime templating.
+        ev = self.evaluator
+        # Walk to the root scope
+        root = scope
+        while isinstance(root, Scope) and root.meta.get("parent"):
+            root = root.meta["parent"]
+        sandbox = Scope(parent=root)
+
         last = None
-        for expr in exprs:
-            last = await self.evaluator._eval_expr(expr, scope)
+        for expr in code.ast:
+            last = await ev._eval_expr(expr, sandbox)
         return last
 
     async def _run_with(self, code: Code, target_scope: Scope, *, scope: Scope):
@@ -885,51 +1012,114 @@ class StdLib:
         Execute code within target_scope for writes, but resolve inject/splice from the caller’s scope.
         Temporarily link target_scope to caller scope for lookups, then restore.
         """
-        # Preprocess using the caller’s lexical scope
-        exprs = await self._preprocess_code_for_run(code, scope)
+        exprs = code.ast
+        # Allow passing a zero‑arity callable (e.g., current-scope) as the target scope
+        if not isinstance(target_scope, Scope) and callable(target_scope):
+            try:
+                sig = inspect.signature(target_scope)
+                kwargs = {}
+                if 'scope' in sig.parameters and sig.parameters['scope'].kind == inspect.Parameter.KEYWORD_ONLY:
+                    maybe = target_scope(scope=scope)
+                    if inspect.isawaitable(maybe):
+                        maybe = await maybe
+                    if isinstance(maybe, Scope):
+                        target_scope = maybe
+            except Exception:
+                pass
 
-        # Temporarily link target scope to caller scope for operator/name lookups
-        prev_parent = target_scope.meta.get("parent")
+        # Temporarily link target scope to caller scope for operator/name lookups.
+        # Important: if target_scope is exactly the caller scope, do NOT link;
+        # creating a self-parent cycle would cause infinite recursion in lookups.
+        same_scope = (target_scope is scope)
+        prev_parent = target_scope.meta.get("parent") if not same_scope else None
         added_mixin = False
         try:
-            if prev_parent is None:
-                target_scope.meta["parent"] = scope
-            elif scope not in target_scope.meta.setdefault("mixins", []):
-                target_scope.meta["mixins"].insert(0, scope)
-                added_mixin = True
+            if not same_scope:
+                if prev_parent is None:
+                    target_scope.meta["parent"] = scope
+                elif scope not in target_scope.meta.setdefault("mixins", []):
+                    target_scope.meta["mixins"].insert(0, scope)
+                    added_mixin = True
 
             # Ensure writes prefer the target scope, not its parent chain, during run-with.
             prev_bind_pref = getattr(self.evaluator, 'bind_locals_prefer_container', False)
             self.evaluator.bind_locals_prefer_container = True
             try:
+                # Install convenience wrappers in the target scope for with-block calls
+                injected_names = []
+                def _install_wrapper(name, func):
+                    # Only shadow locally; parent/root originals remain accessible when we delete this.
+                    target_scope[name] = func
+                    injected_names.append(name)
+
+                # Wrapper: mixin <source...> => mixin target_scope <source...>
+                def _mixin_with_target(*sources, scope: Scope = None):
+                    return self._mixin(target_scope, *sources)
+
+                _install_wrapper("mixin", _mixin_with_target)
+
                 last = None
                 for expr in exprs:
                     last = await self.evaluator._eval_expr(expr, target_scope)
                 return last
             finally:
                 self.evaluator.bind_locals_prefer_container = prev_bind_pref
+                # Remove temporary wrappers from the target scope
+                for _n in injected_names:
+                    try:
+                        del target_scope[_n]
+                    except Exception:
+                        pass
         finally:
-            if prev_parent is None:
-                target_scope.meta["parent"] = None
-            elif added_mixin:
-                try:
-                    target_scope.meta["mixins"].remove(scope)
-                except ValueError:
-                    pass
+            if not same_scope:
+                if prev_parent is None:
+                    target_scope.meta["parent"] = None
+                elif added_mixin:
+                    try:
+                        target_scope.meta["mixins"].remove(scope)
+                    except ValueError:
+                        pass
 
     def _response(self, status: PathLiteral, value: Any):
         return Response(status, value)
 
     def _respond(self, status: PathLiteral, value: Any):
-        # Non-local exit: wrap the payload response in a special 'return' status
-        # so the evaluator exits the current function body immediately and returns
-        # the payload response as the function's value.
+        # Mirror status/value into the response view and clear any stacktrace
+        try:
+            st = getattr(self.evaluator, "_response_state", None)
+            if isinstance(st, dict):
+                st["status"] = status
+                st["value"] = value
+                st["stacktrace"] = []
+        except Exception:
+            pass
+        # Emit stderr side-effect for non-ok statuses
+        try:
+            inner = getattr(status, "inner", None)
+            if (
+                isinstance(inner, GetPath)
+                and len(inner.segments) == 1
+                and isinstance(inner.segments[0], Name)
+                and inner.segments[0].text != "ok"
+            ):
+                self.evaluator.side_effects.append({"topics": ["stderr"], "message": str(value)})
+        except Exception:
+            pass
+        # Non-local exit: return a 'return' response wrapping the payload response
         return Response(PathLiteral(GetPath([Name("return")])), Response(status, value))
 
     def _return(self, value: Any = None):
+        try:
+            st = getattr(self.evaluator, "_response_state", None)
+            if isinstance(st, dict):
+                st["status"] = PathLiteral(GetPath([Name("ok")]))
+                st["value"] = value
+                st["stacktrace"] = []
+        except Exception:
+            pass
         return Response(PathLiteral(GetPath([Name("return")])), value)
 
-    async def _with_log(self, code, *, scope: Scope):
+    async def _do(self, code, *, scope: Scope):
         from slip.slip_datatypes import Code as _Code, Response as _Resp, PathLiteral as _PL, GetPath as _GP, Name as _Name
         from slip.slip_runtime import SlipDict as _SlipDict
 
@@ -942,7 +1132,7 @@ class StdLib:
                 # Propagate control-flow (e.g., return) upward
                 return val
             if not isinstance(val, _Code):
-                raise TypeError("with-log requires a code block")
+                raise TypeError("do requires a code block")
             code = val
 
         start = len(ev.side_effects)
@@ -1096,6 +1286,38 @@ class StdLib:
         examples.append(example_sig)
         return func  # allow chaining and keep assignment value as the function
 
+    def _guard(self, func, cond, *, scope: Scope):
+        from slip.slip_datatypes import SlipFunction as _SF, GenericFunction as _GF, Code as _Code
+        if not isinstance(func, (_SF, _GF)):
+            raise TypeError("guard expects a function or generic function")
+        if not isinstance(cond, _Code):
+            raise TypeError("guard expects a code block")
+        meta = getattr(func, "meta", None)
+        if meta is None:
+            try:
+                func.meta = {}
+                meta = func.meta
+            except Exception:
+                raise TypeError("target function does not support metadata")
+        guards = meta.setdefault("guards", [])
+        guards.append(cond)
+        return func
+
+    def _get_body(self, func, sig, *, scope: Scope):
+        from slip.slip_datatypes import SlipFunction as _SF, GenericFunction as _GF, Sig as _Sig
+        if isinstance(func, _SF):
+            return func.body
+        if isinstance(func, _GF):
+            if not isinstance(sig, _Sig):
+                raise TypeError("get-body expects a sig literal as the second argument")
+            for m in func.methods:
+                s = getattr(m, "meta", {}).get("type")
+                if s == sig:
+                    return m.body
+            # No matching method found
+            raise PathNotFound("get-body")
+        raise TypeError("get-body expects a function or generic function")
+
     async def _test(self, func, *, scope: Scope):
         from slip.slip_datatypes import (
             Sig, SlipFunction, GenericFunction, GetPath, Code,
@@ -1151,6 +1373,7 @@ class StdLib:
               - any path-like placeholders (operators, path literals, etc.),
               - signature objects (Sig), which are metadata/type aliases.
             """
+            from slip.slip_runtime import _ResponseView as _RV
             args_out: list = []
             seen: set = set()
             for src in _iter_value_sources():
@@ -1161,6 +1384,9 @@ class StdLib:
                 for k, v in items:
                     # Skip callables and function containers
                     if isinstance(v, (SlipFunction, GenericFunction)) or callable(v):
+                        continue
+                    # Skip the live response-view object
+                    if isinstance(v, _RV):
                         continue
                     # Skip path-like placeholders (operators, path literals, etc.)
                     if isinstance(v, (_GP, _SP, _DP, _PP, _PL, _MSP)):
@@ -1322,9 +1548,21 @@ class StdLib:
 
         # Only accept string or path-literal for the target
         if isinstance(target, (str, _IStr)):
-            gp = self._to_getpath(target)
-            from slip.slip_datatypes import PathLiteral as _PL_OUT
-            return _PL_OUT(gp)
+            s = str(target).strip()
+            if s == "":
+                raise ValueError("call requires a non-empty string")
+            # Support dynamic delete/set via strings by normalizing to a PathLiteral,
+            # then fall through to the PathLiteral branch below to execute semantics.
+            if s.startswith("~"):
+                inner_gp = self._to_getpath(s[1:])
+                target = _PL(_DP(inner_gp))
+            elif s.endswith(":"):
+                # Build a SetPath from the portion before the trailing ':'
+                inner_gp = self._to_getpath(s[:-1])
+                target = _PL(_SP(inner_gp.segments, getattr(inner_gp, 'meta', None)))
+            else:
+                gp = self._to_getpath(s)
+                target = _PL(gp)
 
         if isinstance(target, _PL):
             inner = target.inner
@@ -1467,6 +1705,10 @@ class ScriptRunner:
                 if isinstance(call_name, str) and call_name not in ('return', '<call>'):
                     safe_name = call_name.lstrip('_').replace('_', '-')
                 msg = "TypeError: invalid-args" + (f" in ({safe_name})" if safe_name else "")
+                # NEW: append dispatch detail if provided by the exception
+                detail = getattr(e, 'slip_detail', None)
+                if isinstance(detail, str) and detail:
+                    msg = f"{msg}\n{detail}"
             case _:
                 msg = f"InternalError: {str(e)}"
 
@@ -1632,6 +1874,18 @@ class ScriptRunner:
                 # Provide stable core- aliases for operators to avoid shadowing by user-defined functions
                 core_name = f"core-{slip_name}"
                 self.root_scope[core_name] = member
+                # Also expose predicate aliases ending with '-q' as '?' (e.g., has-key?).
+                if slip_name.endswith('-q'):
+                    q_alias = slip_name[:-2] + '?'
+                    self.root_scope[q_alias] = member
+                    self.root_scope[f"core-{q_alias}"] = member
+
+        # Alias: do -> with-log (same function)
+
+        # Bind a live, read-only response view for scripts
+        self.root_scope["outcome"] = _ResponseView(self.evaluator)
+        # Track which host API names we have bound into the root scope
+        self._host_api_names: set[str] = set()
 
     async def _initialize(self):
         """Loads core.slip into the root scope if not already loaded."""
@@ -1674,6 +1928,36 @@ class ScriptRunner:
         self._initialized = True
 
 
+    def _bind_host_api_methods(self):
+        """Bind @slip_api_method methods of the host into the root scope (kebab-case)."""
+        # Remove any previously bound host API names to refresh cleanly
+        for n in list(getattr(self, "_host_api_names", set())):
+            try:
+                del self.root_scope[n]
+            except Exception:
+                pass
+        self._host_api_names = set()
+
+        host = self.host_object
+        if not host:
+            return
+
+        import inspect
+        for name, member in inspect.getmembers(host):
+            if not callable(member):
+                continue
+            # Decorator may mark the bound method or the underlying function
+            is_api = getattr(member, "_is_slip_api", False)
+            if not is_api:
+                func = getattr(member, "__func__", None)
+                if func is not None:
+                    is_api = getattr(func, "_is_slip_api", False)
+            if not is_api:
+                continue
+            slip_name = name.replace("_", "-")
+            self.root_scope[slip_name] = member
+            self._host_api_names.add(slip_name)
+
     async def handle_script(self, source_code: str) -> 'ExecutionResult':
         """The main entry point to execute a script."""
         try:
@@ -1687,7 +1971,15 @@ class ScriptRunner:
             # Make source_dir available for file:// resolution; default to CWD when unknown
             import os as _os
             self.evaluator.source_dir = self.source_dir or _os.getcwd()
+            # Initialize per-run response state
+            self.evaluator._response_state = {
+                "status": PathLiteral(GetPath([Name("ok")])),
+                "value": None,
+                "stacktrace": [],
+            }
             await self._initialize()
+            # Bind host API methods after core is loaded so host > root.slip > native
+            self._bind_host_api_methods()
             # 1. Parse
             try:
                 parse_out = self.parser.parse(source_code)
@@ -1749,6 +2041,28 @@ class ScriptRunner:
             except Exception:
                 pass
 
+            # Mirror final result into the response view (status ok, value = final value)
+            final_val = result
+            if isinstance(result, Response):
+                if (
+                    isinstance(result.status, PathLiteral)
+                    and isinstance(result.status.inner, GetPath)
+                    and len(result.status.inner.segments) == 1
+                    and isinstance(result.status.inner.segments[0], Name)
+                    and result.status.inner.segments[0].text == "return"
+                ):
+                    final_val = result.value
+                else:
+                    final_val = result
+            try:
+                st = getattr(self.evaluator, "_response_state", None)
+                if isinstance(st, dict):
+                    st["status"] = PathLiteral(GetPath([Name("ok")]))
+                    st["value"] = final_val
+                    st["stacktrace"] = []
+            except Exception:
+                pass
+
             if isinstance(result, Response):
                 # The 'return' status is a special control flow signal
                 if isinstance(result.status, PathLiteral) and isinstance(result.status.inner, GetPath) and len(result.status.inner.segments) == 1 and isinstance(result.status.inner.segments[0], Name) and result.status.inner.segments[0].text == "return":
@@ -1775,6 +2089,16 @@ class ScriptRunner:
             err_msg, err_token = self._format_runtime_error(e, source_code, node)
             # Emit consolidated stderr side-effect
             self.evaluator.side_effects.append({'topics': ['stderr'], 'message': err_msg})
+            # Mirror error into the response view (status err, stacktrace optional)
+            try:
+                st = getattr(self.evaluator, "_response_state", None)
+                if isinstance(st, dict):
+                    st["status"] = PathLiteral(GetPath([Name("err")]))
+                    st["value"] = err_msg
+                    # Keep minimal: leave list empty; optional structured frames can be added later
+                    st["stacktrace"] = []
+            except Exception:
+                pass
             return ExecutionResult(
                 status='error',
                 error_message=err_msg,
