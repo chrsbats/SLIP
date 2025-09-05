@@ -1,30 +1,13 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Optional
 import collections.abc
 
-# YAML is already a project dependency (imported elsewhere)
-import yaml
-
-# TOML: prefer stdlib tomllib (3.11+), else fall back to 'toml' package if available
-try:
-    import tomllib as _toml_loader  # type: ignore[attr-defined]
-    _HAS_TOMLLIB = True
-except Exception:
-    _HAS_TOMLLIB = False
-    try:
-        import toml as _toml  # type: ignore[no-redef]
-    except Exception:
-        _toml = None  # type: ignore[assignment]
-
-# XML/HTML via xmltodict
-try:
-    import xmltodict
-except Exception as e:
-    xmltodict = None  # type: ignore[assignment]
-
+import json # JSON
+import safer_yaml as yaml # YAML 1.2
+import toml # TOML
+import xmltodict # XML and HTML
 
 # --------------------------
 # Helpers
@@ -111,29 +94,22 @@ def deserialize(data: bytes | bytearray | str,
         except Exception:
             # Fallback to YAML if declared JSON but content is actually YAML-like
             try:
-                y = yaml.safe_load(text)
+                y = yaml.loads(text)
                 return y
             except Exception:
                 return text
     if f == 'yaml':
         try:
-            return yaml.safe_load(text)
+            return yaml.loads(text)
         except Exception:
             return text
     if f == 'toml':
-        if _HAS_TOMLLIB:
-            try:
-                # tomllib loads bytes; re-encode
-                return _toml_loader.loads(text)  # type: ignore[name-defined]
-            except Exception:
-                return text
-        else:
-            if _toml is None:
-                raise RuntimeError("TOML support requires Python 3.11+ (tomllib) or the 'toml' package")
-            try:
-                return _toml.loads(text)  # type: ignore[union-attr]
-            except Exception:
-                return text
+        if toml is None:
+            raise RuntimeError("TOML support requires the 'toml' package")
+        try:
+            return toml.loads(text)  # type: ignore[union-attr]
+        except Exception:
+            return text
     if f == 'xml':
         if xmltodict is None:
             raise RuntimeError("XML/HTML support requires the 'xmltodict' package")
@@ -162,20 +138,20 @@ def serialize(value: Any,
     if f == 'json':
         return json.dumps(built, ensure_ascii=False, indent=2 if pretty else None)
     if f == 'yaml':
-        return yaml.safe_dump(built, sort_keys=False)
+        return yaml.dumps(built)
     if f == 'toml':
-        if _HAS_TOMLLIB:
-            # tomllib has no dump; require 'toml' package for dumping
-            raise RuntimeError("TOML serialization requires the 'toml' package (tomllib is read-only)")
-        if _toml is None:
+        if toml is None:
             raise RuntimeError("TOML serialization requires the 'toml' package")
-        return _toml.dumps(built)  # type: ignore[union-attr]
+        return toml.dumps(built)  # type: ignore[union-attr]
     if f == 'xml':
         if xmltodict is None:
             raise RuntimeError("XML serialization requires the 'xmltodict' package")
         root: dict
         if isinstance(built, dict):
             root = built
+        elif isinstance(built, (list, tuple)):
+            # Wrap sequences under a child tag to avoid multiple document roots
+            root = {xml_root: {"item": list(built)}}
         else:
             root = {xml_root: built}
         return xmltodict.unparse(root, pretty=pretty)

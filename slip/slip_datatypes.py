@@ -269,7 +269,7 @@ class IString(str):
     evaluator that it must be processed for `{{...}}` expressions.
     """
     def __repr__(self) -> str:
-        return f'i"{self}"'
+        return str(self)
 
 
 class SlipFunction(SlipCallable):

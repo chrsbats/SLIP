@@ -2,6 +2,8 @@ import pytest
 from slip.slip_runtime import StdLib
 from slip.slip_interpreter import Evaluator, View
 from slip.slip_datatypes import Scope, GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group, Parent, Root, Pwd, Code, SlipFunction, PipedPath, Sig
+from slip.slip_datatypes import PathLiteral, IString
+from slip.slip_datatypes import PathNotFound
 
 @pytest.fixture
 def evaluator():
@@ -578,3 +580,383 @@ async def test_mixin_typed_dispatch(evaluator, root_scope):
 
     res = await evaluator.eval([[GetPath([Name('describe')]), entity]], root_scope)
     assert res == 'on-fire'
+
+@pytest.mark.asyncio
+async def test_vectorized_assign_name_then_filter(evaluator, root_scope):
+    # players.hp[< 50]: 50
+    root_scope['players'] = [
+        {'hp': 45, 'name': 'A'},
+        {'hp': 55, 'name': 'B'},
+        {'hp': 10, 'name': 'C'},
+    ]
+    set_path = SetPath([Name('players'), Name('hp'), FilterQuery('<', [50])])
+    ast = [[set_path, 50]]
+    res = await evaluator.eval(ast, root_scope)
+    assert res == [50, 50]
+    assert [p['hp'] for p in root_scope['players']] == [50, 55, 50]
+
+@pytest.mark.asyncio
+async def test_vectorized_update_filter_then_name_with_predicate_ast(evaluator, root_scope):
+    # players[.hp < 50].hp: + 10
+    root_scope['players'] = [
+        {'hp': 40, 'name': 'a'},
+        {'hp': 60, 'name': 'b'},
+        {'hp': 20, 'name': 'c'},
+    ]
+    pred = [GetPath([Name('.hp')]), GetPath([Name('<')]), 50]
+    fq = FilterQuery(None, None, pred)
+    set_path = SetPath([Name('players'), fq, Name('hp')])
+    ast = [[set_path, GetPath([Name('+')]), 10]]
+    res = await evaluator.eval(ast, root_scope)
+    assert res == [50, 30]  # returns list of new values written
+    assert [p['hp'] for p in root_scope['players']] == [50, 60, 30]
+
+@pytest.mark.asyncio
+async def test_alias_write_redirects_to_existing_path(evaluator, root_scope):
+    # alias: 5 should write to target when alias resolves to GetPath('target')
+    root_scope['target'] = 1
+    root_scope['alias'] = GetPath([Name('target')])
+    ast = [[SetPath([Name('alias')]), 5]]
+    res = await evaluator.eval(ast, root_scope)
+    assert res == 5
+    assert root_scope['target'] == 5
+    # alias binding remains (was not overwritten by value)
+    assert isinstance(root_scope['alias'], GetPath)
+
+@pytest.mark.asyncio
+async def test_scope_christening_sets_type_id_and_registry(evaluator, root_scope):
+    from slip.slip_interpreter import TYPE_REGISTRY
+    proto = Scope()
+    ast = [[SetPath([Name('Character')]), proto]]
+    await evaluator.eval(ast, root_scope)
+    # meta fields set
+    assert 'type_id' in proto.meta and isinstance(proto.meta['type_id'], int)
+    assert proto.meta.get('name') == 'Character'
+    # registry updated
+    assert TYPE_REGISTRY.get('Character') == proto.meta['type_id']
+
+@pytest.mark.asyncio
+async def test_dict_literal_istring_sugar_inside_dict_literal(evaluator, root_scope):
+    # ('dict', [ [SetPath([Name('msg')]), GetPath([Name('i')]), IString("Hi")] ])
+    dict_expr = [
+        [SetPath([Name('msg')]), GetPath([Name('i')]), IString("Hello")]
+    ]
+    result = await evaluator.eval(('dict', dict_expr), root_scope)
+    # Returns a SlipDict mapping; value is the raw IString
+    assert result['msg'] == IString("Hello")
+
+@pytest.mark.asyncio
+async def test_delete_prune_preserves_top_level_lowercase_binding(evaluator, root_scope):
+    # temp: scope {}; temp.x: 1; ~temp.x -> 'temp' binding should remain (lowercase)
+    temp = Scope()
+    await evaluator.path_resolver.set(SetPath([Name('temp')]), temp, root_scope)
+    await evaluator.path_resolver.set(SetPath([Name('temp'), Name('x')]), 1, root_scope)
+    await evaluator.eval([[DelPath(GetPath([Name('temp'), Name('x')]))]], root_scope)
+    assert 'temp' in root_scope  # preserved
+    assert isinstance(root_scope['temp'], Scope)
+    assert 'x' not in root_scope['temp'].bindings  # deleted leaf
+
+@pytest.mark.asyncio
+async def test_operator_as_path_literal_for_infix(evaluator, root_scope):
+    # 1 `|add` 2 (operator provided as PathLiteral(PipedPath(...)))
+    op_lit = PathLiteral(PipedPath([Name('add')]))
+    ast = [[1, op_lit, 2]]
+    result = await evaluator.eval(ast, root_scope)
+    assert result == 3
+
+@pytest.mark.asyncio
+async def test_autocall_zero_arity_function_used_as_argument(evaluator, root_scope):
+    # Define a zero-arity SlipFunction: fn {} [42]
+    zero_fn_ast = [GetPath([Name('fn')]), Code([]), Code([[42]])]
+    zero_fn = await evaluator.eval(zero_fn_ast, root_scope)
+    # add (fn {} [42]) 8 -> 50 (argument auto-invoked)
+    call_ast = [[GetPath([Name('add')]), Group([zero_fn_ast]), 8]]
+    out = await evaluator.eval(call_ast, root_scope)
+    assert out == 50
+
+from slip.slip_datatypes import PostPath
+
+@pytest.mark.asyncio
+async def test_infix_div_with_root_token_normalization(evaluator, root_scope):
+    # Map '/' to |div and ensure GetPath([Root]) normalizes to Name('/')
+    root_scope['/'] = PipedPath([Name('div')])
+    ast = [[10, GetPath([Root]), 2]]
+    out = await evaluator.eval(ast, root_scope)
+    assert out == 5.0
+
+@pytest.mark.asyncio
+async def test_operator_alias_cycle_detection_raises(evaluator, root_scope):
+    # op1 -> op2, op2 -> op1 (cycle)
+    root_scope['op1'] = GetPath([Name('op2')])
+    root_scope['op2'] = GetPath([Name('op1')])
+    ast = [[1, GetPath([Name('op1')]), 2]]
+    with pytest.raises(RecursionError):
+        await evaluator.eval(ast, root_scope)
+
+@pytest.mark.asyncio
+async def test_operator_unexpected_term_raises(evaluator, root_scope):
+    # Operator resolves to a non-path/non-piped value -> TypeError
+    root_scope['bogus'] = 123
+    ast = [[1, GetPath([Name('bogus')]), 2]]
+    with pytest.raises(TypeError):
+        await evaluator.eval(ast, root_scope)
+
+@pytest.mark.asyncio
+async def test_operator_as_path_literal_getpath_unwrap(evaluator, root_scope):
+    # Use a PathLiteral(GetPath('+')), with '+' already bound to |add
+    op_lit = PathLiteral(GetPath([Name('+')]))
+    ast = [[3, op_lit, 4]]
+    res = await evaluator.eval(ast, root_scope)
+    assert res == 7
+
+@pytest.mark.asyncio
+async def test_http_get_packaging_lite_and_full(monkeypatch, evaluator, root_scope):
+    # Patch http_get to return a tuple (status, value, headers)
+    async def fake_http_get(url, config=None):
+        return (200, {'ok': True}, {'Content-Type': 'application/json'})
+    import slip.slip_http as http_mod
+    monkeypatch.setattr(http_mod, "http_get", fake_http_get)
+    # Build path with meta #(response-mode: 'lite')
+    meta_lite = Group([[ [SetPath([Name('response-mode')]), 'lite'] ]])
+    p_lite = GetPath([Name('http://example/api')], meta=meta_lite)
+    out_lite = await evaluator.path_resolver.get(p_lite, root_scope)
+    assert out_lite == [200, {'ok': True}]
+    # Full
+    meta_full = Group([[ [SetPath([Name('response-mode')]), 'full'] ]])
+    p_full = GetPath([Name('http://example/api')], meta=meta_full)
+    out_full = await evaluator.path_resolver.get(p_full, root_scope)
+    assert out_full['status'] == 200 and out_full['value'] == {'ok': True}
+    assert out_full['meta']['headers']['content-type'] == 'application/json'
+
+@pytest.mark.asyncio
+async def test_http_get_rejects_trailing_segments(evaluator, root_scope):
+    # Trailing path segments after http URL are rejected
+    p = GetPath([Name('http://example/api'), Name('extra')])
+    with pytest.raises(TypeError):
+        await evaluator.path_resolver.get(p, root_scope)
+
+@pytest.mark.asyncio
+async def test_http_put_content_type_promotion_and_serialization(monkeypatch, evaluator, root_scope):
+    captured = {}
+    async def fake_http_put(url, payload, config=None):
+        captured['url'] = url
+        captured['payload'] = payload
+        captured['headers'] = (config or {}).get('headers', {})
+        return None
+    import slip.slip_http as http_mod
+    monkeypatch.setattr(http_mod, "http_put", fake_http_put)
+    # file: use http set-path with #(content-type: "application/json")
+    meta = Group([[ [SetPath([Name('content-type')]), "application/json"] ]])
+    sp = SetPath([Name('http://example/put')], meta=meta)
+    await evaluator.path_resolver.set(sp, {'a': 1}, root_scope)
+    assert captured['url'] == 'http://example/put'
+    assert isinstance(captured['payload'], str) and '"a"' in captured['payload']
+    assert captured['headers'].get('Content-Type') == 'application/json'
+
+@pytest.mark.asyncio
+async def test_http_post_packaging_lite_and_full(monkeypatch, evaluator, root_scope):
+    async def fake_http_post(url, payload, config=None):
+        return (201, {'id': 7}, {'Content-Type': 'application/json; charset=utf-8'})
+    import slip.slip_http as http_mod
+    monkeypatch.setattr(http_mod, "http_post", fake_http_post)
+    # lite
+    meta_lite = Group([[ [SetPath([Name('response-mode')]), 'lite'] ]])
+    pp_lite = PostPath([Name('http://example/items')], meta=meta_lite)
+    out_lite = await evaluator.path_resolver.post(pp_lite, {'x': 1}, root_scope)
+    assert out_lite == [201, {'id': 7}]
+    # full
+    meta_full = Group([[ [SetPath([Name('response-mode')]), 'full'] ]])
+    pp_full = PostPath([Name('http://example/items')], meta=meta_full)
+    out_full = await evaluator.path_resolver.post(pp_full, {'x': 1}, root_scope)
+    assert out_full['status'] == 201 and out_full['value'] == {'id': 7}
+    assert 'headers' in out_full['meta']
+
+@pytest.mark.asyncio
+async def test_alias_write_from_pathliteral(evaluator, root_scope):
+    # alias holds a PathLiteral(GetPath('target')); write should redirect to target
+    root_scope['target'] = 0
+    root_scope['alias'] = PathLiteral(GetPath([Name('target')]))
+    ast = [[SetPath([Name('alias')]), 11]]
+    res = await evaluator.eval(ast, root_scope)
+    assert res == 11
+    assert root_scope['target'] == 11
+    # alias binding remains a PathLiteral
+    from slip.slip_datatypes import PathLiteral as _PL
+    assert isinstance(root_scope['alias'], _PL)
+
+@pytest.mark.asyncio
+async def test_code_expand_splice_expr_requires_list_error(evaluator, root_scope):
+    # Inside expression position, splice must evaluate to a list -> TypeError
+    bad = Code([[ Group([[GetPath([Name('splice')]), 123]]) ]])
+    with pytest.raises(TypeError):
+        await evaluator.eval(bad, root_scope)
+
+@pytest.mark.asyncio
+async def test_multi_set_assignment_tuple_literal(evaluator, root_scope):
+    # ('multi-set', [SetPath('x'), SetPath('y')]) [#[10,20]]
+    expr = [
+        ('multi-set', [SetPath([Name('x')]), SetPath([Name('y')])]),
+        [10, 20]
+    ]
+    out = await evaluator.eval([expr], root_scope)
+    assert out is None
+    assert root_scope['x'] == 10 and root_scope['y'] == 20
+
+@pytest.mark.asyncio
+async def test_filter_query_with_and_and_empty_predicate(evaluator, root_scope):
+    # players with compound predicate: .hp < 50 AND .name = 'C'
+    root_scope['players'] = [
+        {'hp': 45, 'name': 'A'},
+        {'hp': 55, 'name': 'B'},
+        {'hp': 10, 'name': 'C'},
+    ]
+    pred = [
+        GetPath([Name('.hp')]), GetPath([Name('<')]), 50,
+        GetPath([Name('and')]),
+        GetPath([Name('.name')]), GetPath([Name('=')]), 'C'
+    ]
+    path = GetPath([Name('players'), FilterQuery(None, None, pred)])
+    out = await evaluator.path_resolver.get(path, root_scope)
+    assert out == [{'hp': 10, 'name': 'C'}]
+    # Empty predicate (no operator) on list returns empty (keep nothing)
+    path2 = GetPath([Name('players'), FilterQuery(None, None, None)])
+    out2 = await evaluator.path_resolver.get(path2, root_scope)
+    assert out2 == []
+
+@pytest.mark.asyncio
+async def test_get_alias_self_reference_returns_pathliteral(evaluator, root_scope):
+    # x bound to GetPath('x') → avoid infinite recursion; returns PathLiteral
+    root_scope['x'] = GetPath([Name('x')])
+    out = await evaluator.path_resolver.get(GetPath([Name('x')]), root_scope)
+    from slip.slip_datatypes import PathLiteral as _PL
+    assert isinstance(out, _PL)
+    assert isinstance(out.inner, GetPath)
+
+@pytest.mark.asyncio
+async def test_get_bound_pathliteral_returned_verbatim(evaluator, root_scope):
+    lit = PathLiteral(GetPath([Name('a')]))
+    root_scope['p'] = lit
+    out = await evaluator.path_resolver.get(GetPath([Name('p')]), root_scope)
+    assert out is lit
+
+@pytest.mark.asyncio
+async def test_http_delete_packaging_lite_and_full(monkeypatch, evaluator, root_scope):
+    async def fake_http_delete(url, config=None):
+        return (204, None, {'Content-Type': 'text/plain'})
+    import slip.slip_http as http_mod
+    monkeypatch.setattr(http_mod, "http_delete", fake_http_delete)
+    # lite
+    meta_lite = Group([[ [SetPath([Name('response-mode')]), 'lite'] ]])
+    dp_lite = DelPath(GetPath([Name('http://example/api')], meta=meta_lite))
+    out_lite = await evaluator.path_resolver.delete(dp_lite, root_scope)
+    assert out_lite == [204, None]
+    # full
+    meta_full = Group([[ [SetPath([Name('response-mode')]), 'full'] ]])
+    dp_full = DelPath(GetPath([Name('http://example/api')], meta=meta_full))
+    out_full = await evaluator.path_resolver.delete(dp_full, root_scope)
+    assert out_full['status'] == 204 and out_full['value'] is None
+    assert out_full['meta']['headers']['content-type'] == 'text/plain'
+
+@pytest.mark.asyncio
+async def test_code_inject_and_statement_splice_expand(evaluator, root_scope):
+    # inject: substitutes value at definition-time expansion
+    root_scope['val'] = 42
+    code_inject = Code([[Group([[GetPath([Name('inject')]), GetPath([Name('val')])]])]])
+    out_inject = await evaluator.eval(code_inject, root_scope)
+    assert isinstance(out_inject, Code)
+    assert out_inject.ast[0][0] == 42
+    # statement-level splice: splice Code into sibling expressions
+    inner = Code([[1], [2]])
+    code_splice = Code([[Group([[GetPath([Name('splice')]), inner]])]])
+    out_splice = await evaluator.eval(code_splice, root_scope)
+    assert isinstance(out_splice, Code)
+    assert out_splice.ast == [[1], [2]]
+
+@pytest.mark.asyncio
+async def test_attribute_fallback_on_plain_object_and_pluck_error(evaluator, root_scope):
+    class Obj:
+        def __init__(self): self.x = 5
+    root_scope['obj'] = Obj()
+    # Non-mapping object attribute fallback
+    v = await evaluator.path_resolver.get(GetPath([Name('obj'), Name('x')]), root_scope)
+    assert v == 5
+    # Plucking missing field from plain objects raises TypeError
+    root_scope['objs'] = [Obj()]
+    with pytest.raises(TypeError):
+        await evaluator.path_resolver.get(GetPath([Name('objs'), Name('y')]), root_scope)
+
+@pytest.mark.asyncio
+async def test_fold_property_chain_bare_and_dotted(evaluator, root_scope):
+    # id function echoes its arg
+    id_fn = await evaluator.eval([[GetPath([Name('fn')]), Sig(['x'], {}, None, None), Code([[GetPath([Name('x')])]])]], root_scope)
+    await evaluator.eval([[SetPath([Name('id')]), id_fn]], root_scope)
+    root_scope['thing'] = {'a': {'b': 7}}
+    # Dotted chain after base
+    ast1 = [[GetPath([Name('id')]), GetPath([Name('thing')]), GetPath([Name('.a')]), GetPath([Name('.b')])]]
+    res1 = await evaluator.eval(ast1, root_scope)
+    assert res1 == 7
+    # Bare chain permitted after a Group-wrapped base
+    ast2 = [[GetPath([Name('id')]), Group([[GetPath([Name('thing')])]]), GetPath([Name('a')]), GetPath([Name('b')])]]
+    res2 = await evaluator.eval(ast2, root_scope)
+    assert res2 == 7
+
+@pytest.mark.asyncio
+async def test_python_callable_with_scope_kwarg_and_autocall(evaluator, root_scope):
+    def pyfunc(scope=None):
+        return scope['a']
+    root_scope['pyfunc'] = pyfunc
+    out = await evaluator.eval([[GetPath([Name('pyfunc')])]], root_scope)
+    assert out == 1
+
+@pytest.mark.asyncio
+async def test_delete_with_prune_false_keeps_owner_scope(evaluator, root_scope):
+    holder = Scope()
+    await evaluator.path_resolver.set(SetPath([Name('Temp')]), holder, root_scope)
+    await evaluator.path_resolver.set(SetPath([Name('Temp'), Name('x')]), 1, root_scope)
+    meta = Group([[ [SetPath([Name('prune')]), False] ]])
+    await evaluator.path_resolver.delete(DelPath(GetPath([Name('Temp'), Name('x')], meta=meta)), root_scope)
+    # With prune: false, the 'Temp' binding remains even if now empty
+    assert 'Temp' in root_scope and isinstance(root_scope['Temp'], Scope)
+    assert 'x' not in root_scope['Temp'].bindings
+
+@pytest.mark.asyncio
+async def test_file_get_not_found_raises_pathnotfound(tmp_path, evaluator, root_scope):
+    locator = f"file://{(tmp_path / 'nope.txt').as_posix()}"
+    with pytest.raises(PathNotFound):
+        await evaluator.path_resolver.get(GetPath([Name(locator)]), root_scope)
+
+@pytest.mark.asyncio
+async def test_unary_logical_operator_missing_rhs_raises(evaluator, root_scope):
+    root_scope['and'] = PipedPath([Name('logical-and')])
+    with pytest.raises(SyntaxError):
+        await evaluator.eval([[True, GetPath([Name('and')])]], root_scope)
+
+@pytest.mark.asyncio
+async def test_post_path_non_http_raises(evaluator, root_scope, tmp_path):
+    p = tmp_path / "out.json"
+    pp = PostPath([Name(f"file://{p.as_posix()}")])
+    with pytest.raises(TypeError):
+        await evaluator.path_resolver.post(pp, {'x': 1}, root_scope)
+
+@pytest.mark.asyncio
+async def test_http_put_convenience_from_eval(monkeypatch, evaluator, root_scope):
+    captured = {}
+    async def fake_http_put(url, payload, config=None):
+        captured['url'] = url; captured['payload'] = payload; captured['headers'] = (config or {}).get('headers', {})
+        return None
+    import slip.slip_http as http_mod
+    monkeypatch.setattr(http_mod, "http_put", fake_http_put)
+    ast = [[GetPath([Name('http://example/put')]), {'a': 1}]]
+    out = await evaluator.eval(ast, root_scope)
+    assert captured['url'] == 'http://example/put'
+    assert '"a"' in captured['payload']
+    assert out == {'a': 1}
+
+@pytest.mark.asyncio
+async def test_dispatch_exact_arity_truncation_fallback(evaluator, root_scope):
+    # Define a single-arg method; call with extra args → exact-arity truncation fallback selects it
+    sig = Sig(['x'], {}, None, None)
+    body = Code([[GetPath([Name('x')])]])
+    await evaluator.eval([[SetPath([Name('g')]), GetPath([Name('fn')]), sig, body]], root_scope)
+    res = await evaluator.eval([[GetPath([Name('g')]), 10, 20]], root_scope)
+    assert res == 10

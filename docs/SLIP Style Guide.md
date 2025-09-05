@@ -125,6 +125,16 @@ Code blocks and statements should be formatted for maximum readability.
     add 10, 20     // Syntax Error
     ```
 
+*   Call formatting is line-aware (no special forms). Keep calls on one line when all parts render as single-line. If any argument renders multi-line, keep the head and any consecutive single-line args on the first line; put each remaining argument on its own line at the current indentation. The block/list/dict printers handle the indentation of their contents.
+    ```slip
+    if [cond] [then] [else]               // all one-liners
+    if [ cond ] [
+        then
+    ] [
+        else
+    ]
+    ```
+
 Use {} for meta-parameters (sig literals) in functions that bind variables
 - When a function’s argument is declarative metadata (never evaluated) and will be inspected to bind names dynamically, pass it as a sig literal.
 - This convention is used by the core and should be followed in user code:

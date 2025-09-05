@@ -145,7 +145,7 @@ def test_istring():
     assert isinstance(s, str)
     assert s == "hello {{name}}"
     assert "hello" in s
-    assert repr(s) == 'i"hello {{name}}"'
+    assert repr(s) == "hello {{name}}"
 
 def test_slip_function():
     args = Code([])

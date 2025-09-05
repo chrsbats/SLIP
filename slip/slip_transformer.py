@@ -360,43 +360,5 @@ class SlipTransformer:
                         return sub.get('text')
         raise ValueError(f"Cannot extract signature name from node: {node!r}")
 
-    def transform_path_literal(self, node):
-        # The parser gives us a 'path-literal' node with a single child,
-        # which is the AST for a get-path, set-path, del-path, piped-path, or multi-set path.
-        if not node.get('children'):
-            # This can happen for an empty literal: ``
-            raise ValueError("Path literal cannot be empty.")
-        path_action_ast = node['children'][0]
-        path_action_obj = self.transform(path_action_ast)
 
-        if isinstance(path_action_obj, tuple) and path_action_obj[0] == 'multi-set':
-            return PathLiteral(MultiSetPath(path_action_obj[1]))
-        if isinstance(path_action_obj, (GetPath, SetPath, DelPath, PipedPath)):
-            return PathLiteral(path_action_obj)
-
-        raise TypeError(f"Unexpected path type in path literal: {type(path_action_obj)}")
-
-    def transform_sig(self, node):
-        # For this transformer, treat {...} as a dict literal and desugar to: (dict [...])
-        assignments = []
-        for child in node.get('children', []):
-            if child.get('tag') == 'sig-kwarg':
-                ch = child['children']
-                key = ch['sig-key']['text']
-
-                # Find the value node within the child mapping or fallback to second list child
-                val_node = None
-                for k, v in ch.items():
-                    if k != 'sig-key' and isinstance(v, dict):
-                        val_node = v
-                        break
-                if val_node is None and isinstance(child.get('children'), list) and len(child['children']) > 1:
-                    val_node = child['children'][1]
-
-                value = self.transform(val_node)
-                assignments.append([SetPath([Name(key)]), value])
-
-        dict_path = GetPath([Name('dict')])
-        code_block = Code(assignments)
-        return Group([[dict_path, code_block]])
 

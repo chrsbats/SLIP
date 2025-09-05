@@ -1085,52 +1085,40 @@ This part covers specialized evaluation rules that are handled by specific primi
 
 This chapter details the implementation of SLIP's runtime metaprogramming features, which are centered on the `run` primitive and its handling of the special `inject` and `splice` forms. While SLIP does not have a compile-time macro system, `run` provides a powerful "macro expansion" phase just before evaluation.
 
-### 11.1. The `run` Primitive's Two-Phase Execution
+### 11.1. The `run` Primitive
 
-The `run` primitive (and its variant `run-with`) must be implemented as a two-phase process:
+The `run` primitive executes a Code block. In the common case, Code created from an inline literal was already expanded at definition time and is executed as-is. If a Code value was created outside the evaluator (e.g., parsed from file:// or built by a tool), `run` will expand it first (only when needed), and then execute it.
 
-1.  **Expansion Phase:** Before executing the `code` object, the primitive must first recursively walk the AST of the `code` object to find and resolve all `inject` and `splice` calls. This creates a new, temporary AST.
-2.  **Evaluation Phase:** The primitive then executes this new, expanded AST using the standard evaluation loop.
+- Expansion: If the Code has not been expanded yet, `run` invokes `Evaluator._expand_code_literal(code, caller_scope)` to resolve inject/splice using the caller’s lexical scope, producing a list of expressions.
+- Execution: `run` evaluates those expressions in a hermetic sandbox whose parent is the root scope; writes in the block do not leak to the caller.
 
-### 11.2. The Expansion Phase: `inject` and `splice`
+The `run-with` variant behaves analogously (see 11.2 for expansion rules and 10.4 for execution semantics): it expands unexpanded Code using the caller’s scope, and then executes the expressions in the provided target scope (writes go to the target). A temporary link to the caller scope may be used to resolve operators/names; it is removed afterward.
 
-The expansion phase is a tree transformation that replaces special nodes (`inject` and `splice` calls) with values from the scope.
+### 11.2. Expansion Semantics for `inject` and `splice`
 
-- **Trigger:** The expansion logic is only triggered by the `run` and `run-with` primitives.
-- **Context is Key:** `inject` and `splice` resolve their paths in the **`run` function's own calling scope**, not the scope in which the code will eventually be executed. This is a crucial distinction. `run-with` executes its code in a different scope, but the injection/splicing still happens relative to where `run-with` was called.
+SLIP performs a single, unified expansion for inject/splice via `Evaluator._expand_code_literal`. Expansion happens at one of two times, depending on how the Code object was created:
 
-#### 11.2.1. Implementing `inject`
+1) Definition-time expansion (the default)
+   - When the evaluator encounters an inline Code literal (`[...]`), it immediately calls `Evaluator._expand_code_literal(code, current_scope)` to produce a pure list-of-expressions and returns a new `Code` value marked as expanded (e.g., `code._expanded = True`).
+   - This is the normal, lexical expansion rule: inject/splice resolve against the current lexical scope at the point where the code literal is defined.
 
-When the AST walker finds a node representing an `(inject <path>)` call:
+2) Execution-boundary expansion (fallback for externally created Code)
+   - If a Code value is created outside the evaluator (e.g., by parsing a `.slip` file via `file://`), it will not have been expanded yet.
+   - `run` and `run-with` detect this case (by checking the marker) and, only then, expand the Code before executing it:
+     - `run`: calls `Evaluator._expand_code_literal(code, caller_scope)`, then evaluates the resulting expressions in a hermetic sandbox whose parent is the root scope.
+     - `run-with`: calls `Evaluator._expand_code_literal(code, caller_scope)`, then evaluates the expressions in the provided target scope; writes go to the target. Expansion uses the caller’s scope, not the target.
 
-1.  It evaluates the `<path>` argument in the **`run` function's calling scope**.
-2.  It takes the resulting value.
-3.  It converts this runtime value into its literal AST representation (e.g., the number `10` becomes a `<number 10>` node). This is the inverse of the evaluation process.
-4.  It replaces the original `(inject ...)` node in the tree with this new literal node.
+Semantics of the forms:
+- inject: `(inject X)` evaluates `X` in the expansion scope (see above) and substitutes the resulting value verbatim into the AST.
+- splice:
+  - In expression position: `(splice X)` requires `X` to evaluate to a list; its elements are spliced into the surrounding argument list.
+  - As a standalone statement: `(splice X)` accepts a list or a Code; its contents are spliced in as sibling expressions in the surrounding block.
 
-#### 11.2.2. Implementing `splice`
-
-When the AST walker finds a node representing a `(splice <path>)` call:
-
-1.  It evaluates the `<path>` argument in the **`run` function's calling scope**.
-2.  It checks that the resulting value is a `List` or `Code` object. If not, it must raise a `TypeError`.
-3.  It takes the **contents** of the list or code block (i.e., the list of its child elements or expressions).
-4.  It replaces the single `(splice ...)` node in the parent list with the entire sequence of nodes from the spliced collection. This is why it's called "splicing"—it injects multiple elements into the list.
-
-**Example Trace for `run [add (inject x) (splice y)]`**
-
-- `x` is `10` and `y` is `#[20, 30]` in the calling scope.
-
-1.  `run` receives the `code` object `[add (inject x) (splice y)]`.
-2.  **Expansion Phase begins.** It creates a deep copy of the AST to modify.
-3.  The walker encounters `(inject x)`. It looks up `x` in its calling scope, gets `10`, and replaces the node with `<number 10>`. The AST is now `[add <number 10> (splice y)]`.
-4.  The walker encounters `(splice y)`. It looks up `y`, gets `#[20, 30]`. It extracts the contents, which are `<number 20>` and `<number 30>`.
-5.  It replaces the `(splice y)` node with these two nodes. The AST is now `[add <number 10>, <number 20>, <number 30>]`.
-6.  **Expansion Phase ends.**
-7.  **Evaluation Phase begins.** `run` evaluates the new, temporary AST `[add 10 20 30]`.
-8.  The result is `60`.
-
-This two-phase model cleanly separates the metaprogramming logic from the standard evaluation rules, keeping the core evaluator simple while enabling powerful, LISP-like code generation at runtime.
+Implementation hooks:
+- The single expander is `Evaluator._expand_code_literal`.
+- Inline Code literals are expanded by the evaluator and marked with a private `_expanded` flag.
+- `StdLib._run` and `StdLib._run_with` expand only when the flag is not present/true, using the caller’s scope. They then iterate the expanded expressions for execution.
+- The legacy runtime-time preprocessor has been removed; `StdLib._preprocess_code_for_run` no longer exists.
 
 ## Chapter 12: Asynchronous Execution (`task`)
 

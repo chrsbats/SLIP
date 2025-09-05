@@ -11,6 +11,8 @@ from slip.slip_datatypes import (
 )
 from slip.slip_runtime import SlipDict
 
+# No semantic special forms; formatting is line-aware only
+
 
 class Printer:
     """Formats SLIP objects into readable, valid SLIP source strings."""
@@ -78,7 +80,7 @@ class Printer:
         return f"'{obj}'"
 
     def _pformat_istring(self, obj, level):
-        return f'i"{obj}"'
+        return f'"{obj}"'
 
     def _pformat_bool(self, obj, level):
         return 'true' if obj else 'false'
@@ -91,14 +93,20 @@ class Printer:
         return f"[{','.join(paths)}]:"
 
     def _pformat_expr(self, obj, level):
+        # Handle assignment-like heads (SetPath, DelPath, or ('multi-set', ...))
         if len(obj) >= 2:
-            lhs = obj[0]
-            rhs_str = " ".join(self.pformat(term, level) for term in obj[1:])
+            head = obj[0]
+            lhs_str = None
+            match head:
+                case SetPath() | DelPath():
+                    lhs_str = self.pformat(head, level)
+                case tuple() as t if len(t) > 0 and t[0] == 'multi-set':
+                    lhs_str = self.pformat(head, level)
+                case _:
+                    pass
 
-            lhs_str = self.pformat(lhs, level) if isinstance(lhs, (SetPath, DelPath)) or \
-                                                 (isinstance(lhs, tuple) and lhs[0] == 'multi-set') else None
-
-            if lhs_str:
+            if lhs_str is not None:
+                rhs_str = " ".join(self.pformat(term, level) for term in obj[1:])
                 if '\n' in rhs_str:
                     rhs_lines = rhs_str.splitlines()
                     first_line = f"{lhs_str} {rhs_lines[0]}"
@@ -107,13 +115,25 @@ class Printer:
                     return "\n".join([first_line] + indented_rest)
                 return f"{lhs_str} {rhs_str}"
 
-        if obj and isinstance(obj[0], GetPath):
-            path_obj = obj[0]
-            if len(path_obj.segments) == 1 and isinstance(path_obj.segments[0], Name):
-                func_name = path_obj.segments[0].text
-                if func_name in ('if', 'when', 'while', 'foreach', 'for', 'cond', 'method'):
-                    return self._pformat_lisp_style_call(obj, level)
+        # Line-aware call formatting: no special names; split only when any arg renders multi-line
+        if obj:
+            parts = [self.pformat(item, level) for item in obj]
+            # If head renders multi-line, fall back to default join below
+            if '\n' not in parts[0] and any('\n' in s for s in parts[1:]):
+                # Keep head and any consecutive single-line args on the first line
+                i = 0
+                head_parts = []
+                while i < len(parts) and '\n' not in parts[i]:
+                    head_parts.append(parts[i])
+                    i += 1
+                header_line = " ".join(head_parts)
+                if i >= len(parts):
+                    return header_line
+                # Put remaining args on their own lines at current indentation (their printers handle inner indent)
+                tail = parts[i:]
+                return header_line + "\n" + "\n".join(tail)
 
+        # Default: join terms normally
         return " ".join(self.pformat(item, level) for item in obj)
 
     def _pformat_lisp_style_call(self, obj, level):

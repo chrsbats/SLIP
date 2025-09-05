@@ -15,7 +15,7 @@ def printer():
 # Test cases: (id, object, expected_string)
 FORMAT_TEST_CASES = [
     ("str", "hello", "'hello'"),
-    ("istr", IString("hello"), 'i"hello"'),
+    ("istr", IString("hello"), '"hello"'),
     ("int", 123, "123"),
     ("float", -1.5, "-1.5"),
     ("bool_true", True, "true"),

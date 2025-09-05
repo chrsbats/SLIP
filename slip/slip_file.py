@@ -20,7 +20,8 @@ def _resolve_locator(locator: str, base_dir: Optional[str]) -> str:
         return os.path.expanduser("~" + (tail if tail.startswith("/") else ("/" + tail if tail else "")))
     # Working directory relative
     if rest.startswith("./"):
-        return os.path.normpath(os.path.join(os.getcwd(), rest[2:] or ""))
+        base = base_dir or os.getcwd()
+        return os.path.normpath(os.path.join(base, rest[2:] or ""))
     if rest.startswith("../"):
         base = base_dir or os.getcwd()
         return os.path.normpath(os.path.join(base, rest))
@@ -112,16 +113,8 @@ async def file_put(locator: str, data: Any, config: Optional[Dict[str, Any]] = N
         return
     # content-type override: serialize accordingly (takes precedence over extension if no explicit encoding)
     if ctype and encoding is None:
-        from slip.slip_serialize import serialize as _ser
-        def _fmt_from_ctype(ct: str | None) -> str | None:
-            if not isinstance(ct, str): return None
-            ct_l = ct.lower()
-            if 'json' in ct_l: return 'json'
-            if 'yaml' in ct_l or 'x-yaml' in ct_l: return 'yaml'
-            if 'toml' in ct_l: return 'toml'
-            if 'xml' in ct_l or 'html' in ct_l or 'xhtml' in ct_l: return 'xml'
-            return None
-        fmt = _fmt_from_ctype(ctype)
+        from slip.slip_serialize import serialize as _ser, detect_format as _detect_fmt
+        fmt = _detect_fmt(ctype)
         if fmt is not None:
             text = _ser(data, fmt=fmt, pretty=True)
             with open(path, "w", encoding="utf-8") as f:

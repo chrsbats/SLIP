@@ -7,6 +7,16 @@ __pycache__/
 .credentials
 .git-town.toml 
 
+slim_branches.py
+
+# coverage artifacts
+htmlcov/
+.coverage*
+coverage.*
+cov_branches.json
+*.cover
+*.py,cover
+
 # C extensions
 *.so
 

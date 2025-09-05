@@ -4,6 +4,43 @@ import os
 import sys
 import httpx
 
+def normalize_response_mode(cfg: dict) -> Optional[str]:
+    """
+    Returns one of 'lite' | 'full' | 'none' | None based on cfg['response-mode'] (or legacy flags).
+    Accepts string/IString or path-like (`ok`-style) values.
+    """
+    mode = cfg.get('response-mode')
+
+    # Legacy flags when not explicitly set
+    if mode is None:
+        if cfg.get('lite') is True:
+            return 'lite'
+        if cfg.get('full') is True:
+            return 'full'
+        return None
+
+    from slip.slip_datatypes import IString as _IStr, PathLiteral as _PL, GetPath as _GP, Name as _Name
+
+    match mode:
+        case str() | _IStr():
+            s = str(mode).strip().strip('`').lower()
+            return s if s in ('lite', 'full', 'none') else None
+
+        case _PL(inner=_GP(segments=[_Name(text=s)])):
+            if isinstance(s, str):
+                s = s.strip().strip('`').lower()
+                return s if s in ('lite', 'full', 'none') else None
+            return None
+
+        case _GP(segments=[_Name(text=s)]):
+            if isinstance(s, str):
+                s = s.strip().strip('`').lower()
+                return s if s in ('lite', 'full', 'none') else None
+            return None
+
+        case _:
+            return None
+
 async def http_request(method: str, url: str, *, config: Optional[Dict] = None, data: Optional[str] = None) -> Any:
     """
     Core HTTP helper.
@@ -20,45 +57,7 @@ async def http_request(method: str, url: str, *, config: Optional[Dict] = None, 
     headers = dict(cfg.pop('headers', {}))
     params = dict(cfg.pop('params', {}))
 
-    def _normalize_response_mode_from_cfg(c: dict) -> Optional[str]:
-        mode = c.get('response-mode')
-        # Back-compat flags
-        if mode is None:
-            try:
-                if c.get('lite') is True:
-                    return 'lite'
-                if c.get('full') is True:
-                    return 'full'
-            except Exception:
-                pass
-        # Strings (incl. IString)
-        try:
-            from slip.slip_datatypes import IString as _IStr
-            if isinstance(mode, (str, _IStr)):
-                s = str(mode).strip().strip('`').lower()
-                return s if s in ('lite', 'full', 'none') else None
-        except Exception:
-            pass
-        # Path-literal or get-path
-        try:
-            from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name
-            if isinstance(mode, _PL):
-                inner = getattr(mode, 'inner', None)
-                if isinstance(inner, _GP) and len(inner.segments) == 1 and isinstance(inner.segments[0], _Name):
-                    s = inner.segments[0].text
-                    if isinstance(s, str):
-                        s = s.strip().strip('`').lower()
-                        return s if s in ('lite', 'full', 'none') else None
-            if isinstance(mode, _GP) and len(mode.segments) == 1 and hasattr(mode.segments[0], 'text'):
-                s = mode.segments[0].text
-                if isinstance(s, str):
-                    s = s.strip().strip('`').lower()
-                    return s if s in ('lite', 'full', 'none') else None
-        except Exception:
-            pass
-        return None
-
-    mode = _normalize_response_mode_from_cfg(cfg)
+    mode = normalize_response_mode(cfg)
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         last_exc = None
@@ -68,12 +67,6 @@ async def http_request(method: str, url: str, *, config: Optional[Dict] = None, 
                 if body is not None:
                     headers = {**headers}
                     headers.setdefault("Content-Type", "text/plain; charset=utf-8")
-                if os.environ.get("SLIP_HTTP_DEBUG"):
-                    try:
-                        blen = len(body) if body is not None else 0
-                        print(f"[SLIP_HTTP_DEBUG] -> {method.upper()} {url} headers={headers} params={params} body_len={blen}", file=sys.stderr)
-                    except Exception:
-                        pass
                 resp = await client.request(
                     method.upper(),
                     url,
@@ -81,13 +74,6 @@ async def http_request(method: str, url: str, *, config: Optional[Dict] = None, 
                     params=params,
                     content=body,
                 )
-                if os.environ.get("SLIP_HTTP_DEBUG"):
-                    try:
-                        ct = resp.headers.get("Content-Type")
-                        preview = (resp.text or "")
-                        print(f"[SLIP_HTTP_DEBUG] <- {resp.status_code} len={len(preview)} ct={ct}", file=sys.stderr)
-                    except Exception:
-                        pass
                 from slip.slip_serialize import deserialize
                 ct = resp.headers.get("Content-Type")
                 if mode in ('lite', 'full'):

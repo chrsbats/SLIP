@@ -15,7 +15,7 @@ Learning to code often feels like memorizing a long list of special rules. SLIP 
 But simple doesn't mean weak. SLIP replaces entire loops with a single, expressive line. Imagine you have a list of players and want to find the ones with high health. Instead of writing a complicated loop, you just write:
 
 ```slip
--- Get the health of all players, then keep only the values over 100.
+-- Get all the players, with health values over 100.
 high-hp-players: players[.hp > 100]
 ```
 
@@ -354,14 +354,21 @@ players: #[
 ]
 
 -- The goal: Give a 10% HP boost to all players with less than 50 hp.
--- Both of these lines are valid and will achieve the same result efficiently.
-
--- Using the "filter-then-pluck" pattern:
-players[.hp < 50].hp: * 1.1
--- Using the "pluck-then-filter" pattern:
+-- The "pluck-then-filter" pattern makes this succinct. 
+-- Select the hp field from each player, find values less than 50, and boost those values by 10%:
 players.hp[< 50]: * 1.1
+```
 
--- After either operation, Jaina's HP is now 49.5. The other players are untouched.
+Alternatively you can use the "filter-then-pluck" pattern:
+```slip
+-- Select players with hp less than 50, and then boost their hp by 10%:
+players[.hp < 50].hp: * 1.1
+```
+
+The advatange of filter and pluck is that it makes it easy to add additional filters.
+```slip
+-- Select players with strength greater than 10 and hp less than 50, and then boost their hp by 10%:
+players[.strength > 10 and .hp < 50].hp: * 1.1
 ```
 
 This is possible because a query on the Left-Hand Side of an assignment does not immediately create temporary lists of values. Instead, it creates a lazy **"view"** that preserves the context of the original collection. The assignment engine uses this view to create a "write handle" that can unambiguously identify and modify the correct properties on the original objects. This provides a flexible and highly consistent syntax for both reading and writing data.
@@ -502,21 +509,23 @@ This model scales seamlessly from simple variables to complex, vectorized update
 -- Give a 10% HP boost to all wounded players.
 -- The LHS evaluates to a single "vectorized write handle".
 -- This handle is then passed to the '*' function.
-players[.hp < 50].hp: * 1.1
+players.hp[< 50]: * 1.1
 ```
 
 ### 3.3. Deletion (`~`): Unbinding a Path
 
 Complementing the `set-path` (`:`) for binding is the `del-path` (`~`) for unbinding. The tilde is not an operator but part of an atomic `del-path` term recognized by the tokenizer. This creates a `DelPath` object that instructs the evaluator to perform the unbinding.
 
-- **Behavior:** Unbinds a name from its scope. The target of the deletion can be a static path or a dynamic expression that resolves to a path. If the unbinding results in an empty `scope` object, the now-empty `scope` is pruned from its parent, and this pruning can cascade up the path chain.
+- **Behavior:** Unbinds a name from its scope. The target of the deletion can be a static path or a dynamic expression that resolves to a path.
 - **Syntax:** `~path.to.value` or `~(expression-that-yields-a-path)`
 - **Example (Static):** `~user.old-session-token`
 - **Example (Dynamic):** `~(join `user `session-token)`
 
 Like other path types, `del-path` also supports runtime configuration via a metadata block.
 
-- **Example:** `~database/records/123#(soft-delete: true)`
+- **Prune Example:** `~database/records/123#(prune: true)`
+
+If the unbinding results in an empty `scope` object, the now-empty `scope` is pruned from its parent, and this pruning can cascade up the path chain.
 
 ### 3.4. Functions: Generics and Multiple Dispatch
 

@@ -275,3 +275,59 @@ async def test_run_with_inject_reads_from_caller_and_writes_in_target():
     """
     res = await run_slip(src)
     assert_ok(res, 8)
+
+@pytest.mark.asyncio
+async def test_run_expands_unexpanded_code_from_file_with_inject_and_splice(tmp_path):
+    # Create a .slip file whose top-level uses inject (value) and splice (statement and arg-list)
+    mod = tmp_path / "mod.slip"
+    mod.write_text(
+        "x: (inject module-x)\n"
+        "(splice extra-stmts)\n"
+        "result: add (splice args)\n"
+        "final: x + result + z\n"
+    )
+    runner = ScriptRunner()
+    runner.source_dir = str(tmp_path)  # make file://./ resolve relative to tmp_path
+    await runner._initialize()
+
+    # Caller scope provides the expansion values:
+    # - module-x (for inject)
+    # - extra-stmts (statement splice; Code)
+    # - args (expression splice; list of args to 'add')
+    src = """
+    module-x: 5
+    args: #[3, 4]
+    extra-stmts: [ y: 10; z: y * 2 ]
+    code: file://./mod.slip
+    run code
+    """
+    res = await runner.handle_script(src)
+    assert res.status == "success"
+    # final = module-x + add(*args) + z = 5 + (3+4) + (10*2) = 32
+    assert res.value == 32
+
+@pytest.mark.asyncio
+async def test_run_with_expands_unexpanded_code_from_file_uses_caller_scope_and_writes_to_target(tmp_path):
+    # Module assigns 'a' via inject and returns a + add(spliced args)
+    mod = tmp_path / "mod2.slip"
+    mod.write_text(
+        "a: (inject seed)\n"
+        "out: add (splice args)\n"
+        "a + out\n"
+    )
+    runner = ScriptRunner()
+    runner.source_dir = str(tmp_path)
+    await runner._initialize()
+
+    src = """
+    seed: 2
+    args: #[3, 4]
+    code: file://./mod2.slip
+    s: scope #{}
+    res: run-with code s
+    #[ res, s.a ]
+    """
+    res = await runner.handle_script(src)
+    assert res.status == "success"
+    # res = seed + add(3,4) = 2 + 7 = 9; s.a was written inside target scope
+    assert res.value == [9, 2]

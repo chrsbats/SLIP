@@ -1,0 +1,55 @@
+# This section tells pip what tools to use to build your package.
+# It's standard boilerplate; you can just copy it.
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+# This is the main section for your project's metadata.
+[project]
+name = "slip"
+version = "0.1"
+authors = [
+  { name="Chris Bates", email="1314008+chrsbats@users.noreply.github.com" },
+]
+description = "SLIP: a small, homoiconic, path-oriented scripting language and runtime."
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Text Processing :: General",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/<you>/slip"
+"Bug Tracker" = "https://github.com/<you>/slip/issues"
+
+[tool.setuptools.packages.find]
+include = ["slip*"]
+
+[tool.setuptools.package-data]
+slip = ["root.slip", "grammar/*.yaml"]
+
+# These are the libraries your project depends on.
+# pip will automatically install these when it installs your package.
+dependencies = [
+    "koine>=0.10.1",
+    "pystache==0.6.8",
+    "httpx==0.28.1",
+    "xmltodict==0.14.2",
+    "safer-yaml==0.1",
+    "toml>=0.10.2"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-benchmark>=4.0.0",
+    "pytest-mock>=3.14.0",
+    "flake8>=7.0.0"
+]

@@ -1,0 +1,5 @@
+x: #{a: 5, b: "Hello"}
+b: "There"
+x.c: "Hello {{b}}"
+file://out.json: x 
+

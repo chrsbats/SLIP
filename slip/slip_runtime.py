@@ -7,7 +7,6 @@ import math
 import time
 import random
 import copy
-import weakref
 import textwrap
 import collections.abc
 import traceback
@@ -15,8 +14,8 @@ from collections import UserDict
 from pathlib import Path
 from typing import Any, List, Optional, Literal, Dict
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 
-import yaml
 from koine import Parser
 from slip.slip_transformer import SlipTransformer
 from slip.slip_interpreter import Evaluator
@@ -26,7 +25,6 @@ from slip.slip_datatypes import Scope, Code, Response, PathLiteral, Name, SetPat
 # 1. Core Data Structures & Global State
 # ===================================================================
 
-PROTOTYPE_MAP: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 class SlipDict(UserDict):
     """A dictionary-like wrapper that supports weak references, enabling prototypal inheritance."""
@@ -58,15 +56,6 @@ class SlipDict(UserDict):
 SlipObject = SlipDict
 
 
-class SLIPModule:
-    def __init__(self, name: str, scope):
-        self._name = name
-        self._scope = scope
-    def __getitem__(self, key):
-        return self._scope[key]
-    def __repr__(self):
-        keys = list(self._scope.bindings.keys())
-        return f"<Module '{self._name}' keys={keys}>"
 
 
 def slip_api_method(func):
@@ -157,9 +146,40 @@ class StdLib:
     """Contains Python implementations for all SLIP built-ins."""
     def __init__(self, evaluator):
         self.evaluator = evaluator
+        # Provide a fallback core scope for bare Evaluator usage (outside ScriptRunner).
+        # This binds stdlib functions into evaluator.core_scope so operators like '+'
+        # resolve inside SlipFunction bodies in tests that construct StdLib(ev) directly.
+        try:
+            core = getattr(evaluator, "core_scope", None)
+            if core is None:
+                core = Scope()
+                for name, member in inspect.getmembers(self):
+                    if name.startswith('_') and not name.startswith('__') and callable(member):
+                        slip_name = name[1:].replace('_', '-')
+                        core[slip_name] = member
+                        # Also provide stable core- aliases
+                        core[f"core-{slip_name}"] = member
+                        # Expose predicate '-q' aliases as '?'
+                        if slip_name.endswith('-q'):
+                            q_alias = slip_name[:-2] + '?'
+                            core[q_alias] = member
+                            core[f"core-{q_alias}"] = member
+                evaluator.core_scope = core
+        except Exception:
+            # Best-effort only; ScriptRunner will bind full root scope separately.
+            pass
 
     # --- Math and Logic ---
-    def _add(self, a, b): return a + b
+    def _add(self, a, b):
+        # List-friendly addition with in-place mutation to support idioms like:
+        # foreach {k} dict [ seen + k ]  -- mutates 'seen' list without assignment
+        if isinstance(a, list):
+            if isinstance(b, list):
+                a.extend(b)
+                return a
+            a.append(b)
+            return a
+        return a + b
     def _sub(self, a, b): return a - b
     def _mul(self, a, b): return a * b
     def _div(self, a, b): return a / b
@@ -187,7 +207,8 @@ class StdLib:
     def _join(self, list_of_strings, separator): return self._str_join(list_of_strings, separator)
     async def _join_paths(self, first, *rest, scope: Scope):
         from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP
-        all_args = (first,) + rest
+        # Accept either varargs (first, *rest) or a single list of path-like values
+        all_args = tuple(first) if isinstance(first, list) and not rest else (first,) + rest
         segments = []
         for a in all_args:
             gp = self._to_getpath(a)
@@ -244,59 +265,58 @@ class StdLib:
         return r
 
     async def _normalize_resource(self, target, scope: Scope):
-        from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL, IString as _IStr
-        # Resource wrapper: Scope with 'url' and 'path'
-        if isinstance(target, Scope) and "url" in getattr(target, "bindings", {}) and "path" in getattr(target, "bindings", {}):
-            gp = target.bindings["path"]
-            url = target.bindings["url"]
-            cfg = await self.evaluator.path_resolver._meta_to_dict(getattr(gp, 'meta', None), scope)
-            # Normalize response-mode to a plain string for downstream HTTP
-            rm = self._response_mode_from_cfg(cfg)
-            if rm is not None:
-                cfg['response-mode'] = rm
-            return gp, url, cfg
-        # Path-like or string fallback
-        if isinstance(target, _PL):
-            inner = getattr(target, 'inner', None)
-            gp = inner if isinstance(inner, _GP) else None
-        elif isinstance(target, _GP):
-            gp = target
-        else:
-            gp = None
-            if isinstance(target, _PL) and isinstance(getattr(target, 'inner', None), _GP):
-                gp = target.inner
-            elif isinstance(target, _GP):
-                gp = target
-            elif isinstance(target, (str, _IStr)):
+        from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL, IString as _IStr, Scope as _Scope
+
+        # Resource wrapper: Scope with 'url' and 'path' bindings
+        match target:
+            case _Scope() as s if "url" in getattr(s, "bindings", {}) and "path" in getattr(s, "bindings", {}):
+                gp = s.bindings["path"]
+                url = s.bindings["url"]
+                cfg = await self.evaluator.path_resolver._meta_to_dict(getattr(gp, 'meta', None), scope)
+                from slip.slip_http import normalize_response_mode
+                rm = normalize_response_mode(cfg)
+                if rm is not None:
+                    cfg['response-mode'] = rm
+                return gp, url, cfg
+
+            # Path literal wrapping a GetPath
+            case _PL(inner=_GP() as gp):
+                pass  # gp is bound by the pattern
+
+            # Direct GetPath
+            case _GP() as gp:
+                pass
+
+            # String/IString → parse to GetPath
+            case str() | _IStr():
                 gp = self._to_getpath(target)
-            if gp is None:
+
+            case _:
                 raise TypeError("target expects an http(s) URL path")
+
         url = self.evaluator.path_resolver._extract_http_url(gp)
         if not url:
             raise TypeError("target expects an http(s) URL path")
+
         cfg = await self.evaluator.path_resolver._meta_to_dict(getattr(gp, 'meta', None), scope)
-        # Normalize response-mode to a plain string for downstream HTTP
-        rm = self._response_mode_from_cfg(cfg)
+        from slip.slip_http import normalize_response_mode
+        rm = normalize_response_mode(cfg)
         if rm is not None:
             cfg['response-mode'] = rm
         return gp, url, cfg
 
-    def _prepare_payload(self, cfg: dict, data):
-        from slip.slip_serialize import serialize as _ser
+    def _apply_content_type_header(self, cfg: dict):
         ctype = (cfg.get('content-type') or cfg.get('content_type'))
         if ctype:
             headers = dict(cfg.get('headers', {}))
             headers['Content-Type'] = ctype
             cfg['headers'] = headers
-        def _fmt(ct: str | None):
-            if not isinstance(ct, str): return None
-            s = ct.lower()
-            if 'json' in s: return 'json'
-            if 'yaml' in s or 'x-yaml' in s: return 'yaml'
-            if 'toml' in s: return 'toml'
-            if 'xml' in s or 'html' in s or 'xhtml' in s: return 'xml'
-            return None
-        fmt = _fmt(ctype)
+
+    def _prepare_payload(self, cfg: dict, data):
+        from slip.slip_serialize import serialize as _ser, detect_format as _detect_fmt
+        self._apply_content_type_header(cfg)
+        ctype = (cfg.get('content-type') or cfg.get('content_type'))
+        fmt = _detect_fmt(ctype)
         if fmt is not None:
             try:
                 return _ser(data, fmt=fmt, pretty=True)
@@ -304,43 +324,6 @@ class StdLib:
                 return str(data)
         return data if isinstance(data, (str, bytes, bytearray)) else str(data)
 
-    def _response_mode_from_cfg(self, cfg: dict) -> str | None:
-        m = cfg.get('response-mode')
-        # Legacy flags
-        try:
-            if m is None:
-                if cfg.get('lite') is True:
-                    return 'lite'
-                if cfg.get('full') is True:
-                    return 'full'
-        except Exception:
-            pass
-        # Strings (incl. IString)
-        try:
-            from slip.slip_datatypes import IString as _IStr
-            if isinstance(m, (str, _IStr)):
-                s = str(m).strip().strip('`').lower()
-                return s if s in ('lite', 'full', 'none') else None
-        except Exception:
-            pass
-        # Path-literal / get-path
-        try:
-            from slip.slip_datatypes import PathLiteral as _PL, GetPath as _GP, Name as _Name
-            if isinstance(m, _PL):
-                inner = getattr(m, 'inner', None)
-                if isinstance(inner, _GP) and len(inner.segments) == 1 and isinstance(inner.segments[0], _Name):
-                    s = inner.segments[0].text
-                    if isinstance(s, str):
-                        s = s.strip().strip('`').lower()
-                        return s if s in ('lite', 'full', 'none') else None
-            if isinstance(m, _GP) and len(m.segments) == 1 and isinstance(m.segments[0], _Name):
-                s = m.segments[0].text
-                if isinstance(s, str):
-                    s = s.strip().strip('`').lower()
-                    return s if s in ('lite', 'full', 'none') else None
-        except Exception:
-            pass
-        return None
 
     def _bump_rev(self, s: Scope):
         try:
@@ -357,40 +340,47 @@ class StdLib:
             if mode == 'lite':
                 return [status, value]
             if mode == 'full':
-                return {'status': status, 'value': value, 'meta': {'headers': headers}}
+                # Normalize header keys to lowercase for consistent lookups
+                norm_headers = headers
+                try:
+                    items = headers.items() if hasattr(headers, "items") else []
+                    norm_headers = {str(k).lower(): v for k, v in items}
+                except Exception:
+                    pass
+                return {'status': status, 'value': value, 'meta': {'headers': norm_headers}}
         return raw
 
     async def _get(self, target, *, scope: Scope):
         from slip.slip_http import http_get
         _, url, cfg = await self._normalize_resource(target, scope)
         raw = await http_get(url, cfg)
-        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
+        from slip.slip_http import normalize_response_mode
+        return self._package_http_result(raw, normalize_response_mode(cfg))
 
     async def _put(self, target, data, *, scope: Scope):
         from slip.slip_http import http_put
         _, url, cfg = await self._normalize_resource(target, scope)
         payload = self._prepare_payload(cfg, data)
         raw = await http_put(url, payload, cfg)
-        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
+        from slip.slip_http import normalize_response_mode
+        return self._package_http_result(raw, normalize_response_mode(cfg))
 
     async def _post(self, target, data, *, scope: Scope):
         from slip.slip_http import http_post
         _, url, cfg = await self._normalize_resource(target, scope)
         payload = self._prepare_payload(cfg, data)
         raw = await http_post(url, payload, cfg)
-        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
+        from slip.slip_http import normalize_response_mode
+        return self._package_http_result(raw, normalize_response_mode(cfg))
 
     async def _del(self, target, *, scope: Scope):
         from slip.slip_http import http_delete
         _, url, cfg = await self._normalize_resource(target, scope)
         # Ensure DELETE carries configured content-type header (for servers that inspect it)
-        ctype = cfg.get('content-type') or cfg.get('content_type')
-        if ctype:
-            headers = dict(cfg.get('headers', {}))
-            headers['Content-Type'] = ctype
-            cfg['headers'] = headers
+        self._apply_content_type_header(cfg)
         raw = await http_delete(url, cfg)
-        return self._package_http_result(raw, self._response_mode_from_cfg(cfg))
+        from slip.slip_http import normalize_response_mode
+        return self._package_http_result(raw, normalize_response_mode(cfg))
 
     # Optional compatibility alias; remove later if not needed
     async def _http_post(self, target, data, *, scope: Scope):
@@ -610,6 +600,21 @@ class StdLib:
                 if evaluator.task_context_count <= 0:
                     evaluator.task_context_count = 0
                     evaluator.is_in_task_context = prev_flag
+                # Ensure the task is removed from the host registry even if callbacks fail
+                try:
+                    host_ref = getattr(evaluator, "host_object", None)
+                    if host_ref is not None and hasattr(host_ref, "active_slip_tasks"):
+                        try:
+                            cur_task = asyncio.current_task()
+                        except Exception:
+                            cur_task = None
+                        if cur_task is not None:
+                            try:
+                                host_ref.active_slip_tasks.discard(cur_task)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
         t = asyncio.create_task(_runner())
         host = getattr(evaluator, 'host_object', None)
@@ -696,6 +701,7 @@ class StdLib:
         return None
 
     async def _while(self, args: list, *, scope: Scope):
+        # Assumes root.slip is loaded and provides operator aliases.
         if len(args) != 2:
             raise TypeError(f"while expects 2 arguments (condition, body), got {len(args)}")
         cond_block, body_block = args
@@ -714,25 +720,46 @@ class StdLib:
                 raise TypeError("while requires code blocks for condition and body")
             body_code = body_val
 
-        iter_count = 0
         last = None
+        iter_count = 0
+
+        # Optional safety cap to prevent runaway loops; configurable via env.
+        # Default is fairly high to avoid impacting normal scripts.
+        try:
+            import os as _os
+            _max_iters_env = _os.environ.get("SLIP_MAX_LOOP_ITERS")
+            max_iters = int(_max_iters_env) if _max_iters_env is not None else 100000
+        except Exception:
+            max_iters = 100000
+
         while True:
             cond_val = await self.evaluator._eval(cond_block.ast, scope)
             if isinstance(cond_val, Response):
                 return cond_val
             if not cond_val:
                 break
+
             body_res = await self.evaluator._eval(body_code.ast, scope)
             if isinstance(body_res, Response):
                 return body_res
             last = body_res
+
             iter_count += 1
-            if getattr(self.evaluator, 'is_in_task_context', False) or getattr(self.evaluator, 'task_context_count', 0) > 0:
-                if (iter_count % 10) == 0:
-                    await asyncio.sleep(0)  # cooperative yield periodically
+
+            # Cooperative yield periodically to preserve fairness.
+            # Yield more often in task contexts; still yield occasionally outside.
+            in_task = getattr(self.evaluator, 'is_in_task_context', False) or getattr(self.evaluator, 'task_context_count', 0) > 0
+            yield_every = 10 if in_task else 100
+            if (iter_count % yield_every) == 0:
+                await asyncio.sleep(0)
+
+            # Guard against accidental infinite loops
+            if max_iters is not None and iter_count >= max_iters:
+                raise RuntimeError("while: iteration limit exceeded")
         return last
 
     async def _foreach(self, args: list, *, scope: Scope):
+        # Assumes root.slip is loaded and provides operator aliases.
         self.evaluator._dbg("foreach()", "argc", len(args), "types", [type(a).__name__ for a in args])
         if len(args) != 3:
             raise TypeError(f"foreach expects 3 arguments (vars-sig, collection, body), got {len(args)}")
@@ -767,10 +794,44 @@ class StdLib:
             if isinstance(collection, Response):
                 return collection
 
-        iter_count = 0
         # Helper to run body and auto-yield in task context
+        iter_count = 0
         async def _run_body():
             nonlocal iter_count
+            # Accumulator-style write-back only for infix updates: [ name <op> rhs... ]
+            try:
+                exprs = getattr(body_code, 'ast', None)
+                if isinstance(exprs, list) and len(exprs) == 1 and isinstance(exprs[0], list) and exprs[0]:
+                    expr = exprs[0]
+                    head = expr[0]
+                    # Require simple name head and at least 3 terms (name op rhs)
+                    if (
+                        isinstance(head, GetPath)
+                        and len(getattr(head, 'segments', []) or []) == 1
+                        and isinstance(head.segments[0], Name)
+                        and len(expr) >= 3
+                    ):
+                        # Verify second term resolves to a piped operator
+                        is_op = False
+                        try:
+                            await self.evaluator._resolve_operator_to_func_path(expr[1], scope)
+                            is_op = True
+                        except Exception:
+                            is_op = False
+                        if is_op:
+                            target = head.segments[0].text
+                            val = await self.evaluator._eval_expr(expr, scope)
+                            if isinstance(val, Response):
+                                return val
+                            scope[target] = val
+                            iter_count += 1
+                            if getattr(self.evaluator, 'is_in_task_context', False) or getattr(self.evaluator, 'task_context_count', 0) > 0:
+                                if (iter_count % 10) == 0:
+                                    await asyncio.sleep(0)
+                            return None
+            except Exception:
+                # Fallback to plain evaluation
+                pass
             res = await self.evaluator._eval(body_code.ast, scope)
             if isinstance(res, Response):
                 return res
@@ -846,6 +907,7 @@ class StdLib:
 
     def _fn(self, args: list, *, scope: Scope):
         from slip.slip_datatypes import SlipFunction, Sig as SigType
+        # Assumes root.slip is loaded and provides operator aliases.
         if len(args) != 2:
             raise TypeError(f"fn expects 2 arguments (args, body), got {len(args)}")
         arg_spec, body_block = args
@@ -896,105 +958,9 @@ class StdLib:
         return _async_impl()
 
 
-    async def _preprocess_code_for_run(self, code: Code, caller_scope: Scope) -> list[list]:
-        ev = self.evaluator
-        # If the code literal was already expanded at definition time, no preprocessing is needed.
-        if getattr(code, "_expanded", False):
-            return code.ast
-
-        async def preprocess_expr(terms: list) -> list:
-            out = []
-            for term in terms:
-                # Handle direct (inject ...) and (splice ...) forms: a Group with a single inner expression
-                if isinstance(term, Group) and term.nodes and len(term.nodes) == 1:
-                    inner_expr = term.nodes[0]
-                    if inner_expr and isinstance(inner_expr[0], GetPath):
-                        head = inner_expr[0]
-                        if len(head.segments) == 1 and isinstance(head.segments[0], Name):
-                            fname = head.segments[0].text
-                            args = inner_expr[1:]
-
-                            if fname == 'inject':
-                                if len(args) != 1:
-                                    raise TypeError("inject expects 1 argument")
-                                val = await ev._eval(args[0], caller_scope)
-                                out.append(val)
-                                continue
-
-                            if fname == 'splice':
-                                if len(args) != 1:
-                                    raise TypeError("splice expects 1 argument")
-                                val = await ev._eval(args[0], caller_scope)
-                                if isinstance(val, list):
-                                    out.extend(val)
-                                    continue
-                                raise TypeError("splice in expression requires a list")
-
-                # Recurse into nested Group (non-(inject/splice) cases)
-                if isinstance(term, Group):
-                    new_inner = []
-                    for expr in term.nodes:
-                        new_inner.append(await preprocess_expr(expr))
-                    new_group = Group(new_inner)
-                    # preserve location for diagnostics
-                    if hasattr(term, 'loc'):
-                        try: new_group.loc = term.loc
-                        except Exception: pass
-                    out.append(new_group)
-                    continue
-
-                # Recurse into list literal elements
-                if isinstance(term, SlipList):
-                    new_items = []
-                    for expr in term.nodes:
-                        new_items.append(await preprocess_expr(expr))
-                    new_list = SlipList(new_items)
-                    if hasattr(term, 'loc'):
-                        try: new_list.loc = term.loc
-                        except Exception: pass
-                    out.append(new_list)
-                    continue
-
-                # Recurse into dict literal tuple ('dict', [exprs])
-                match term:
-                    case ('dict', exprs):
-                        new_exprs = [await preprocess_expr(expr) for expr in exprs]
-                        out.append(('dict', new_exprs))
-                        continue
-
-                # Default: keep term as-is
-                out.append(term)
-            return out
-
-        out_exprs: list[list] = []
-        for expr in code.ast:
-            # Whole-expression splice: [(splice ...)]
-            if len(expr) == 1:
-                t = expr[0]
-                if isinstance(t, Group) and t.nodes and len(t.nodes) == 1:
-                    inner = t.nodes[0]
-                    if inner and isinstance(inner[0], GetPath):
-                        head = inner[0]
-                        if len(head.segments) == 1 and isinstance(head.segments[0], Name) and head.segments[0].text == 'splice':
-                            args = inner[1:]
-                            if len(args) != 1:
-                                raise TypeError("splice expects 1 argument")
-                            val = await ev._eval(args[0], caller_scope)
-                            if isinstance(val, Code):
-                                nested = await self._preprocess_code_for_run(val, caller_scope)
-                                out_exprs.extend(nested)
-                                continue
-                            if isinstance(val, list):
-                                for item in val:
-                                    out_exprs.append([item])
-                                continue
-                            raise TypeError("splice in statement requires code or list")
-            # Normal expression: recursively preprocess all nested terms
-            out_exprs.append(await preprocess_expr(expr))
-        return out_exprs
 
     async def _run(self, code: Code, *, scope: Scope):
-        # Hermetic sandbox: parent is the root scope; no runtime templating.
+        # Hermetic sandbox: parent is the root scope; expands inject/splice only if the Code was not previously expanded; uses caller’s scope for expansion.
         ev = self.evaluator
         # Walk to the root scope
         root = scope
@@ -1003,7 +969,10 @@ class StdLib:
         sandbox = Scope(parent=root)
 
         last = None
-        for expr in code.ast:
+        exprs = code.ast
+        if not getattr(code, "_expanded", False):
+            exprs = await ev._expand_code_literal(code, scope)  # expand against caller’s scope
+        for expr in exprs:
             last = await ev._eval_expr(expr, sandbox)
         return last
 
@@ -1013,6 +982,8 @@ class StdLib:
         Temporarily link target_scope to caller scope for lookups, then restore.
         """
         exprs = code.ast
+        if not getattr(code, "_expanded", False):
+            exprs = await self.evaluator._expand_code_literal(code, scope)  # expand against caller’s scope
         # Allow passing a zero‑arity callable (e.g., current-scope) as the target scope
         if not isinstance(target_scope, Scope) and callable(target_scope):
             try:
@@ -1187,32 +1158,6 @@ class StdLib:
         except (ValueError, TypeError):
             return None
     def _to_bool(self, value): return bool(value)
-    def _call(self, value):
-        from slip.slip_datatypes import (
-            PathLiteral as _PL, GetPath, SetPath, DelPath, PipedPath,
-            MultiSetPath, Name, IString
-        )
-        # Normalize to a runtime path object (GetPath/SetPath/DelPath/PipedPath).
-        if isinstance(value, _PL):
-            return value.inner
-        if isinstance(value, (GetPath, SetPath, DelPath, PipedPath)):
-            return value
-        if isinstance(value, MultiSetPath):
-            raise TypeError("call does not support multi-set paths")
-        if isinstance(value, (str, IString)):
-            raw = str(value).strip()
-            if raw == "":
-                raise ValueError("call requires a non-empty string")
-            # If the string looks like a URL/special path token, keep it as a single segment.
-            if ("://" in raw) or raw.startswith(("/", "../", "./", "|", "~")):
-                return GetPath([Name(raw)])
-            # Otherwise, split on '.' or '/' into name segments.
-            parts = [p for p in re.split(r'[./]', raw) if p]
-            segments = [Name(p) for p in parts]
-            if not segments:
-                raise ValueError("call produced empty path from string")
-            return GetPath(segments)
-        raise TypeError(f"call cannot convert value of type {type(value).__name__}")
     def _copy(self, value): return copy.copy(value)
     def _clone(self, value):
         # Safe deep copy that avoids recursion issues with complex objects.
@@ -1511,7 +1456,11 @@ class StdLib:
                 continue
 
             total_with_examples += 1
-            res = await self._test(fn, scope=scope)
+            try:
+                res = await self._test(fn, scope=scope)
+            except Exception as e:
+                failed_details.append({"name": name, "error": str(e)})
+                continue
             if res.status == _status("ok"):
                 passed_count += 1
             else:
@@ -1599,6 +1548,19 @@ class StdLib:
                 raise TypeError("call expects a function at the given path")
             raise TypeError("call expects a function path (get-path) or set/del path literal")
 
+        # New: support GetPath target directly (resolve and invoke/value)
+        if isinstance(target, _GP):
+            try:
+                val = await self.evaluator.path_resolver.get(target, scope)
+            except Exception:
+                # Return original path when unresolvable (mirrors PathLiteral normalization)
+                return target
+            if isinstance(val, (_SF, _GF)) or callable(val):
+                return await self.evaluator.call(val, args, scope)
+            if args_list is None or (isinstance(args, list) and len(args) == 0):
+                return val
+            raise TypeError("call expects a function at the given path")
+
         # Prefer exact-arity, non-variadic method when calling a GenericFunction directly
         if isinstance(target, _GF):
             from slip.slip_datatypes import Sig as _Sig
@@ -1625,39 +1587,29 @@ class StdLib:
 
 Token = Dict[str, Any]
 
+@dataclass
 class ExecutionResult:
     """The structured result of a script execution."""
-    def __init__(self,
-                 status: Literal['success', 'error'],
-                 value: Any = None,
-                 error_message: Optional[str] = None,
-                 error_token: Optional[Token] = None,
-                 side_effects: Optional[List[Dict]] = None):
-        self.status = status
-        self.value = value
-        self.error_message = error_message
-        self.error_token = error_token
-        self.side_effects = side_effects if side_effects is not None else []
+    status: Literal['success', 'error']
+    value: Any = None
+    error_message: Optional[str] = None
+    error_token: Optional[Token] = None
+    side_effects: List[Dict] = field(default_factory=list)
 
     def format_error(self) -> str:
         """Formats an error message with line and column if available."""
         if self.status != 'error':
             return ""
+        msg = str(self.error_message or "Unknown error")
 
-        msg = self.error_message or "Unknown error"
-
+        # Add a location prefix when we have a token; avoid duplicating the same prefix
         if self.error_token and 'line' in self.error_token:
-            line = self.error_token['line']
-            # Not all error tokens will have a column
-            col_info = f", col {self.error_token['col']}" if 'col' in self.error_token else ""
-            return f"Error on line {line}{col_info}: {msg}"
-
-        return str(msg)
-
-    def __repr__(self) -> str:
-        if self.status == 'error':
-            return f"<ExecutionResult status='error' message='{self.error_message}'>"
-        return f"<ExecutionResult status='{self.status}' value={self.value!r}>"
+            line = self.error_token.get('line')
+            col = self.error_token.get('col')
+            if not msg.startswith("Error on line "):
+                col_info = f", col {col}" if col is not None else ""
+                return f"Error on line {line}{col_info}: {msg}"
+        return msg
 
 
 class ScriptRunner:
@@ -1918,12 +1870,20 @@ class ScriptRunner:
 
         # Evaluation happens for each instance
         if ScriptRunner._core_loaded_ast:
+             # Prevent Evaluator._ensure_core_loaded from loading root.slip into core_scope
+             # before we evaluate root.slip into the real root_scope.
+             self.evaluator._core_loaded = True
              prev_src = self.evaluator.current_source
              self.evaluator.current_source = 'core'
              try:
                  await self.evaluator.eval(ScriptRunner._core_loaded_ast.nodes, self.root_scope)
              finally:
                  self.evaluator.current_source = prev_src
+             # Optional: annotate root scope to indicate core was loaded
+             try:
+                 self.root_scope.meta['_root_loaded'] = True
+             except Exception:
+                 pass
 
         self._initialized = True
 

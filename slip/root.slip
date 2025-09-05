@@ -53,13 +53,12 @@ is-none?:    fn {x} [ eq (type-of x) `none` ]
 -- Provide a generic 'join' with typed methods for strings and paths.
 -- String variant: join a list of strings with a separator.
 join: fn {xs: `list`, sep: `string`} [
-    (call str-join #[ xs, sep ])
+    str-join xs sep
 ]
 
 -- Path variant: join path segments/values into a single path literal.
 join: fn {first: `path`, rest...} [
-    args: add #[ first ] rest
-    (call join-paths args)
+    call `join-paths` (add #[ first ] rest)
 ]
 
 
@@ -294,7 +293,7 @@ validate: fn {data: `mapping`, sch: `scope`} [
         ] [
           if [is-path? t] [
             if [eq (type-of v) t] [ out[k]: v ] [
-              errs: add errs #[ #{ field: k, error: i"expected type '{type-name-from-type t}', got '{value-type-name v}'" } ]
+              errs: add errs #[ #{ field: k, error: "expected type '{type-name-from-type t}', got '{value-type-name v}'" } ]
             ]
           ] [
             out[k]: v
@@ -312,7 +311,7 @@ validate: fn {data: `mapping`, sch: `scope`} [
           ] [
             if [is-path? spec] [
               if [eq (type-of v) spec] [ out[k]: v ] [
-                errs: add errs #[ #{ field: k, error: i"expected type '{type-name-from-type spec}', got '{value-type-name v}'" } ]
+                errs: add errs #[ #{ field: k, error: "expected type '{type-name-from-type spec}', got '{value-type-name v}'" } ]
               ]
             ] [
               out[k]: v
