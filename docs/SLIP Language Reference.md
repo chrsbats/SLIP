@@ -2759,7 +2759,7 @@ There is nothing special about `root.slip` other than the fact that all function
 
 You can view root.slip below:
 
-- **[root.slip](slip/root.slip)**
+- **[root.slip](../slip/root.slip)**
 
 ### 14.2. Host Integration: `host-object` and `task`
 
