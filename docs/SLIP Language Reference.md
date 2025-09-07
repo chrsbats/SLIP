@@ -206,13 +206,14 @@ x: 10 -- Assign 10 to x.
 
 The following table summarizes the literal syntax for creating SLIP's core data values. These are the fundamental building blocks of data in the language.
 
+<!-- prettier-ignore -->
 | Type             | Literal Syntax                                                           | Example                   | Description                                                                                                                                                     |
 | :--------------- | :----------------------------------------------------------------------- | :------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **int**          | `123`, `-50`                                                             | `level: 99`               | Represents integer (whole number) values.                                                                                                                       |
 | **float**        | `3.14`, `-99.5`                                                          | `pi: 3.14159`             | Represents floating-point values.                                                                                                                               |
 | **i-string**     | `"..."`                                                                  | `msg: "Hello, {{name}}!"` | An **interpolated string**. The content is processed for `{{...}}` variable substitution.                                                                       |
 | **raw-string**   | `'...'`                                                                  | `path: 'C:\Users\Me'`     | A **raw string**. The content is treated as literal text with no interpolation, useful for file paths or code snippets.                                         |
-| **path-literal** | `` `some-path` ``                                                        | `my-path: `user.name``    | Creates a path object as a first-class value, preventing it from being immediately looked up by the evaluator. This is similar to a quasiquoted symbol in LISP. |
+| **path-literal** | `` `some-path` ``                                                        | `my-path: \`user.name\``  | Creates a path object as a first-class value, preventing it from being immediately looked up by the evaluator. This is similar to a quasiquoted symbol in LISP. |
 | **none**         | `none`                                                                   | `result: none`            | Represents the absence of a value. An empty evaluation group `()` also evaluates to `none`.                                                                     |
 | **boolean**      | `true`, `false`                                                          | `is-active: true`         | The boolean values `true` and `false`.                                                                                                                          |
 | **code**         | `[...]`                                                                  | `my-code: [ x + 1 ]`      | An **unevaluated** block of code, represented as a first-class `code` object (an AST). This is the foundation of metaprogramming.                               |
@@ -239,6 +240,7 @@ These byte-stream objects can be converted to strings using `to-str` (which deco
 
 In SLIP, paths are more than just variable names; they are a core syntactic feature for identity, location, and action. The parser recognizes several distinct path-based forms, each instructing the evaluator to perform a different operation.
 
+<!-- prettier-ignore -->
 | Path Type          | Syntax               | Example                                         | Description                                                                                                                                           |
 | :----------------- | :------------------- | :---------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Get Path**       | `path.to.value`      | `player.hp`                                     | The default form. Instructs the evaluator to read or "get" a value from a location.                                                                   |
@@ -354,18 +356,20 @@ players: #[
 ]
 
 -- The goal: Give a 10% HP boost to all players with less than 50 hp.
--- The "pluck-then-filter" pattern makes this succinct. 
+-- The "pluck-then-filter" pattern makes this succinct.
 -- Select the hp field from each player, find values less than 50, and boost those values by 10%:
 players.hp[< 50]: * 1.1
 ```
 
 Alternatively you can use the "filter-then-pluck" pattern:
+
 ```slip
 -- Select players with hp less than 50, and then boost their hp by 10%:
 players[.hp < 50].hp: * 1.1
 ```
 
 The advatange of filter and pluck is that it makes it easy to add additional filters.
+
 ```slip
 -- Select players with strength greater than 10 and hp less than 50, and then boost their hp by 10%:
 players[.strength > 10 and .hp < 50].hp: * 1.1
@@ -750,6 +754,7 @@ By following this convention, we keep the language's implementation simple and c
 
 The following table lists the default operator bindings provided by the standard root scope.
 
+<!-- prettier-ignore -->
 | Operator | Bound Piped Path |
 | :------- | :--------------- |
 | `+`      | `\|add`          |
@@ -1065,13 +1070,14 @@ The core principle is simple: **the most specific function wins.**
 
 The dispatch system supports complex type annotations using `and` (conjunction) and `or` (union). These can be combined with parentheses for grouping to create precise and readable signatures.
 
-| Description | Example |
-| :--- | :--- |
-| Must be a Player AND a Warrior | `{ Player and Warrior }` |
-| Must be a Player OR a Warrior | `{ Player or Warrior }` |
+<!-- prettier-ignore -->
+| Description                                       | Example                            |
+| :------------------------------------------------ | :--------------------------------- |
+| Must be a Player AND a Warrior                    | `{ Player and Warrior }`           |
+| Must be a Player OR a Warrior                     | `{ Player or Warrior }`            |
 | Must be a Player AND (either a Warrior OR a Mage) | `{ Player and (Warrior or Mage) }` |
 | Must be (either a Player AND a Warrior) OR a Mage | `{ (Player and Warrior) or Mage }` |
-| Invalid (Ambiguous) | `{ Player and Warrior or Mage }` |
+| Invalid (Ambiguous)                               | `{ Player and Warrior or Mage }`   |
 
 ---
 
@@ -1301,6 +1307,7 @@ When the interpreter encounters a `response` with the status `` `return ``, it "
 
 To promote consistency, SLIP defines a set of standard canonical `GetPathLiteral` values for common statuses.
 
+<!-- prettier-ignore -->
 | Canonical Path    | Typical Meaning                                                                      |
 | :---------------- | :----------------------------------------------------------------------------------- |
 | `` `ok` ``        | The operation completed successfully. The `value` is the result.                     |
@@ -2608,6 +2615,7 @@ These functions are the foundation of SLIP's object system.
 - `inherit <child-scope> <parent-scope>`: Sets the parent (prototype) link of the `child-scope` to be the `parent-scope`. This is the primary mechanism for establishing an "is-a" relationship and can only be performed once per object.
 - `mixin <target-scope> <source-scopes...>`: Establishes a "has-a" relationship by adding one or more `source-scopes` to the `target-scope`'s list of mixins. This is a dynamic link, not a copy. Property lookups will search through mixins before checking the target's parent. This mechanism can be used multiple times to layer capabilities.
 - `with <object> <config>`: Executes a `code` block or merges a `mapping` (a `dict` or `scope`) within the context of a given object, then returns the object. It is ideal for fluent configuration and is typically used with the pipe operator.
+
   - `with <object> <config-block: code>`
   - `with <object> <config-mapping: dict|scope>`
 
@@ -2743,6 +2751,16 @@ These helpers create new functions from existing ones.
     utils: import https://sliplang.com/utils.slip
     ```
 
+### 14.3. The Core Library Funtions written in SLIP (`root.slip`)
+
+Many functions in the SLIP core library are written in SLIP itself. This file is loaded automatically by the interpreter and provides a rich set of higher-order functions and utilities. This demonstrates the power of the language to build upon its own primitives.
+
+There is nothing special about `root.slip` other than the fact that all functions are set in the root scope and that it is automatically loaded before any other script is run.
+
+You can view root.slip below:
+
+- **[root.slip](slip/root.slip)**
+
 ### 14.2. Host Integration: `host-object` and `task`
 
 Every SLIP runtime must provide two core functions that bridge the gap between the script and the host application.
@@ -2752,12 +2770,6 @@ The **`host-object`** function serves as a gateway for scripts to retrieve live 
 The **`task`** primitive integrates with the host's asynchronous event loop. Calling `task [...]` schedules the code block to run concurrently and immediately returns a task handle. To ensure the host remains responsive, `while` and `foreach` loops inside a task automatically yield control on each iteration. The host is responsible for managing the task lifecycle. When a task is created in the context of a `SLIPHost` object, it is registered with that object. The base `SLIPHost` class provides a `cancel-tasks` method (exposed to SLIP) so the host can clean up all active tasks associated with an object when it is no longer needed (e.g., on player logout).
 
 For the full SLIPHost contract and binding rules, see Chapter 12.
-
-### 14.3. The SLIP Core Library (`root.slip`)
-
-SLIP extends its built-in functionality with a core library written in SLIP itself. This file is loaded automatically by the interpreter and provides a rich set of higher-order functions and utilities. This demonstrates the power of the language to build upon its own primitives.
-
-There is nothing special about `root.slip` other than the fact that all functions are set in the root scope and that it is automatically loaded before any other script is run.
 
 ---
 
@@ -2881,20 +2893,21 @@ A mature language is defined as much by what it _is_ as by what it is _not_. SLI
 
 Here is a summary of how SLIP has addressed the core ideas from its most significant influences:
 
-| Language                | "The Great Idea"                     | SLIP's Interpretation                                                                                                                                                      |
-| :---------------------- | :----------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| **LISP / Scheme**       | **Homoiconicity (Code as Data)**     | **Directly Adopted.** The first-class `code` type (`[...]`) is the heart of SLIP's metaprogramming.                                                                        |
-|                         | **Macros (`defmacro`)**              | **Replaced.** SLIP uses runtime functions (`run`, `inject`, `splice`) on `code` objects, avoiding a separate compile-time macro system.                                    |
-|                         | **Continuations (`call/cc`)**        | **Explicitly Rejected.** Replaced with safer, more structured alternatives: `task` for concurrency and `response` for non-local exits.                                     |
-| **Smalltalk**           | **Pure Message Passing**             | **Adapted.** The implicit pipe call (`data                                                                                                                                 | map`) is SLIP's ergonomic form of message passing. |
-|                         | **The "Image" (Persistence)**        | **Delegated to Host.** This is a powerful host-level pattern, not a language feature, preserving the language's simplicity.                                                |
-| **Erlang / Elixir**     | **Pattern Matching in Functions**    | **Adapted and Adopted** as generic functions. Dispatch can be made conditional on argument _values_ using `                                                                | guard` clauses, achieving a similar goal.          |
-|                         | **Actor Model / Channels**           | **Adopted as a Library Pattern.** The `task` primitive provides the actors, and `make-channel`, `send`, `receive` provide the safe communication, implemented by the host. |
-| **JavaScript / Self**   | **Prototype-Based OOP**              | **Directly Adopted.** The `scope` object with its `parent` link _is_ a prototype system. `inherit` makes this explicit.                                                    |
-| **Logo**                | **Domain-Specific "World"**          | **Adopted as Core Philosophy.** This is the entire purpose of SLIP as an embedded language: the host provides a "world" of commands, creating a DSL.                       |
-| **Rebol**               | **Linear, Greedy Evaluation**        | **Explicitly Rejected.** SLIP uses a structured, hierarchical evaluation model for function calls, providing more predictable behavior.                                    |
-| **Prolog / miniKanren** | **Logic Programming & Backtracking** | **Delegated as a Library.** The core evaluator is deterministic. Logic programming is a powerful but distinct paradigm best provided by a host library.                    |
-| **Rust / Haskell**      | **The `Result` Type (`ok`/`err`)**   | **Directly Adopted** and formalized as the first-class `response` type, which is handled elegantly by generic functions with `\|guard` clauses.                            |
+<!-- prettier-ignore -->
+| Language | "The Great Idea" | SLIP's Interpretation |
+| :--- | :--- | :--- |
+| **LISP / Scheme** | **Homoiconicity (Code as Data)** | **Directly Adopted.** The first-class `code` type (`[...]`) is the heart of SLIP's metaprogramming. |
+| | **Macros (`defmacro`)** | **Replaced.** SLIP uses runtime functions (`run`, `inject`, `splice`) on `code` objects, avoiding a separate compile-time macro system. |
+| | **Continuations (`call/cc`)** | **Explicitly Rejected.** Replaced with safer, more structured alternatives: `task` for concurrency and `response` for non-local exits. |
+| **Smalltalk** | **Pure Message Passing** | **Adapted.** The implicit pipe call (`data | map`) is SLIP's ergonomic form of message passing. |
+| | **The "Image" (Persistence)** | **Delegated to Host.** This is a powerful host-level pattern, not a language feature, preserving the language's simplicity. |
+| **Erlang / Elixir** | **Pattern Matching in Functions** | **Adapted and Adopted** as generic functions. Dispatch can be made conditional on argument *values* using `|guard` clauses, achieving a similar goal. |
+| | **Actor Model / Channels** | **Adopted as a Library Pattern.** The `task` primitive provides the actors, and `make-channel`, `send`, `receive` provide the safe communication, implemented by the host. |
+| **JavaScript / Self** | **Prototype-Based OOP** | **Directly Adopted.** The `scope` object with its `parent` link *is* a prototype system. `inherit` makes this explicit. |
+| **Logo** | **Domain-Specific "World"** | **Adopted as Core Philosophy.** This is the entire purpose of SLIP as an embedded language: the host provides a "world" of commands, creating a DSL. |
+| **Rebol** | **Linear, Greedy Evaluation** | **Explicitly Rejected.** SLIP uses a structured, hierarchical evaluation model for function calls, providing more predictable behavior. |
+| **Prolog / miniKanren** | **Logic Programming & Backtracking** | **Delegated as a Library.** The core evaluator is deterministic. Logic programming is a powerful but distinct paradigm best provided by a host library. |
+| **Rust / Haskell** | **The `Result` Type (`ok`/`err`)** | **Directly Adopted** and formalized as the first-class `response` type, which is handled elegantly by generic functions with `|guard` clauses. |
 
 ### Conclusion
 
