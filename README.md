@@ -6,6 +6,14 @@ SLIP is a new scripting language designed specifically for the challenges of wor
 
 It achieves this by revisiting a few core assumptions of language design, resulting in a language that is highly consistent, safe to embed, and remarkably expressive.
 
+### Dive Deeper
+
+This README provides a high-level overview. To truly understand the project, choose your path:
+
+- **[Read the Design Philosophy »](<docs/SLIP Design Philosophy.md>)** — The best place to start. Understand the "why" behind SLIP's unique design and its core principles.
+- **[See the Core Ideas Below »](#the-core-ideas)** — Continue reading for a quick, scannable summary of the key features.
+- **[Get Started Immediately »](#getting-started)** — Jump to the instructions to clone the repo and run your first script.
+
 ### A Taste of SLIP
 
 SLIP's features are designed to work together, allowing you to define the concepts of your world and then simulate them with clean, declarative code.
