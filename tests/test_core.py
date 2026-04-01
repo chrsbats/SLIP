@@ -5,18 +5,18 @@ from slip.slip_runtime import ScriptRunner
 async def test_core_arithmetic_and_operators():
     runner = ScriptRunner()
     res = await runner.handle_script("10 + 5 * 2")
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == 30
 
     res = await runner.handle_script("10 + (5 * 2)")
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == 20
 
 @pytest.mark.asyncio
 async def test_core_print_alias_emits_stdout():
     runner = ScriptRunner()
     res = await runner.handle_script('print "hello"')
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert len(res.side_effects) == 1
     effect = res.side_effects[0]
     assert effect['topics'] == ['stdout']
@@ -40,7 +40,7 @@ async def test_core_type_predicates():
         ("is-scope? (scope #{})", True),
     ]:
         res = await runner.handle_script(src)
-        assert res.status == 'success', f"{src}: {res.error_message}"
+        assert res.status == 'ok', f"{src}: {res.error_message}"
         assert res.value is expected, f"{src}: got {res.value!r}"
 
 @pytest.mark.asyncio
@@ -49,31 +49,31 @@ async def test_core_list_utilities_reverse_map_filter_reduce_zip():
 
     # reverse
     res = await runner.handle_script("reverse #[1,2,3]")
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == [3, 2, 1]
 
     # map (double each)
     script = "map (fn {x} [ x * 2 ]) #[1,2,3]"
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == [2, 4, 6]
 
     # filter (> 1)
     script = "filter (fn {x} [ x > 1 ]) #[1,2,3]"
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == [2, 3]
 
     # reduce (sum)
     script = "reduce (fn {acc, x} [ acc + x ]) 0 #[1,2,3]"
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == 6
 
     # zip
     script = "zip #[1,2] #[3,4,5]"
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == [[1, 3], [2, 4]]
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ inc: partial add 1
 inc 41
 """
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == 42
 
     # compose: inc ∘ double (applies right-to-left)
@@ -97,7 +97,7 @@ f: compose inc double
 f 10
 """
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == 21
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ Player: create Character
 is-a? Player Character
 """
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value is True
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ SchemaObj: schema #{}
 is-schema? SchemaObj
 """
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value is True
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ x: 5
 when [x > 3] [ print "bigger" ]
 """
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert any(e['topics'] == ['stdout'] and e['message'] == 'bigger' for e in res.side_effects)
 
     # with
@@ -145,5 +145,5 @@ obj |with [ name: "new" ]
 obj.name
 """
     res = await runner.handle_script(script)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == "new"

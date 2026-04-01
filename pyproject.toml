@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # This is the main section for your project's metadata.
 [project]
 name = "slip"
-version = "0.1"
+version = "0.2"
 authors = [
   { name="Chris Bates", email="1314008+chrsbats@users.noreply.github.com" },
 ]
@@ -23,6 +23,17 @@ classifiers = [
     "Topic :: Text Processing :: General",
 ]
 
+# These are the libraries your project depends on.
+# uv/setuptools will automatically install these from the project metadata.
+dependencies = [
+    "koine>=0.10.1",
+    "pystache==0.6.8",
+    "httpx==0.28.1",
+    "xmltodict==0.14.2",
+    "safer-yaml==0.1",
+    "toml>=0.10.2"
+]
+
 [project.urls]
 "Homepage" = "https://github.com/<you>/slip"
 "Bug Tracker" = "https://github.com/<you>/slip/issues"
@@ -33,17 +44,6 @@ include = ["slip*"]
 [tool.setuptools.package-data]
 slip = ["root.slip", "grammar/*.yaml"]
 
-# These are the libraries your project depends on.
-# pip will automatically install these when it installs your package.
-dependencies = [
-    "koine>=0.10.1",
-    "pystache==0.6.8",
-    "httpx==0.28.1",
-    "xmltodict==0.14.2",
-    "safer-yaml==0.1",
-    "toml>=0.10.2"
-]
-
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
@@ -52,4 +52,7 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-mock>=3.14.0",
     "flake8>=7.0.0"
+]
+etcher = [
+    "etcher>=0.2.0"
 ]

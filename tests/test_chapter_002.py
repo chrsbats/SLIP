@@ -6,7 +6,7 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected
 
@@ -52,7 +52,7 @@ async def test_list_and_dict_literals_evaluate_contents():
     #[ xs, d.a + d.b ]
     """
     res = await run_slip(src)
-    assert res.status == 'success'
+    assert res.status == 'ok'
     xs, summed = res.value
     assert xs == [1, 2, 3]
     assert summed == 16
@@ -166,7 +166,7 @@ async def test_vectorized_pluck_operation():
     """
     res = await run_slip(src)
     # Vectorized pluck: players.hp → #[75, 120, 90], then filter > 100 → #[120]
-    assert res.status == 'success' and res.value == [120]
+    assert res.status == 'ok' and res.value == [120]
 
 @pytest.mark.asyncio
 async def test_filter_with_lhs_pipeline_transform():

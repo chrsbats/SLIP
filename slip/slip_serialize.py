@@ -35,6 +35,12 @@ def _encoding_from_content_type(content_type: Optional[str]) -> Optional[str]:
 
 
 def _to_builtin(obj: Any) -> Any:
+    # Realize internal lazy selections/views at serialization boundaries.
+    try:
+        if hasattr(obj, "realize") and callable(getattr(obj, "realize")):
+            obj = obj.realize()
+    except Exception:
+        pass
     # Convert mapping-like OrderedDicts from xmltodict to plain dicts recursively
     if isinstance(obj, list):
         return [_to_builtin(x) for x in obj]

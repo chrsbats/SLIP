@@ -137,6 +137,8 @@ rules:
       - { rule: list_literal }
       - { rule: dict_literal }
       - { rule: sig_literal }
+      - { rule: quoted_set_path }
+      - { rule: quoted_raw_set_path }
       - { rule: string_literal }
       - { rule: number_literal }
       - { rule: boolean_literal }
@@ -184,6 +186,14 @@ rules:
           ast: { tag: "piped-path", leaf: true },
           regex: '\|[^ \t\r\n;,\(\)\[\]\{\}\''"`]+',
         }
+
+  quoted_set_path:
+    ast: { tag: "quoted-set-path", leaf: true }
+    regex: '"([^"\\]|\\.)*":'
+
+  quoted_raw_set_path:
+    ast: { tag: "quoted-raw-set-path", leaf: true }
+    regex: "'([^'\\\\]|\\\\.)*':"
 
   set_path:
     ast: { promote: true }
@@ -355,7 +365,7 @@ rules:
           placeholder:
             ast: { tag: "sig" }
             sequence:
-              - { rule: WS_OPT }
+              - { rule: WS_OPT_NL }
               - { rule: expression_list, ast: { promote: true } }
-              - { rule: WS_OPT }
+              - { rule: WS_OPT_NL }
       - { literal: "}", ast: { discard: true } }

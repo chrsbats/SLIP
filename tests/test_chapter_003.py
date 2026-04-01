@@ -6,7 +6,7 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected
 
@@ -143,7 +143,7 @@ async def test_update_with_piped_binary_call():
     assert_ok(res, 8)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected
 
@@ -203,7 +203,7 @@ async def test_vectorized_elementwise_assignment_requires_matching_lengths():
     """
     res = await run_slip(src)
     # Any error is acceptable; message wording is standardized by the runtime
-    assert res.status == 'error'
+    assert res.status == 'err'
 
 # 3.x Primitive type annotations in dispatch
 @pytest.mark.asyncio

@@ -9,6 +9,10 @@ __pycache__/
 
 slim_branches.py
 
+plan/
+AGENTS.md
+TASKLIST.md 
+
 # coverage artifacts
 htmlcov/
 .coverage*
@@ -82,3 +86,4 @@ htmlcov/
 Thumbs.db
 
 .aider*
+.cecli*

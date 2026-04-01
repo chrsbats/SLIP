@@ -5,7 +5,7 @@ from slip.slip_runtime import slip_api_method
 
 
 def assert_ok(res, expected=None):
-    assert res.status == "success", f"expected success, got {res}"
+    assert res.status == 'ok', f"expected success, got {res}"
     if expected is not None:
         assert res.value == expected, f"expected {expected!r}, got {res.value!r}"
 

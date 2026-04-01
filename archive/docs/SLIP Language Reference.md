@@ -84,7 +84,6 @@ In SLIP, the parser produces an Abstract Syntax Tree (AST) that is a direct, 1:1
 - **Uniform Parsing of Expressions:** The parser treats all expressions as a simple, flat list of terms. It does not know if a path like `add` will evaluate to a function or a value. Therefore, an expression like `add 1 add 2` is **not a syntax error**. It is parsed successfully into a flat list. The `prefix_call (pipe_chain)*` grammar is a pattern enforced by the **evaluator**, which will likely raise a runtime error if it encounters a function where it expects a value, which is the correct behavior. This maintains the strict separation of concerns between parsing and evaluation.
 
 - **Flat Lists for Infix Operations:** The parser's primary job is to convert each line of code into a simple, flat list of tokens. It does not create a nested tree based on operator precedence.
-
   - The line `10 + 5 * 2` is parsed directly into the flat structure `[<number 10>, [get-path [name '+']], <number 5>, [get-path [name '*']], <number 2>]`.
   - _Contrast with most languages:_ A traditional parser would transform this into a tree where `*` has higher precedence than `+`, equivalent to `10 + (5 * 2)`. SLIP does not; the structure is preserved exactly as written.
 
@@ -128,7 +127,6 @@ The evaluator uses a **Uniform Call Syntax** to determine how to interpret a lis
 SLIP has several container literals, which fall into two fundamental categories based on how they handle their contents: those that create **unevaluated** data structures (code or signatures), and those that **evaluate** their contents to create runtime values.
 
 - **Unevaluated Literals:** These operators capture their contents as-is, without execution, producing data structures that represent code or declarations.
-
   - **`[...]` – A Literal `code` Block.** This is the fundamental operator for creating unevaluated code. It produces a `code` object, which is an Abstract Syntax Tree (a list of lists) that can be stored, manipulated, or passed to functions. Expressions within the block can be separated by newlines or semicolons (`;`), allowing multiple expressions on one line (e.g., `[x: 1; y: x + 3]`). The code inside is not executed until explicitly run. This is the foundation of SLIP's function-controlled evaluation and metaprogramming. When a `code` block is executed (e.g., by `run` or as part of a control flow structure like `if`), its expressions are evaluated within the **current lexical scope**. Bindings created inside the block will therefore modify the current scope. New lexical scopes are created only when a function body is executed.
   - **`{...}` – A `sig` (Signature) Literal.** This creates an unevaluated `sig` object. It is used for function signatures, type unions/examples, and as a meta-parameter for functions that dynamically bind variables (e.g., `fn {…} […]`, `foreach {…} … […]`, `for {…} … […]`). A sig literal is never evaluated; it is inspected as data.
 
@@ -158,7 +156,6 @@ An expression is a sequence of terms evaluated by the interpreter. Expressions a
 An expression must conform to one of the following patterns:
 
 1.  **Assignment Expression:**
-
     - The **first** term must be a `set-path` or `multi-set-path` pattern (e.g., `x:`, `[a,b]:`).
     - The rest of the expression is evaluated, and its result is assigned to the target pattern.
     - **Example:** `my-var: 10 + 20`
@@ -382,7 +379,6 @@ This is possible because a query on the Left-Hand Side of an assignment does not
 SLIP provides two string literal forms with different semantics:
 
 - i-strings: Written with double quotes, e.g., "..."
-
   - Behavior: These are interpolated strings that are automatically dedented and support Mustache-style templating using double braces.
   - Dedent: Common leading indentation is removed from every line, making multi-line strings easy to author inline.
   - Templating: Placeholders of the form {{ expression }} are evaluated in the current scope and the result is inserted into the string.
@@ -426,13 +422,11 @@ The evaluator inspects the _structure_ of the `set-path` pattern on the Left-Han
 Here are the different binding strategies determined by the pattern on the left-hand side of the `:`:
 
 - **1. Simple Binding**
-
   - **Behavior:** Binds a single value to a single path. This is the most common form of assignment.
   - **Syntax:** `path.to.value: expression`
   - **Example:** `user.name: "John"`
 
 - **2. Generic Function Merging**
-
   - **Behavior:** Adds a new method implementation to an existing generic function. If a function (created by `fn`) is assigned to a path that already holds a generic function, its method is merged into the existing container. This is the core mechanism for creating multi-method functions.
   - **Syntax:** `function-name: fn {signature} [body]`
   - **Example:**
@@ -444,25 +438,21 @@ Here are the different binding strategies determined by the pattern on the left-
     ```
 
 - **3. Scope Registration**
-
   - **Behavior:** Registers a new `scope` object as a formal type. The first time a `scope` is assigned to a path, the system registers it by giving it a unique type ID and a canonical name in its `.meta` property.
   - **Syntax:** `TypeName: scope #{...}`
   - **Example:** `Character: scope #{ hp: 100 }`
 
 - **4. Destructuring Binding**
-
   - **Behavior:** Binds elements from a list on the right to multiple paths defined in a list pattern on the left. The number of paths must match the number of elements.
   - **Syntax:** `[path1, path2, ...]: list-expression`
   - **Example:** `[x, y]: #[10, 20]`
 
 - **5. Slice Replacement**
-
   - **Behavior:** Replaces a slice of a target list with the elements from another list.
   - **Syntax:** `list[start:end]: new-list-expression`
   - **Example:** `items[1:3]: #[ "new", "items" ]`
 
 - **6. Vectorized (Columnar) Binding**
-
   - **Behavior:** This powerful feature allows you to perform a "columnar" update, setting a property on every item that matches a query. This is the write-equivalent of the query patterns used for reading.
   - **Syntax:** SLIP's lazy, view-based query engine is powerful enough to resolve both "filter-then-pluck" and "pluck-then-filter" patterns into the same unambiguous update plan. Both of the following syntactic forms are valid and produce the identical result:
     - `collection[filter-or-slice].property: expression`
@@ -478,7 +468,6 @@ Here are the different binding strategies determined by the pattern on the left-
   - **Mechanism:** This is possible because a query on the Left-Hand Side of an assignment does not immediately create temporary lists of values. Instead, it creates a lazy **"view"** that preserves the context of the original collection. The assignment engine uses this view to create a "write handle" that can unambiguously identify and modify the correct properties on the original objects. This provides a flexible and highly consistent syntax for both reading and writing data.
 
 - **7. Parent Scope Binding**
-
   - **Behavior:** Modifies a binding in an outer scope. Each leading `../` prefix climbs one level up the parent scope chain before performing the assignment.
   - **Syntax:** `../path: expression`
   - **Example:** `../counter: counter + 1`
@@ -810,7 +799,6 @@ The left-to-right evaluation model makes chaining multiple pipe operations highl
 - **Example: `data |filter [ x > 10 ] |map [ x * 2 ]`**
 
   Assuming `data` is `#[1, 15, 20]`, the evaluation proceeds as follows:
-
   1.  The evaluator processes `data`, resulting in the list `#[1, 15, 20]`.
   2.  It then sees the pipe operator `|` followed by `filter`. The pipe call rule is triggered: `filter #[1, 15, 20] [ x > 10 ]`.
   3.  The result of the filter call is `#[15, 20]`. This value becomes the input for the next step.
@@ -1330,7 +1318,7 @@ invalid:   `invalid`
 This allows you to write cleaner, more readable code.
 
 **Good:** `respond ok player-obj`
-**Verbose:** ` respond ``  `ok` `` player-obj`
+**Verbose:** `respond `` `ok` `` player-obj`
 
 ### 7.4. `emit` for Side Effects
 
@@ -1415,24 +1403,13 @@ handle-find-result: fn {response-obj} [
 -- Method 3: A fallback for any other value.
 -- This will be selected if no other guards match.
 handle-find-result: fn {other} [
-    emit "error" "Received an unexpected result: {other}"
+    emit 'err' "Received an unexpected result: {other}"
 ]
 
 -- --- Usage ---
 outcome: find-player "Kael"
 handle-find-result outcome -- Will call the appropriate method based on the response.
 ```
-
-This combination of `emit`, `respond`, and pattern matching provides a highly robust and expressive system for managing all facets of a script's execution.
-
-You are 100% right. My apologies. I was pattern-matching to other languages and failed to apply SLIP's own radical consistency. You are absolutely correct on all points.
-
-1.  **It should be a path, not a string.** This is a more powerful and consistent design. The location of a module is part of the language's path system, not just a piece of string data.
-2.  **It should be `kebab-case`**. A module is a namespace, not a prototype. It should follow the standard variable naming convention.
-
-Thank you for the sharp correction. Let's get it right. This is a much more elegant and "SLIP-like" design.
-
-Here is the completely rewritten section that accurately reflects this superior model.
 
 ---
 
@@ -1444,7 +1421,7 @@ In SLIP, modularity is not handled by special keywords. Instead, code organizati
 
 The `import` function is the standard way to load and use code from other files. It takes either a **path literal** or a **string URL/locator** as an argument, which specifies the module's location using a scheme-based syntax.
 
-- **Syntax:** `` variable-name: import `scheme://path/to/module`  ``
+- **Syntax:** ``variable-name: import `scheme://path/to/module` ``
 - **Behavior:**
   1.  The `import` function receives either a `path-literal` (e.g., `` `file://modules/math.slip` ``) or a string URL/locator (e.g., `'file://modules/math.slip'`).
   2.  It asks the host application to inspect this path/locator. The host is responsible for implementing the logic for different schemes (the first segment of the path, like `file:` or `https:`).
@@ -1888,7 +1865,6 @@ A full reference of these node types and their structure can be found in Appendi
 - **`call <action> [<arg-list>]`**: The universal primitive for programmatic evaluation. `call` takes an "action"—which can be a path literal, a function, or a string—and an optional list of arguments, and performs the corresponding operation.
 
   Its most powerful feature is its ability to treat strings as dynamic path specifications. This allows you to use SLIP's standard string interpolation to construct complex paths at runtime before evaluating them.
-
   - **Dynamic Path Construction:** If the action is a string, `call` first parses it into a path. This enables you to build paths programmatically.
     ```slip
     user-id: 123
@@ -2295,20 +2271,20 @@ This object is the primary data structure for communicating the outcome of a scr
 An `ExecutionResult` contains the following fields:
 
 - **`status: str`**
-  The most important field. It will be one of three possible strings:
+  The most important field. It will be one of two possible strings:
+  - `'ok'`: The script completed without any uncaught errors.
+  - `'err'`: The script was halted due to a parse or runtime error.
 
-  - `'success'`: The script or expression completed without any errors.
-  - `'error'`: The script was halted due to a syntax or runtime error.
-  - `'return'`: The script executed a `return` statement, exiting a function early.
+  Note: `return` is handled inside the language. A script that uses `return` still produces an `ExecutionResult` with status `'ok'`.
 
 - **`value: Any`**
-  If the status is `'success'` or `'return'`, this field holds the final return value of the script or expression. For a script with multiple lines, this is the value of the last expression evaluated. If there is no return value, this will be `none`.
+  If the status is `'ok'` or `'return'`, this field holds the final return value of the script or expression. For a script with multiple lines, this is the value of the last expression evaluated. If there is no return value, this will be `none`.
 
 - **`error_message: Optional[str]`**
-  If the status is `'error'`, this field contains a human-readable string describing the error.
+  If the status is `'err'`, this field contains a human-readable string describing the error.
 
 - **`error_token: Optional[Token]`**
-  If the status is `'error'`, this field contains the `Token` object at which the error occurred. This is crucial for diagnostics, as the token contains the line and column number of the problem.
+  If the status is `'err'`, this field contains the `Token` object at which the error occurred. This is crucial for diagnostics, as the token contains the line and column number of the problem.
 
 - **`side_effects: List[Dict]`**
   A chronologically ordered list of all side-effect events generated during the script's execution, primarily via the `emit` function. Each event is a dictionary, typically containing `{'topics': [...], 'message': ...}`.
@@ -2355,7 +2331,7 @@ SLIP stacktrace: (add 1 'a')
 
 ```python
 result = await runner.handle_script("add 1 'a'")
-if result.status == 'error':
+if result.status == 'err':
     log_to_server_console(result.format_error())
     # Also available in result.side_effects as a single stderr event
 ```
@@ -2410,7 +2386,7 @@ This powerful pattern creates a clean separation between a script's logical exec
 
 #### 13.4. In-Script Error Handling
 
-SLIP does not provide try/catch. Unexpected runtime errors (e.g., type mismatches, missing paths) halt the script and are reported to the host uniformly (see 13.2). The host receives an ExecutionResult with status 'error', a single consolidated stderr side-effect containing the formatted message, and a detailed error_message suitable for display or logging.
+SLIP does not provide try/catch. Unexpected runtime errors (e.g., type mismatches, missing paths) halt the script and are reported to the host uniformly (see 13.2). The host receives an ExecutionResult with status 'err', a single consolidated stderr side-effect containing the formatted message, and a detailed error_message suitable for display or logging.
 
 For cases where you want to observe failures inside a script without halting execution, wrap the code in do […]. do catches runtime errors in the block and converts them into response err <message> as its outcome (along with captured effects), allowing you to inspect or branch on the result within SLIP.
 
@@ -2450,11 +2426,11 @@ The meaning of the `status` code depends on the protocol. For HTTP, it is the st
 -- Request a lite response to handle potential errors
 [status, body]: http://api/items#(lite: true)
 if [status != 200] [
-    emit "error" "API request failed with status {status}"
+    emit 'err' "API request failed with status {status}"
 ]
 ```
 
-Note that this behavior is specific to host-provided scheme path handlers and does not change the interpreter's own `ExecutionResult` status, which will still be `'success'` as long as the script itself runs without error.
+Note that this behavior is specific to host-provided scheme path handlers and does not change the interpreter's own `ExecutionResult` status, which will still be `'ok'` as long as the script itself runs without error.
 
 ## 14. Reference
 
@@ -2569,8 +2545,8 @@ These primitives are the foundation of SLIP's functional nature.
 - `fn {signature} [body]`: The core constructor for creating functions. It creates a `Function` object, which is a closure that captures the current lexical scope and bundles it with the provided signature (`sig` literal) and the unevaluated body (`code` block). The `set-path` assignment primitive is responsible for placing this `Function` into a `GenericFunction` container, creating the container if one does not already exist.
 - `call <action> [<arg-list>]`: The universal primitive for programmatic evaluation. It takes an action (a path literal, a function, or a string) and an optional list of arguments, and performs the corresponding operation. Its primary metaprogramming role is to evaluate paths that are constructed dynamically from strings.
   - Constructs and evaluates paths from strings: `call "users.{{id}}.name"`
-  - Invokes functions: `` call `add` #[1, 2] ``
-  - Performs assignments: `` call `x:` #[10] ``
+  - Invokes functions: ``call `add` #[1, 2]``
+  - Performs assignments: ``call `x:` #[10]``
 
 #### Control Flow Primitives
 
@@ -2615,7 +2591,6 @@ These functions are the foundation of SLIP's object system.
 - `inherit <child-scope> <parent-scope>`: Sets the parent (prototype) link of the `child-scope` to be the `parent-scope`. This is the primary mechanism for establishing an "is-a" relationship and can only be performed once per object.
 - `mixin <target-scope> <source-scopes...>`: Establishes a "has-a" relationship by adding one or more `source-scopes` to the `target-scope`'s list of mixins. This is a dynamic link, not a copy. Property lookups will search through mixins before checking the target's parent. This mechanism can be used multiple times to layer capabilities.
 - `with <object> <config>`: Executes a `code` block or merges a `mapping` (a `dict` or `scope`) within the context of a given object, then returns the object. It is ideal for fluent configuration and is typically used with the pipe operator.
-
   - `with <object> <config-block: code>`
   - `with <object> <config-mapping: dict|scope>`
 

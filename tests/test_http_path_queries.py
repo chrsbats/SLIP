@@ -22,9 +22,9 @@ async def test_http_get_applies_trailing_segments_client_side(monkeypatch):
         "mage-names",
     ])
     res = await runner.handle_script(src)
-    if res.status != "success":
+    if res.status != 'ok':
         print("\n--- DEBUG error_message ---\n", res.error_message, "\n---------------------------\n")
-    assert res.status == "success"
+    assert res.status == 'ok'
     assert res.value == ["Jaina"]
 
 @pytest.mark.asyncio
@@ -38,5 +38,5 @@ async def test_http_write_with_trailing_segments_errors(monkeypatch):
     runner = ScriptRunner()
     src = "http://game-api/players.name: 'X'"
     res = await runner.handle_script(src)
-    assert res.status == "error"
+    assert res.status == 'err'
     assert "TypeError:" in (res.error_message or "")

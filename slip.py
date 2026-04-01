@@ -28,7 +28,7 @@ async def run_script_file(file_path: str):
     for effect in result.side_effects:
         if effect.get('topics') == ['stdout']:
             print(effect.get('message', ''))
-    if result.status == 'error':
+    if result.status == 'err':
         print(result.format_error(), file=sys.stderr)
         raise SystemExit(1)
     if result.value is not None:
@@ -68,7 +68,7 @@ async def main():
             # Parse, run through ScriptRunner
             result = await runner.handle_script(line)
 
-            if result.status == 'error':
+            if result.status == 'err':
                 # Pretty, location-aware message
                 print(result.format_error(), file=sys.stderr)
                 continue

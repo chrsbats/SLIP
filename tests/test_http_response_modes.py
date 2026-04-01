@@ -6,12 +6,12 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"Expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"Expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected, f"Expected {expected!r}, got {res.value!r}"
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"Expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"Expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
@@ -104,7 +104,7 @@ async def test_http_get_default_none_returns_body_and_errors_on_non_2xx(monkeypa
         # Missing endpoint
         if "missing" in url:
             status = 404
-            value = {"error": "not found"}
+            value = {'err': "not found"}
             headers = {"content-type": "application/json"}
             if mode in ('lite', 'full'):
                 return (status, value, headers)

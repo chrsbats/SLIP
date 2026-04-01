@@ -10,7 +10,8 @@ It achieves this by revisiting a few core assumptions of language design, result
 
 This README provides a high-level overview. To truly understand the project, choose your path:
 
-- **[Read the Design Philosophy »](<docs/SLIP Design Philosophy.md>)** — The best place to start. Understand the "why" behind SLIP's unique design and its core principles.
+- **[Start with Part 1 »](<docs/01 SLIP Scripting.md>)** — Learn just enough SLIP to be productive quickly.
+- **[Read the Design Philosophy »](<docs/Appendix C - Design Philosophy.md>)** — Understand the "why" behind SLIP's design after you know the basics.
 - **[See the Core Ideas Below »](#the-core-ideas)** — Continue reading for a quick, scannable summary of the key features.
 - **[Get Started Immediately »](#getting-started)** — Jump to the instructions to clone the repo and run your first script.
 
@@ -50,21 +51,26 @@ foreach {goblin} lair-goblins [
 
 SLIP's power comes from a few key concepts that make it uniquely suited for modeling complex systems.
 
-#### 1. Model Behavior with Components, Not Rigid Classes
+#### 1. Model Behavior With Prototypes And Dispatch
 
-SLIP's object model is designed for dynamic worlds where an object's capabilities can change at any moment. Instead of a strict inheritance hierarchy, you compose objects from a collection of mixins, much like the **Entity-Component-System (ECS)** pattern used in modern game development.
+SLIP's object model is designed for dynamic worlds where behavior is often clearer as a set of separate rules instead of one giant conditional.
 
-**How it works:** You define a function for a specific combination of components. SLIP's dispatch engine automatically runs the correct logic for any object that has that exact set of components.
+**How it works:** You define functions for the cases you care about. SLIP's dispatch engine selects the best match based on the runtime arguments.
 
 ```slip
--- A rule that only applies to objects that are both a Player and Poisoned.
--- This is like a "system" that runs on entities with these two "components".
-handle-tick: fn {target: (Player and Poisoned)} [
+Character: scope #{}
+Golem: scope #{} |inherit Character
+
+handle-effect: fn {target: Character, effect: `poison`} [
     target.hp: target.hp - 5
+]
+
+handle-effect: fn {target: Golem, effect: `poison`} [
+    print "The Golem is immune to poison!"
 ]
 ```
 
-This is made possible by a powerful **multiple dispatch** engine that selects behavior based on the runtime state of all arguments.
+This is made possible by SLIP's dispatch model, which keeps fallback behavior explicit and lets you break complex logic into smaller rules.
 
 #### 2. A Single, Powerful Tool for Finding and Changing Things
 
@@ -96,9 +102,9 @@ This is possible because SLIP is **homoiconic**. It allows for powerful, runtime
 
 #### 4. User Scripts Can't Freeze Your Application
 
-SLIP is designed to be safely embedded in a host application (like a game server). A user's script with an infinite loop won't lock up the entire program.
+SLIP is designed to be safely embedded in a host application. A user's script should not monopolize the host just because it launches a background loop.
 
-**How it works:** Inside a concurrent `task`, SLIP's loops (`loop`, `while`, `foreach`) automatically and transparently "yield" control back to the host on every single iteration. This **cooperative multitasking** is built-in, ensuring the host always remains responsive.
+**How it works:** Background work runs through `task`, which integrates with the host event loop and keeps the async story focused on practical jobs like polling, timers, and maintenance work.
 
 ---
 
@@ -112,17 +118,17 @@ SLIP's simplicity is the result of a deep architectural choice: it revisits thre
 
 3.  **Functions, Not Keywords:** With the exception of assignment (`:`), all control flow is handled by regular functions operating on first-class `code` objects. This makes the language's core grammar radically simple and user-extensible by default.
 
-To read the full argument for this design, see **[The SLIP Design Philosophy](<docs/SLIP Design Philosophy.md>)**.
+To read the full argument for this design, see **[Appendix C - Design Philosophy](<docs/Appendix C - Design Philosophy.md>)**.
 
 ---
 
 ### Project Status & Roadmap
 
-This project is a **stable alpha**. The language design is feature-complete, and the Python prototype is being actively **battle-tested** as the scripting engine for a complex application. This real-world usage is driving the final refinements to the syntax and standard library.
+This project is a **stable alpha**. The Python implementation is the active reference runtime, and the docs are now organized around practical scripting first, deeper design later.
 
 - **Current:** Refine the language by continuing to build with the Python prototype.
 - **Next:** Begin work on a high-performance implementation in a systems language with a hybrid AOT/JIT compilation strategy.
-- **Known Limitation:** The query system currently builds new lists when filtering (e.g., `players[...]`). The final design calls for lazy "views" for maximum performance, which is on the roadmap.
+- **Known Focus Area:** The current work is on persistence boundaries, host integration, and keeping the practical documentation aligned with the real runtime.
 
 ### Getting Started
 
@@ -140,18 +146,18 @@ This project is a **stable alpha**. The language design is feature-complete, and
     cd SLIP
     ```
 
-2.  **Install the project in editable mode:**
-    This command will also automatically install any required dependencies.
+2.  **Create a project virtual environment and sync dependencies:**
 
     ```bash
-    pip install -e .
+    uv venv
+    uv sync --extra dev
     ```
 
 3.  **Run a script file:**
     ```bash
-    python slip.py test.slip
+    uv run python slip.py test.slip
     ```
-    _(Note: Running `python slip.py` with no arguments will start a REPL for interactive use.)_
+    _(Note: Running `uv run python slip.py` with no arguments will start a REPL for interactive use.)_
 
 #### Embedding in Python
 
@@ -176,10 +182,11 @@ async def main():
         ]
     }
 
-    runner = ScriptRunner(context)
-    result = await runner.run(script)
+    runner = ScriptRunner()
+    runner.root_scope["players"] = context["players"]
+    result = await runner.handle_script(script)
 
-    if result.status == 'success':
+    if result.status == 'ok':
         print(f"Script succeeded! Strong players: {result.value}")
 
 asyncio.run(main())
@@ -189,15 +196,21 @@ asyncio.run(main())
 
 The project's documentation is structured to guide you from the high-level concepts down to the implementation details.
 
-#### Primary Documents (Start Here)
+#### Tutorial Path
 
-- **[The SLIP Design Philosophy](<docs/SLIP Design Philosophy.md>):** An introduction to the core philosophy and the argument for SLIP's design. Start here to understand the "why" behind the language.
-- **[The SLIP Language Reference](<docs/SLIP Language Reference.md>):** The complete, detailed technical manual for the language syntax, core library, and features.
+- **[01 SLIP Scripting](<docs/01 SLIP Scripting.md>):** The fastest practical path to writing useful SLIP.
+- **[02 SLIP Programs](<docs/02 SLIP Programs.md>):** Code organization, dispatch, testing, schemas, and program structure.
+- **[03 SLIP Advanced](<docs/03 SLIP Advanced.md>):** Metaprogramming, host integration, background work, and explicit rehydration.
 
-#### Additional Guides
+#### Appendices
 
-- **[SLIP Style Guide](<docs/SLIP Style Guide.md>):** A guide to writing clean, effective, and idiomatic SLIP code. Essential reading for contributing to the standard library or for team projects.
-- **[Implementation Guide](<docs/SLIP Implementation.md>):** For those interested in the interpreter's internals. This document details the architecture of the parser, evaluator, and host interface.
+- **[Appendix A - StdLib Reference](<docs/Appendix A - StdLib Reference.md>):** A practical reference for the current standard library surface.
+- **[Appendix B - SLIP Style Guide](<docs/Appendix B - SLIP Style Guide.md>):** Formatting and idioms for readable SLIP code.
+- **[Appendix C - Design Philosophy](<docs/Appendix C - Design Philosophy.md>):** The rationale behind SLIP's core design choices.
+
+#### Agent Guidance
+
+- **[OpenCode Skill: SLIP](<.opencode/skills/slip/SKILL.md>):** Repository-local skill for agents writing idiomatic SLIP.
 
 ### License
 

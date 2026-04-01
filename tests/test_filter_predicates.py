@@ -14,7 +14,7 @@ result: players[.hp > 100 and .name = 'Karl']
 len result
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == 2
 
 @pytest.mark.asyncio
@@ -30,7 +30,7 @@ names: players[.hp > 100 and .class = 'Warrior'] |map (fn {p} [ p.name ])
 names
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == ["Karl"]
 
 @pytest.mark.asyncio
@@ -46,5 +46,5 @@ names: players[.hp > 100 and (.name = 'Karl' or .name = 'Jaina')] |map (fn {p} [
 names
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     assert res.value == ["Karl"]

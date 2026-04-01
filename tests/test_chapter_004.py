@@ -6,12 +6,12 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got {res.status} with value {res.value!r}"
+    assert res.status == 'err', f"expected error, got {res.status} with value {res.value!r}"
     if contains:
         msg = res.error_message or ""
         assert contains in msg, f"error message did not contain {contains!r}: {msg!r}"
@@ -45,7 +45,7 @@ async def test_explicit_pipe_binary_and_unary_calls():
     # Unary piped call: lhs is fed as the single argument
     res = await run_slip("2 |exp")
     # exp(2) ~= 7.38905609893; allow float tolerance
-    assert res.status == 'success'
+    assert res.status == 'ok'
     assert res.value == pytest.approx(7.38905609893, rel=1e-9)
 
 # 4.7 Chained pipes (general functions)

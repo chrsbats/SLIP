@@ -148,9 +148,9 @@ async def test_unary_piped_operator_custom_and_error_cases():
     5 |double
     """
     res_ok = await ScriptRunner().handle_script(src_ok)
-    assert res_ok.status == "success" and res_ok.value == 10
+    assert res_ok.status == 'ok' and res_ok.value == 10
 
     # Error case (existing coverage): unary pipe with a binary function like add
     res_err = await ScriptRunner().handle_script("5 |add")
-    assert res_err.status == "error"
+    assert res_err.status == 'err'
     assert "TypeError: invalid-args in (add)" in (res_err.error_message or "")

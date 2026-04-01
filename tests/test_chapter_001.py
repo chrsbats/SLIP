@@ -6,12 +6,12 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got {res.status} with value {res.value!r}"
+    assert res.status == 'err', f"expected error, got {res.status} with value {res.value!r}"
     if contains:
         msg = res.error_message or ""
         assert contains in msg, f"error message did not contain {contains!r}: {msg!r}"
@@ -141,7 +141,7 @@ async def test_piped_path_cannot_be_first_term_of_expression():
     src = "|add 1 2"
     res = await run_slip(src)
     # Error wording is standardized by the runtime; just assert failure.
-    assert res.status == 'error'
+    assert res.status == 'err'
 
 @pytest.mark.asyncio
 async def test_set_path_cannot_appear_mid_expression():
@@ -149,7 +149,7 @@ async def test_set_path_cannot_appear_mid_expression():
     src = "10 + a: 20"
     res = await run_slip(src)
     # Error wording may vary; asserting error status is sufficient here.
-    assert res.status == 'error'
+    assert res.status == 'err'
 
 @pytest.mark.asyncio
 async def test_operator_alias_assignment_is_not_update():

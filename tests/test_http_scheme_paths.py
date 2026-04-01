@@ -8,7 +8,7 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 
@@ -269,3 +269,4 @@ async def test_del_resource_then_get_returns_empty_json(http_json_server_rw):
     assert_ok(res, {})  # server’s DELETE returns empty JSON
     # Last headers captured were from the DELETE (JSON content-type)
     assert store["_last_headers"].get("Content-Type", "").startswith("application/json")
+

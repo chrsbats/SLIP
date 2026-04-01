@@ -15,8 +15,14 @@ async def test_import_file_module_caches(tmp_path):
     src = f"""
     math1: import `file://{mod_path.as_posix()}`
     math2: import `file://{mod_path.as_posix()}`
-    same: math1 = math2
-    result: math1.add 2 3
+    
+    -- Shadowing check: modify math1, math2 should remain unchanged
+    math1.value: 100
+    
+    diff: math1.value != math2.value
+    same-identity: math1 = math2
+    
+    result: math2.add 2 3
     result
     """
     print("SOURCE")
@@ -24,14 +30,16 @@ async def test_import_file_module_caches(tmp_path):
     runner = ScriptRunner()
     runner.source_dir = tmp_path.as_posix()
     res = await runner.handle_script(src)
-    if res.status != 'success':
+    if res.status != 'ok':
         print("\nDEBUG:", res.format_error())
         print("SIDE_EFFECTS:", res.side_effects)
-    assert res.status == 'success', f"\n{res.format_error()}\nside_effects={res.side_effects!r}"
-    # Last expression returns 5 (2 + 3)
+    assert res.status == 'ok', f"\n{res.format_error()}\nside_effects={res.side_effects!r}"
+    # Last expression returns 5 (2 + 3) from math2, which was not modified
     assert res.value == 5
-    # Import should be cached and return the same scope object
-    assert runner.root_scope['same'] is True
+    # Shadowing: math1.value was changed to 100, math2.value remains 7
+    assert runner.root_scope['diff'] is True
+    # Identity should be false because each import returns a new shadow scope
+    assert runner.root_scope['same-identity'] is False
 
 @pytest.mark.asyncio
 async def test_file_slip_returns_code_block_not_executed(tmp_path):
@@ -51,7 +59,7 @@ async def test_file_slip_returns_code_block_not_executed(tmp_path):
     runner = ScriptRunner()
     runner.source_dir = tmp_path.as_posix()
     res = await runner.handle_script(src)
-    assert res.status == 'success'
+    assert res.status == 'ok'
     # The file:// read of a .slip file should return a Code block (not execute it)
     assert res.value is True
     # And the module code must not have executed implicitly
@@ -66,5 +74,5 @@ async def test_call_allows_assignment_from_path_literal():
     """
     runner = ScriptRunner()
     res = await runner.handle_script(src)
-    assert res.status == 'success'
+    assert res.status == 'ok'
     assert res.value == 2

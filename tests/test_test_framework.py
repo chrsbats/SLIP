@@ -3,12 +3,12 @@ from slip import ScriptRunner
 from slip.slip_datatypes import Response, PathLiteral, GetPath, Name
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
@@ -26,10 +26,11 @@ add: fn {x, y} [ x + y ] |example { x: 2, y: 3 -> 5 }
 test add
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     resp = res.value
-    assert is_resp_ok(resp), f"expected ok response, got {resp!r}"
-    assert resp.value == 1  # one example passed
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {resp!r}"
+    assert resp.get("status") == "ok", f"expected ok response, got {resp!r}"
+    assert resp.get("value") == 1  # one example passed
 
 @pytest.mark.asyncio
 async def test_example_with_names_from_scope_and_failure_reporting():
@@ -43,12 +44,13 @@ add |example { x, y -> want }
 test add
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     resp = res.value
-    assert is_resp_err(resp), f"expected err response, got {resp!r}"
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {resp!r}"
+    assert resp.get("status") == "err", f"expected err response, got {resp!r}"
     # One failure entry with expected/actual recorded
-    assert isinstance(resp.value, list) and resp.value, f"failures missing: {resp.value!r}"
-    failure = resp.value[0]
+    assert isinstance(resp.get("value"), list) and resp["value"], f"failures missing: {resp.get('value')!r}"
+    failure = resp["value"][0]
     assert "index" in failure
     assert failure.get("expected") == 4
     assert failure.get("actual") == 5
@@ -65,10 +67,11 @@ run-with [
 test-all mod
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     summary_resp = res.value
-    assert is_resp_ok(summary_resp), f"expected ok summary response, got {summary_resp!r}"
-    summary = summary_resp.value
+    assert isinstance(summary_resp, dict), f"expected host-normalized response dict, got {summary_resp!r}"
+    assert summary_resp.get("status") == "ok", f"expected ok summary response, got {summary_resp!r}"
+    summary = summary_resp.get("value")
     assert isinstance(summary, dict)
     assert summary.get("with-examples") == 2
     assert summary.get("failed") == 0
@@ -88,10 +91,11 @@ run-with [
 test-all mod
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     summary_resp = res.value
-    assert is_resp_err(summary_resp), f"expected err summary response, got {summary_resp!r}"
-    summary = summary_resp.value
+    assert isinstance(summary_resp, dict), f"expected host-normalized response dict, got {summary_resp!r}"
+    assert summary_resp.get("status") == "err", f"expected err summary response, got {summary_resp!r}"
+    summary = summary_resp.get("value")
     assert summary.get("with-examples") == 1
     assert summary.get("failed") == 1
     assert isinstance(summary.get("details"), list) and summary["details"], f"details missing: {summary!r}"
@@ -109,11 +113,12 @@ g |example { x: 2, y: 3 -> 5 }             -- example attached to container
 test g
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     resp = res.value
-    assert is_resp_ok(resp), f"expected ok response, got {resp!r}"
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {resp!r}"
+    assert resp.get("status") == "ok", f"expected ok response, got {resp!r}"
     # Both examples should be discovered (method-level + container-level)
-    assert resp.value == 2
+    assert resp.get("value") == 2
 
 @pytest.mark.asyncio
 async def test_test_records_errors_from_example_execution():
@@ -124,14 +129,15 @@ div-fn |example { x: 1, y: 0 -> none }
 test div-fn
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     resp = res.value
-    assert is_resp_err(resp), f"expected err response, got {resp!r}"
-    errs = resp.value
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {resp!r}"
+    assert resp.get("status") == "err", f"expected err response, got {resp!r}"
+    errs = resp.get("value")
     assert isinstance(errs, list) and errs, f"errors payload missing: {errs!r}"
-    assert "error" in errs[0]
+    assert 'err' in errs[0]
     # Message content may vary by platform; require division mention
-    assert "division" in errs[0]["error"].lower()
+    assert "division" in errs[0]['err'].lower()
 
 @pytest.mark.asyncio
 async def test_chain_multiple_examples_and_count():
@@ -141,10 +147,11 @@ h: fn {x} [ x + 1 ] |example { x: 1 -> 2 } |example { x: 2 -> 3 }
 test h
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     resp = res.value
-    assert is_resp_ok(resp), f"expected ok response, got {resp!r}"
-    assert resp.value == 2
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {resp!r}"
+    assert resp.get("status") == "ok", f"expected ok response, got {resp!r}"
+    assert resp.get("value") == 2
 
 @pytest.mark.asyncio
 async def test_example_with_positional_names_without_keywords():
@@ -158,7 +165,8 @@ sum |example { x, y -> want }
 test sum
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     resp = res.value
-    assert is_resp_ok(resp), f"expected ok response, got {resp!r}"
-    assert resp.value == 1
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {resp!r}"
+    assert resp.get("status") == "ok", f"expected ok response, got {resp!r}"
+    assert resp.get("value") == 1

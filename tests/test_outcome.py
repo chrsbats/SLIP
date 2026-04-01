@@ -6,7 +6,7 @@ from slip.slip_datatypes import PathLiteral, GetPath, Name
 async def test_outcome_success_reflects_final_value():
     runner = ScriptRunner()
     res = await runner.handle_script("1 + 2")
-    assert res.status == "success"
+    assert res.status == 'ok'
     outcome = runner.root_scope["outcome"]
     assert isinstance(outcome.status, PathLiteral)
     assert outcome.status == PathLiteral(GetPath([Name("ok")]))
@@ -16,7 +16,7 @@ async def test_outcome_success_reflects_final_value():
 async def test_outcome_error_reflects_formatted_error():
     runner = ScriptRunner()
     res = await runner.handle_script("1 + 'a'")
-    assert res.status == "error"
+    assert res.status == 'err'
     outcome = runner.root_scope["outcome"]
     assert isinstance(outcome.status, PathLiteral)
     assert outcome.status == PathLiteral(GetPath([Name("err")]))

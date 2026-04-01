@@ -170,10 +170,11 @@ rules:
       - { rule: group_segment }
 
   separator:
-    ast: { discard: true }
+    ast: { promote: true }
     choice:
-      - { literal: "." }
-      - { literal: "/" }
+      - { literal: "::", ast: { tag: "identity" } }
+      - { literal: ".", ast: { discard: true } }
+      - { literal: "/", ast: { discard: true } }
 
   # =================================================================
   # Individual Segment Definitions

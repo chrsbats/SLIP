@@ -7,7 +7,7 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 

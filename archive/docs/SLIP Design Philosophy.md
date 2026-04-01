@@ -37,7 +37,7 @@ Because symbols are paths, this also applies to remote endpoints. In SLIP, HTTP 
 data: http://game-api/players
 
 -- outcome is a primitive that you can use to check the status of this run
-if [outcome.status = `ok`] [print 'success'] [print 'fail']
+if [outcome.status = `ok`] [print 'ok'] [print 'fail']
 
 -- Client-side filtering, returning a list of names.
 mage-names: data[.class = "Mage" and .is-active = true and .hp > 100].name
@@ -345,7 +345,6 @@ Redundancy is the enemy of succinctness. The conventional separation of code, te
 
 - **The Conventional Way:**
   You must create and maintain three separate artifacts.
-
   1.  **The Code:** `def add(a, b): return a + b`
   2.  **The Test:** `assert add(2, 3) == 5`
   3.  **The Docs:** `// Example: add(2, 3) returns 5`

@@ -555,33 +555,6 @@ async def test_set_with_parent_segment_updates_parent_scope(evaluator, child_sco
     assert 'a' not in child_scope.bindings
 
 @pytest.mark.asyncio
-async def test_mixin_typed_dispatch(evaluator, root_scope):
-    from slip.slip_datatypes import Sig as SigType
-    # Define a capability mixin
-    Burning = Scope()
-    await evaluator.path_resolver.set(SetPath([Name('Burning')]), Burning, root_scope)
-
-    # Instance with the mixin
-    entity = Scope()
-    entity.add_mixin(Burning)
-
-    # Define generic function 'describe' with fallback and mixin-typed method
-    fallback_sig = SigType(['x'], {}, None, None)
-    fallback_body = Code([['other']])
-
-    mixin_sig = SigType([], {'x': GetPath([Name('Burning')])}, None, None)
-    mixin_body = Code([['on-fire']])
-
-    ast_define = [
-        [SetPath([Name('describe')]), GetPath([Name('fn')]), fallback_sig, fallback_body],
-        [SetPath([Name('describe')]), GetPath([Name('fn')]), mixin_sig, mixin_body],
-    ]
-    await evaluator.eval(ast_define, root_scope)
-
-    res = await evaluator.eval([[GetPath([Name('describe')]), entity]], root_scope)
-    assert res == 'on-fire'
-
-@pytest.mark.asyncio
 async def test_vectorized_assign_name_then_filter(evaluator, root_scope):
     # players.hp[< 50]: 50
     root_scope['players'] = [
@@ -954,9 +927,9 @@ async def test_http_put_convenience_from_eval(monkeypatch, evaluator, root_scope
 
 @pytest.mark.asyncio
 async def test_dispatch_exact_arity_truncation_fallback(evaluator, root_scope):
-    # Define a single-arg method; call with extra args → exact-arity truncation fallback selects it
+    # Strict arity: calling a non-variadic method with extra args should not match.
     sig = Sig(['x'], {}, None, None)
     body = Code([[GetPath([Name('x')])]])
     await evaluator.eval([[SetPath([Name('g')]), GetPath([Name('fn')]), sig, body]], root_scope)
-    res = await evaluator.eval([[GetPath([Name('g')]), 10, 20]], root_scope)
-    assert res == 10
+    with pytest.raises(TypeError):
+        await evaluator.eval([[GetPath([Name('g')]), 10, 20]], root_scope)

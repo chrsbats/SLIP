@@ -50,7 +50,7 @@ def _run_structural_test(parser, test_id, source_and_expected_yaml):
 
     try:
         parse_result = parser.parse(source_code)
-        if parse_result.get("status") != "success":
+        if parse_result.get("status") != 'success':
             error_info = parse_result.get("error_message", str(parse_result))
             pytest.fail(f"Parsing failed for '{test_id}':\n{error_info}", pytrace=False)
         result_ast = parse_result["ast"]
@@ -553,7 +553,7 @@ def test_strings_with_escaped_quotes(parser):
     source_code = r"""'it\'s' "\"that\"" """
     parse_result = parser.parse(source_code)
 
-    assert parse_result.get("status") == "success", f"Parsing failed: {parse_result.get('error_message')}"
+    assert parse_result.get("status") == 'success', f"Parsing failed: {parse_result.get('error_message')}"
 
     result_ast = clean_ast(parse_result["ast"])
 

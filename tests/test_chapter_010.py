@@ -9,13 +9,13 @@ async def run_slip(src: str):
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
@@ -302,7 +302,7 @@ async def test_run_expands_unexpanded_code_from_file_with_inject_and_splice(tmp_
     run code
     """
     res = await runner.handle_script(src)
-    assert res.status == "success"
+    assert res.status == 'ok'
     # final = module-x + add(*args) + z = 5 + (3+4) + (10*2) = 32
     assert res.value == 32
 
@@ -328,6 +328,6 @@ async def test_run_with_expands_unexpanded_code_from_file_uses_caller_scope_and_
     #[ res, s.a ]
     """
     res = await runner.handle_script(src)
-    assert res.status == "success"
+    assert res.status == 'ok'
     # res = seed + add(3,4) = 2 + 7 = 9; s.a was written inside target scope
     assert res.value == [9, 2]

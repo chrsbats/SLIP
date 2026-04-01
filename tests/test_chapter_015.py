@@ -5,7 +5,7 @@ from slip.slip_runtime import SlipObject
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected, f"expected {expected!r}, got {res.value!r}"
 
@@ -58,16 +58,16 @@ target: #{ id: 't1', hp: 100, fire-resistance: 10, position: #{ x: 1, y: 2 } }
 calculate-fireball-impact caster target none
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
 
-    # Verify we got a Response(ok, <state>) back, and side effects are present and ordered
+    # Verify we got a normalized response back, and side effects are present and ordered
     resp = res.value
-    assert isinstance(resp, Response), f"expected Response, got {type(resp).__name__}"
-    assert resp.status == PathLiteral(GetPath([Name("ok")]))
+    assert isinstance(resp, dict), f"expected host-normalized response dict, got {type(resp).__name__}"
+    assert resp.get("status") == "ok"
 
-    # New target state should be a SlipObject with updated hp (100 - (50 - 10) = 60)
-    state = resp.value
-    assert isinstance(state, SlipObject)
+    # New target state should be a plain dict with updated hp (100 - (50 - 10) = 60)
+    state = resp.get("value")
+    assert isinstance(state, dict)
     assert state["hp"] == 60
 
     # Three effects in order with expected topics; messages are strings (pretty-printed for dicts)

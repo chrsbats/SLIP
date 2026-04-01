@@ -14,7 +14,7 @@ players.hp[< 50]: 75
 players.hp
 """.strip()
     res = await runner.handle_script(src)
-    assert res.status == "success"
+    assert res.status == 'ok'
     assert res.value == [75, 80, 75]
 
 @pytest.mark.asyncio
@@ -30,7 +30,7 @@ players.hp[< 50]: * 1.1
 players.hp
 """.strip()
     res = await runner.handle_script(src)
-    assert res.status == "success"
+    assert res.status == 'ok'
     # 40 and 30 updated with * 1.1; 80 unchanged
     assert res.value == [44.0, 80, 33.0]
 
@@ -47,5 +47,5 @@ players[.hp < 50].hp: * 1.1
 players.hp
 """.strip()
     res = await runner.handle_script(src)
-    assert res.status == "success"
+    assert res.status == 'ok'
     assert res.value == [44.0, 80, 33.0]

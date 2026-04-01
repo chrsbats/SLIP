@@ -9,13 +9,13 @@ async def run_slip(src: str):
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
@@ -34,28 +34,6 @@ async def test_inherit_and_is_a_relationships():
     """
     res = await run_slip(src)
     assert_ok(res, [100, True, False])
-
-
-@pytest.mark.asyncio
-async def test_mixin_composes_capabilities_and_lookup_order():
-    src = """
-    Base: scope #{ a: 'parent', b: 'base' }
-    Cap1: scope #{ a: 'mixin1', x: 'first' }
-    Cap2: scope #{ a: 'mixin2', x: 'second', y: 'cap2' }
-
-    obj: create Base
-    mixin obj Cap1
-    mixin obj Cap2
-
-    -- Mixins are searched before parent; and earlier mixins win ties.
-    -- Expect:
-    --   obj.a -> from Cap1 ('mixin1') since mixins overshadow parent and Cap1 was added first
-    --   obj.x -> from Cap1 ('first') due to insertion order precedence
-    --   obj.b -> from Base parent
-    #[ obj.a, obj.x, obj.b ]
-    """
-    res = await run_slip(src)
-    assert_ok(res, ["mixin1", "first", "base"])
 
 
 @pytest.mark.asyncio
@@ -106,24 +84,6 @@ async def test_is_a_false_for_non_scope_values():
     """
     res = await run_slip(src)
     assert_ok(res, False)
-
-
-@pytest.mark.asyncio
-async def test_mixin_avoids_duplicates_and_preserves_order():
-    src = """
-    A: scope #{ mark: 'A' }
-    B: scope #{ mark: 'B' }
-
-    o: create
-    mixin o A
-    mixin o A   -- duplicate should be ignored
-    mixin o B
-
-    -- Ensure only two mixins present and order is preserved (A, then B)
-    #[ len o.meta.mixins, o.mark ]
-    """
-    res = await run_slip(src)
-    assert_ok(res, [2, "A"])
 
 
 @pytest.mark.asyncio

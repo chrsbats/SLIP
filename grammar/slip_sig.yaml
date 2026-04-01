@@ -13,8 +13,26 @@ rules:
           - { rule: WS_OPT }
           - optional: { rule: sig_params }
           - { rule: WS_OPT }
+          - optional: { rule: sig_where }
+          - { rule: WS_OPT }
           - optional: { rule: sig_return }
           - { rule: WS_OPT }
+
+  sig_where:
+    ast: { tag: "sig-where" }
+    sequence:
+      - { literal: "|where", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: sig_where_expression, ast: { name: "expression" } }
+
+  sig_where_expression:
+    ast: { promote: true }
+    subgrammar:
+      file: "slip_grammar.yaml"
+      rule: "expression_list"
+      # PlaceholderParser/dev-mode capture: best-effort. Semantic validation (single |where)
+      # is enforced in the transformer.
+      placeholder: { ast: { tag: "expr", leaf: true }, regex: '(?:(?!->)[^}])+' }
 
   sig_params:
     ast: { promote: true }
@@ -97,8 +115,17 @@ rules:
             - { rule: sig_primary }
 
   sig_value_atom:
-    ast: { tag: "expr", leaf: true }
-    regex: '(?:(?!->)[^,}])+'
+    ast: { promote: true }
+    choice:
+      # Allow full SLIP path literals inside sig values (e.g. used by cell/ref specs):
+      #   {hp: `d.hp`}
+      #   {hp: `Combat::hp["p1"]`}
+      - subgrammar:
+          file: "slip_grammar.yaml"
+          rule: "path_literal"
+          placeholder: { ast: { tag: "expr", leaf: true }, regex: "(?:(?!->)[^,}])+" }
+      # Fallback: keep legacy behavior (treat as raw expr text) for types/unions/etc.
+      - { ast: { tag: "expr", leaf: true }, regex: '(?:(?!->)[^,}])+' }
 
   sig_union:
     ast: { tag: "sig-union" }

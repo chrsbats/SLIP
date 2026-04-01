@@ -8,12 +8,12 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
@@ -60,15 +60,11 @@ async def test_examples_synthesize_methods_and_dispatch_with_do_capture():
     #[ okv, probe.outcome.status ]
     """
     res = await run_slip(src)
-    assert res.status == 'success'
+    assert res.status == 'ok'
     okv, status = res.value
     assert okv == 5
-    # status is a PathLiteral(`err`)
-    assert isinstance(status, PathLiteral)
-    assert isinstance(status.inner, GetPath)
-    assert len(status.inner.segments) == 1
-    assert isinstance(status.inner.segments[0], Name)
-    assert status.inner.segments[0].text == 'err'
+    # Host-facing result preserves PathLiteral string round-trip.
+    assert status == "`err`"
 
 @pytest.mark.asyncio
 async def test_error_format_includes_function_name_for_invalid_args():

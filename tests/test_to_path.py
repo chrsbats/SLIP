@@ -10,7 +10,9 @@ y
 """
     runner = ScriptRunner()
     res = await runner.handle_script(src)
-    assert res.status == "success"
+    if res.status != 'ok':
+        raise AssertionError(f"ERROR:\n{res.error_message}\n\nEFFECTS:\n{res.side_effects}")
+    assert res.status == 'ok'
     # Last expression evaluates to y, which should be 2
     assert res.value == 2
     assert runner.root_scope["y"] == 2
@@ -25,13 +27,14 @@ async def test_import_with_path_literal_uses_cache(tmp_path):
 p: `{locator}`
 m1: import p
 m2: import p
-eq m1 m2
+m1.value: 999
+#[ m1.value != m2.value, eq m1 m2 ]
 """
     runner = ScriptRunner()
     res = await runner.handle_script(src)
-    assert res.status == "success"
-    # Cached module scopes should be the same object
-    assert res.value is True
+    assert res.status == 'ok', f"ERROR:\n{res.error_message}\n\nEFFECTS:\n{res.side_effects}"
+    # Shadowing: m1 change doesn't affect m2, and they are not the same object
+    assert res.value == [True, False]
 
 @pytest.mark.asyncio
 async def test_import_with_string_url_via_call_caches_scope(tmp_path):
@@ -42,10 +45,14 @@ async def test_import_with_string_url_via_call_caches_scope(tmp_path):
     src = f"""
 ps: '{locator}'
 gp: call ps
+-- gp is now a GetPath object. import extracts the locator from it.
 m1: import gp
 m2: import gp
-eq m1 m2
+m1.value: 999
+#[ m1.value != m2.value, eq m1 m2 ]
 """
     runner = ScriptRunner()
     res = await runner.handle_script(src)
-    assert res.status == "error"
+    assert res.status == 'ok', f"ERROR:\n{res.error_message}\n\nEFFECTS:\n{res.side_effects}"
+    # Shadowing: m1 change doesn't affect m2, and they are not the same object
+    assert res.value == [True, False]

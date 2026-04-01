@@ -45,7 +45,7 @@ def clean_ast(node):
         cleaned['text'] = node['text']
 
     # Post-processing to match test expectations
-    if cleaned.get('tag') in ('pipe', 'root', 'parent', 'pwd'):
+    if cleaned.get('tag') in ('pipe', 'root', 'parent', 'pwd', 'identity'):
         cleaned.pop('text', None)
             
     return cleaned
@@ -246,6 +246,13 @@ GET_PATH_TEST_CASES = [
             {"tag": "name", "text": "db://mydb/table"}
         ]
     }),
+    ("identity_boundary", "a::b", {
+        "tag": "get-path", "children": [
+            {"tag": "name", "text": "a"},
+            {"tag": "identity"},
+            {"tag": "name", "text": "b"}
+        ]
+    }),
 ]
 
 
@@ -287,7 +294,7 @@ def run_path_test(parser, test_id: str, path_string: str, expected_ast: dict, *,
     rule_info = f"(rule: {rule})" if rule else "(default start rule)"
     try:
         parse_result = parser.parse(path_string, start_rule=rule)
-        if parse_result.get("status") != "success":
+        if parse_result.get("status") != 'success':
             error_info = parse_result.get("error_message", str(parse_result))
             pytest.fail(f"Parsing failed for '{test_id}' {rule_info}:\n{error_info}", pytrace=False)
         result_ast = parse_result["ast"]

@@ -163,9 +163,9 @@ def test_stdlib_scope_constructor(stdlib):
         stdlib._scope({'meta': {}})
 
 def test_execution_result_format_error_with_and_without_token():
-    err = ExecutionResult(status='error', error_message="Boom")
+    err = ExecutionResult(slip_status='`err`', error_message="Boom")
     assert err.format_error() == "Boom"
-    err_tok = ExecutionResult(status='error', error_message="Boom", error_token={'line': 3, 'col': 5})
+    err_tok = ExecutionResult(slip_status='`err`', error_message="Boom", error_token={'line': 3, 'col': 5})
     msg = err_tok.format_error()
     assert msg.startswith("Error on line 3, col 5:") and "Boom" in msg
 
@@ -242,13 +242,13 @@ async def test_normalize_resource_variants_and_response_mode(monkeypatch):
 def test_format_stacktrace_friendly_names():
     runner = ScriptRunner()
     ev = runner.evaluator
-    # Push a frame with a StdLib function (friendly name)
-    ev._push_frame('add', runner.root_scope['add'], [1, 2], GetPath([Name('add')]))
-    ev._push_frame('return', None, [], None)
+    # Push frames with full surface expressions (homoiconic form)
+    ev._push_frame('add', runner.root_scope['add'], [1, 2], [GetPath([Name('add')]), 1, 2])
+    ev._push_frame('return', None, [], [GetPath([Name('return')])])
     s = runner._format_stacktrace()
     assert "SLIP stacktrace:" in s
-    assert "(add 1 2)" in s
-    assert "(return)" in s
+    assert "add 1 2" in s
+    assert "return" in s
 
 def test_to_getpath_with_pathliteral_setpath_raises():
     ev = Evaluator()
@@ -283,6 +283,41 @@ def test_to_getpath_string_variants_roundtrip():
     # Empty is invalid
     with pytest.raises(ValueError):
         std._to_getpath("")
+
+
+@pytest.mark.asyncio
+async def test_scope_literal_quoted_keys_and_istring_keys_json_compat():
+    runner = ScriptRunner(load_core=False)
+
+    script = """
+k: 'x'
+obj: #{ a: 1, "a": 2, 'a': 3, 'a field with space': 4, "my {{k}}": 5 }
+#[
+  obj['a'],
+  obj['a field with space'],
+  obj['my x']
+]
+"""
+    res = await runner.handle_script(script)
+    assert res.status == "ok", res.error_message
+    assert res.value == [3, 4, 5]
+
+
+@pytest.mark.asyncio
+async def test_istring_built_at_runtime_can_be_used_as_scope_key():
+    runner = ScriptRunner(load_core=False)
+
+    # Build an IString key at runtime, then use it in a scope literal.
+    # Double quotes are i-strings; the value of `k` is interpolated.
+    script = """
+k: 'space'
+key: "a {k} key"
+obj: #{ "a {k} key": 99 }
+obj[key]
+"""
+    res = await runner.handle_script(script)
+    assert res.status == "ok", res.error_message
+    assert res.value == 99
 
 @pytest.mark.asyncio
 async def test_resource_invalid_non_http_and_normalize_cfg(monkeypatch):
@@ -423,8 +458,11 @@ async def test_respond_and_response_emit_stderr():
     ev = Evaluator()
     std = StdLib(ev)
     out = std._respond(PLit(GP([Nm("err")])), "bad")
-    # _respond returns Response(return <Response(err, 'bad')>)
-    assert isinstance(out, Response) and isinstance(out.status, PLit)
+    # _respond returns a ReturnSignal carrying a Response(status, value)
+    from slip.slip_datatypes import ReturnSignal as _RS
+    assert isinstance(out, _RS), f"_respond should return ReturnSignal, got {type(out).__name__}"
+    inner = out.value
+    assert isinstance(inner, Response) and isinstance(inner.status, PLit)
     assert any("bad" in e["message"] for e in ev.side_effects if "stderr" in e["topics"])
 
 @pytest.mark.asyncio

@@ -4,13 +4,13 @@ from slip import ScriptRunner
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"Expected success, got {res.status}: {res.error_message}"
+    assert res.status == 'ok', f"Expected success, got {res.status}: {res.error_message}"
     if expected is not None:
         assert res.value == expected, f"Expected {expected!r}, got {res.value!r}"
 
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"Expected error, got {res.status} with value {res.value!r}"
+    assert res.status == 'err', f"Expected error, got {res.status} with value {res.value!r}"
     if contains:
         assert contains in (res.error_message or ""), f"Expected error to contain {contains!r}, got: {res.error_message!r}"
 
@@ -251,6 +251,6 @@ async def test_legacy_flags_map_to_response_mode_for_get_and_delete(monkeypatch)
 
     # DELETE with legacy full flag
     res = await runner.handle_script("~http://api/items#(full: true)")
-    assert res.status == 'success'
+    assert res.status == 'ok'
     assert res.value["status"] == 204
     assert res.value["value"] == {"deleted": True}

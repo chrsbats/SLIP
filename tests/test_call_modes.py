@@ -6,12 +6,12 @@ async def run_slip(src: str):
     return await runner.handle_script(src)
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 

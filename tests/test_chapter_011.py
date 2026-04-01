@@ -11,7 +11,9 @@ async def run_slip(src: str):
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"Expected success, got {res.status}: {res.error_message}"
+    assert res.status == "ok", (
+        f"Expected success, got {res.status}: {res.error_message}"
+    )
     if expected is not None:
         assert res.value == expected, f"Expected {expected!r}, got {res.value!r}"
 
@@ -143,29 +145,11 @@ task [
     assert 0 <= s_now <= (200 * 201) // 2
 
     # Wait for completion and verify final values
-    await asyncio.sleep(0.05)
+    tasks = list(host.active_slip_tasks)
+    assert len(tasks) == 2
+
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=2.0)
+
     assert host._data.get("counter") == 200
     assert host._data.get("sum") == (200 * 201) // 2
     assert len(host.active_slip_tasks) == 0
-
-
-@pytest.mark.asyncio
-async def test_channels_producer_consumer_in_order():
-    runner = ScriptRunner()
-    src = """
-ch: make-channel
-task [
-  foreach {n} #[1, 2, 3, 4, 5] [
-    send ch n
-  ]
-]
-#[
-  receive ch,
-  receive ch,
-  receive ch,
-  receive ch,
-  receive ch
-]
-"""
-    res = await runner.handle_script(src)
-    assert_ok(res, [1, 2, 3, 4, 5])

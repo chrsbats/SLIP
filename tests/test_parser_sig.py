@@ -10,7 +10,7 @@ def parser():
 
 def parse_sig(parser: PlaceholderParser, text: str):
     result = parser.parse(text)
-    assert result.get("status") == "success", f"Parsing failed: {result.get('error_message')}"
+    assert result.get("status") == 'success', f"Parsing failed: {result.get('error_message')}"
     ast = result["ast"]
     # PlaceholderParser may wrap the sig node in a single-item list; unwrap
     if isinstance(ast, list) and len(ast) == 1:
@@ -22,7 +22,7 @@ def find_children_by_tag(children, tag):
 
 def assert_parse_error(parser: PlaceholderParser, text: str):
     result = parser.parse(text)
-    assert result.get("status") != "success", f"Expected parse error but succeeded: {text}"
+    assert result.get("status") != 'success', f"Expected parse error but succeeded: {text}"
 
 def test_empty_sig(parser):
     ast = parse_sig(parser, "")
@@ -172,3 +172,39 @@ def test_mixed_with_parens_ok_and_with_union(parser):
     assert children[0]["tag"] == "get-path"
     assert children[1]["tag"] == "sig-union"
     assert [c.get("tag") for c in (children[1].get("children") or [])] == ["get-path", "get-path"]
+
+def test_sig_with_where_clause(parser):
+    # Test that |where is captured correctly between params and return
+    ast = parse_sig(parser, "this: Combat, amount |where amount > 10 -> ok")
+    children = ast["children"]
+    
+    where_nodes = find_children_by_tag(children, "sig-where")
+    assert len(where_nodes) == 1
+    
+    # The subgrammar placeholder captures the text
+    expr_node = where_nodes[0]["children"]["expression"]
+    assert expr_node["tag"] == "expr"
+    assert expr_node["text"].strip() == "amount > 10"
+    
+    # Ensure return annotation is still parsed correctly after where
+    returns = find_children_by_tag(children, "sig-return")
+    assert len(returns) == 1
+    assert returns[0]["children"][0]["text"].strip() == "ok"
+
+def test_sig_with_where_clause(parser):
+    ast = parse_sig(parser, "this: Combat, amount |where amount > 10 -> ok")
+    children = ast["children"]
+
+    # Find the sig-where node
+    where_nodes = find_children_by_tag(children, "sig-where")
+    assert len(where_nodes) == 1
+
+    # PlaceholderParser uses the placeholder regex for subgrammars, so we assert on text
+    expr_node = where_nodes[0]["children"]["expression"]
+    assert expr_node["tag"] == "expr"
+    assert expr_node["text"].strip() == "amount > 10"
+
+    # Ensure return annotation is still parsed correctly after where
+    returns = find_children_by_tag(children, "sig-return")
+    assert len(returns) == 1
+    assert returns[0]["children"][0]["text"].strip() == "ok"

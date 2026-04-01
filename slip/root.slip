@@ -36,6 +36,7 @@ invalid:   `invalid`
 print: fn {msg} [ emit "stdout" msg ]
 stderr: fn {msg} [ emit "stderr" msg ]
 
+
 -- --- Type Utilities ---
 -- Note: `type-of` is a host primitive.
 is-number?:  fn {x} [ logical-or (eq (type-of x) `int`) (eq (type-of x) `float`) ]
@@ -452,6 +453,7 @@ with: fn {obj: `scope`, config: `code`} [
     run-with config obj
     return obj
 ]
+
 with: fn {obj: `scope`, config: `mapping`} [
     -- Merge key-value pairs from the mapping into the object
     foreach {k, v} (items config) [

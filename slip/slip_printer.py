@@ -7,7 +7,7 @@ from slip.slip_datatypes import (
     Code, List, IString, SlipFunction, Response,
     PathLiteral,
     GetPath, SetPath, DelPath, PipedPath, Name, Index, Slice, FilterQuery, Group,
-    Root, Parent, Pwd, PathSegment, PostPath, ByteStream, MultiSetPath
+    Root, Parent, Pwd, PathSegment, PostPath, ByteStream, MultiSetPath, IdentityBoundary
 )
 from slip.slip_runtime import SlipDict
 
@@ -32,6 +32,7 @@ class Printer:
         if obj is Root: return self._pformat_root
         if obj is Parent: return self._pformat_parent
         if obj is Pwd: return self._pformat_pwd
+        if obj is IdentityBoundary: return self._pformat_identity
 
         obj_type = type(obj)
         if obj_type in self._handlers:
@@ -328,6 +329,7 @@ class Printer:
     def _pformat_root(self, obj, level): return "/"
     def _pformat_parent(self, obj, level): return "../"
     def _pformat_pwd(self, obj, level): return "./"
+    def _pformat_identity(self, obj, level): return "::"
 
     def _pformat_response(self, obj, level):
         status = self.pformat(obj.status, level)

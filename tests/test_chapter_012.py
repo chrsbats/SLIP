@@ -6,42 +6,48 @@ from slip.slip_runtime import SLIPHost, slip_api_method
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"Expected success, got {res.status}: {res.error_message}"
+    assert res.status == "ok", (
+        f"Expected success, got {res.status}: {res.error_message}"
+    )
     if expected is not None:
         assert res.value == expected, f"Expected {expected!r}, got {res.value!r}"
 
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"Expected error, got {res.status} with value {res.value!r}"
+    assert res.status == "err", (
+        f"Expected error, got {res.status} with value {res.value!r}"
+    )
     if contains:
-        assert contains in (res.error_message or ""), f"Expected error to contain {contains!r}, got: {res.error_message!r}"
+        assert contains in (res.error_message or ""), (
+            f"Expected error to contain {contains!r}, got: {res.error_message!r}"
+        )
 
 
 class MyHost(SLIPHost):
     def __init__(self):
         super().__init__()
-        self._data = {'hp': 0}
+        self._data = {"hp": 0}
 
     # Mapping contract for data access
     def __getitem__(self, key):
-        if key.startswith('_'):
+        if key.startswith("_"):
             raise KeyError("private")
         return self._data[key]
 
     def __setitem__(self, key, value):
-        if key.startswith('_'):
+        if key.startswith("_"):
             raise KeyError("private")
         self._data[key] = value
 
     def __delitem__(self, key):
-        if key.startswith('_'):
+        if key.startswith("_"):
             raise KeyError("private")
         del self._data[key]
 
     # Exposed API method (kebab-case: take-damage)
     @slip_api_method
     def take_damage(self, amount: int):
-        self._data['hp'] -= amount
+        self._data["hp"] -= amount
 
     # Not exposed (no decorator)
     def internal_calculation(self):
@@ -67,7 +73,7 @@ async def test_host_object_data_access_get_set_and_delete_raises_not_found():
 async def test_kebab_case_binding_to_decorated_method():
     runner = ScriptRunner()
     host = MyHost()
-    host._data['hp'] = 10
+    host._data["hp"] = 10
 
     # Bind the bound Python method into the script scope using kebab-case
     runner.root_scope["obj"] = host
@@ -106,6 +112,71 @@ obj.hp
 """
     res = await runner.handle_script(src)
     assert_ok(res, 5)
+
+
+@pytest.mark.asyncio
+async def test_host_data_builtin_returns_raw_data_and_host_object_rehydrates():
+    registry = {
+        "player-1": {
+            "__slip__": {"type": "scope", "prototype": "Character"},
+            "hp": 7,
+            "location": {"name": "Town"},
+        }
+    }
+
+    def host_data(object_id: str):
+        return registry.get(object_id)
+
+    runner = ScriptRunner(host_data=host_data)
+
+    res = await runner.handle_script("""
+    Character: scope #{}
+    raw: host-data "player-1"
+    obj: host-object "player-1"
+    #[
+      eq (type-of raw) `dict`,
+      eq (type-of obj) `scope`,
+      obj.hp,
+      eq (type-of obj.location) `dict`
+    ]
+    """)
+    assert_ok(res, [True, True, 7, True])
+
+
+@pytest.mark.asyncio
+async def test_host_object_dispatches_and_preserves_identity_within_run():
+    location = {
+        "__slip__": {"type": "scope", "prototype": "Location"},
+        "name": "Town",
+    }
+    person = {
+        "__slip__": {"type": "scope", "prototype": "Person"},
+        "name": "Karl",
+        "location": location,
+    }
+    registry = {"person-1": person, "location-1": location}
+
+    def host_data(object_id: str):
+        return registry.get(object_id)
+
+    runner = ScriptRunner(host_data=host_data)
+
+    res = await runner.handle_script("""
+    Person: scope #{}
+    Location: scope #{}
+
+    describe: fn {x: Person} [ "person" ]
+    describe: fn {x: Location} [ "location" ]
+    describe: fn {x} [ "other" ]
+
+    p: host-object "person-1"
+    l1: p.location
+    l2: host-object "location-1"
+    l1.name: "Harbor"
+
+    #[ describe p, describe l1, l2.name ]
+    """)
+    assert_ok(res, ["person", "location", "Harbor"])
 
 
 @pytest.mark.asyncio

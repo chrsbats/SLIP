@@ -78,9 +78,14 @@ class Scope:
         # System metadata used by the object model and dispatch.
         # name/type_id may be populated during "christening" by set-path logic.
         self.meta: Dict[str, Any] = {
-            "parent": parent,
-            "mixins": []  # List[Scope]
+            "parent": parent
         }
+        # Internal escape hatch to allow the evaluator to bind `this` capability
+        # into the call scope without permitting it to be stored elsewhere.
+        self._allow_this_token: bool = False
+
+    def _set_allow_this_token(self, allowed: bool):
+        self._allow_this_token = bool(allowed)
 
     def __setitem__(self, key: Any, value: Any):
         key = self._normalize_key(key)
@@ -88,6 +93,11 @@ class Scope:
             raise KeyError("'.meta' is reserved and cannot be rebound.")
         if not isinstance(key, str):
             raise TypeError(f"Scope key must be a str, not {type(key)}")
+        # Contract: `This` cannot be stored in a scope (except for the internal
+        # evaluator binding of the reserved `this` param in a call scope).
+        from slip.slip_datatypes import This as _This
+        if isinstance(value, _This) and not getattr(self, "_allow_this_token", False):
+            raise PermissionError("`this` cannot be stored")
         self.bindings[key] = value
 
     def __getitem__(self, key: Any) -> Any:
@@ -119,15 +129,10 @@ class Scope:
         return False
 
     def find_owner(self, key: str) -> Optional['Scope']:
-        """Finds the Scope in the lookup chain (self → mixins → parent) that owns key."""
+        """Finds the Scope in the lookup chain (self → parent) that owns key."""
         if key in self.bindings:
             return self
-        # Check mixins in order; recurse into each mixin's own lookup chain.
-        for mixin in self.meta.get("mixins", []):
-            owner = mixin.find_owner(key)
-            if owner is not None:
-                return owner
-        # Finally, walk the prototype chain.
+        # Walk the prototype chain.
         parent = self.meta.get("parent")
         if parent:
             return parent.find_owner(key)
@@ -148,13 +153,6 @@ class Scope:
         if self.meta.get("parent") is not None:
             raise ValueError("inherit can only be called once on a scope (parent already set).")
         self.meta["parent"] = parent
-
-    def add_mixin(self, *sources: 'Scope'):
-        """Adds one or more mixin scopes, preserving order and avoiding duplicates."""
-        mixins: List['Scope'] = self.meta.setdefault("mixins", [])
-        for src in sources:
-            if src not in mixins:
-                mixins.append(src)
 
     def _normalize_key(self, key):
         """Allow a single-name PathLiteral(GetPath(...)) or GetPath to be used as a key."""
@@ -178,11 +176,6 @@ class Scope:
     def parent(self) -> Optional['Scope']:
         """Returns the prototype parent scope."""
         return self.meta.get("parent")
-
-    @property
-    def mixins(self) -> List['Scope']:
-        """Returns the live list of mixin scopes for this object."""
-        return self.meta.setdefault("mixins", [])
 
     def keys(self) -> collections.abc.KeysView[str]:
         """Returns a view of keys in the current scope only."""
@@ -246,19 +239,21 @@ class ByteStream(SlipBlock):
         return isinstance(other, ByteStream) and self.elem_type == other.elem_type and self.nodes == other.nodes
 
 class Sig:
-    def __init__(self, positional: List[str], keywords: Dict[str, Any], rest: Optional[str] = None, return_annotation: Optional[Any] = None):
+    def __init__(self, positional: List[str], keywords: Dict[str, Any], rest: Optional[str] = None, return_annotation: Optional[Any] = None, where: Optional['Code'] = None):
         self.positional = positional
         self.keywords = keywords
         self.rest = rest
         self.return_annotation = return_annotation
+        self.where = where
     def __repr__(self) -> str:
-        return f"Sig(pos={self.positional!r}, kw={self.keywords!r}, rest={self.rest!r}, ret={self.return_annotation!r})"
+        return f"Sig(pos={self.positional!r}, kw={self.keywords!r}, rest={self.rest!r}, ret={self.return_annotation!r}, where={self.where!r})"
     def __eq__(self, other):
         return isinstance(other, Sig) and (
             self.positional == other.positional and
             self.keywords == other.keywords and
             self.rest == other.rest and
-            self.return_annotation == other.return_annotation
+            self.return_annotation == other.return_annotation and
+            self.where == other.where
         )
 
 
@@ -323,6 +318,86 @@ class Response:
         if not isinstance(other, Response):
             return NotImplemented
         return self.status == other.status and self.value == other.value
+
+
+class This:
+    """Capability/receiver token bound to `this` in committing signatures.
+
+    Wraps an underlying receiver object (usually a Scope) while remaining
+    distinguishable from normal values so it can be prevented from escaping.
+    """
+    def __init__(self, receiver):
+        self.receiver = receiver
+
+    def __getitem__(self, key):
+        return self.receiver[key]
+
+    def __setitem__(self, key, value):
+        self.receiver[key] = value
+
+    def __delitem__(self, key):
+        del self.receiver[key]
+
+    def __getattr__(self, name: str):
+        # Delegate attribute-style access
+        return getattr(self.receiver, name)
+
+    def __repr__(self):
+        return f"<This receiver={type(self.receiver).__name__}>"
+
+class ReturnSignal:
+    """Internal control-flow signal for SLIP `return` (early exit).
+
+    This is a runtime-only control-flow marker and is NOT a Response.
+    It carries a single .value payload (which may itself be a Response).
+    """
+    def __init__(self, value: Any):
+        self.value = value
+
+    def __repr__(self) -> str:
+        return f"<Return {self.value!r}>"
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, ReturnSignal) and self.value == other.value
+
+
+class Ref:
+    """A read-only reference to a path.
+
+    Reading a Ref yields the current value at its target path. There is no write-through.
+    """
+    def __init__(self, path: 'GetPath | PathLiteral'):
+        self.path = path
+
+    def __repr__(self) -> str:
+        return f"<Ref {self.path!r}>"
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, Ref) and self.path == other.path
+
+
+class Cell:
+    """A pure derived value computed from refs/paths.
+
+    A Cell is evaluated on read. It dereferences its inputs and evaluates its body in a
+    new scope where the input names are bound to the current input values.
+
+    Cells are intended to be read-only/pure (no commits); enforcement can be added later.
+    """
+    def __init__(self, inputs: dict[str, Any], body: 'Code', closure: 'Scope'):
+        self.inputs = inputs
+        self.body = body
+        self.closure = closure
+
+    def __repr__(self) -> str:
+        return f"<Cell inputs={list(self.inputs.keys())!r}>"
+
+    def __eq__(self, other: Any) -> bool:
+        return (
+            isinstance(other, Cell)
+            and self.inputs == other.inputs
+            and self.body == other.body
+        )
 
 
 class PipedPath(PathSegment):
@@ -614,5 +689,6 @@ class _SingletonSegment(PathSegment):
 Root = _SingletonSegment("root")
 Parent = _SingletonSegment("parent")
 Pwd = _SingletonSegment("pwd")
+IdentityBoundary = _SingletonSegment("identity")
 
 

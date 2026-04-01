@@ -11,13 +11,13 @@ async def run_slip(src: str):
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', res.error_message
+    assert res.status == 'ok', res.error_message
     if expected is not None:
         assert res.value == expected
 
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == 'err', f"expected error, got success: {res.value!r}"
     if contains is not None:
         assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
 
@@ -63,12 +63,11 @@ async def test_path_literal_with_meta_round_trips_via_printer():
     `a#(flag: true)`
     """
     res = await run_slip(src)
-    assert res.status == 'success'
+    assert res.status == 'ok'
     val = res.value
-    assert isinstance(val, PathLiteral)
-    # Ensure the meta attachment survives and pretty-prints back to the same shape
-    pf = Printer().pformat
-    assert pf(val) == "`a#(flag: true)`"
+    # Host-facing value should be plain Python (no PathLiteral). Round-trip via string.
+    assert isinstance(val, str)
+    assert val == "`a#(flag: true)`"
 
 
 # 8.2 Example-Driven Development with |example
@@ -130,7 +129,7 @@ async def test_guarded_method_outranks_general_when_predicate_passes():
     -- General method
     choose: fn {x} [ "general" ]
     -- Guarded method for x > 10
-    choose: fn {x} [ "guarded" ] |guard [ x > 10 ]
+    choose: fn {x} [ "guarded" ] |where [ x > 10 ]
     #[ choose 5, choose 15 ]
     """
     res = await run_slip(src)
@@ -140,7 +139,7 @@ async def test_guarded_method_outranks_general_when_predicate_passes():
 @pytest.mark.asyncio
 async def test_guard_multiple_guards_all_must_pass():
     src = """
-    choose: fn {x} [ "ok" ] |guard [ x > 0 ] |guard [ x < 10 ]
+    choose: fn {x} [ "ok" ] |where [ x > 0 ] |where [ x < 10 ]
     choose: fn {x} [ "fallback" ]
     #[ choose -1, choose 5, choose 15 ]
     """
@@ -152,13 +151,17 @@ async def test_guard_multiple_guards_all_must_pass():
 async def test_guard_uses_bound_keywords_and_rest():
     src = """
     compute: fn {a, b, rest...} [ "ok" ]
-      |guard [ a = 1 ]
-      |guard [ (len rest) > 0 ]
+      |where [ a = 1 ]
+      |where [ (len rest) > 0 ]
     compute: fn {a, b} [ "fallback" ]
     #[ compute 1 2, compute 1 2 3, compute 2 2 9 ]
     """
     res = await run_slip(src)
-    assert_ok(res, ["fallback", "ok", "fallback"])
+    # With guard-priority + strict arity:
+    # - compute 1 2      -> variadic method is not applicable (rest empty); exact method wins
+    # - compute 1 2 3    -> variadic method applicable; guard passes -> "ok"
+    # - compute 2 2 9    -> variadic method applicable, but guard fails; exact method arity mismatch -> No matching method
+    assert_error(res, "No matching method")
 
 
 @pytest.mark.asyncio
@@ -166,7 +169,7 @@ async def test_guard_preserved_across_example_synthesis_for_typed_clone():
     src = """
     -- Untyped body with example to synthesize {int,int}, plus guard
     add: fn {a, b} [ "guarded" ]
-      |guard [ a > b ]
+      |where [ a > b ]
       |example { a: 2, b: 1 -> none }
 
     -- Explicit plain typed fallback for the same signature
@@ -182,7 +185,7 @@ async def test_guard_preserved_across_example_synthesis_for_typed_clone():
 async def test_guard_can_access_lexical_closure_vars():
     src = """
     y: 10
-    f: fn {x} [ "gt" ] |guard [ x > y ]
+    f: fn {x} [ "gt" ] |where [ x > y ]
     f: fn {x} [ "fallback" ]
     #[ f 20, f 5 ]
     """
@@ -199,7 +202,7 @@ async def test_guard_scoping_and_shadowing_local_generic_container():
     -- Local shadowing with its own generic container and guards
     runner: fn {} [
       choose: fn {x} [ "local" ]
-      choose: fn {x} [ "special" ] |guard [ x = 42 ]
+      choose: fn {x} [ "special" ] |where [ x = 42 ]
       #[ choose 42, choose 1 ]
     ]
 

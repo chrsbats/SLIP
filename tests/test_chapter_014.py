@@ -6,28 +6,36 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 def assert_ok(res, expected=None):
-    assert res.status == 'success', f"expected success, got {res.status}: {res.error_message}"
+    assert res.status == "ok", (
+        f"expected success, got {res.status}: {res.error_message}"
+    )
     if expected is not None:
         assert res.value == expected, f"expected {expected!r}, got {res.value!r}"
 
 
 def assert_error(res, contains: str | None = None):
-    assert res.status == 'error', f"expected error, got success: {res.value!r}"
+    assert res.status == "err", f"expected error, got success: {res.value!r}"
     if contains is not None:
-        assert contains in (res.error_message or ""), f"error did not contain {contains!r}: {res.error_message!r}"
+        assert contains in (res.error_message or ""), (
+            f"error did not contain {contains!r}: {res.error_message!r}"
+        )
 
 
 @pytest.fixture(scope="module")
 def http_server_rw():
     store = {"data": {"initial": True}, "log": [], "_last_headers": {}}
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             return
+
         def _capture_headers(self):
             store["_last_headers"] = {k.lower(): v for k, v in self.headers.items()}
+
         def _read_body(self):
             cl = int(self.headers.get("Content-Length", 0))
             return self.rfile.read(cl) if cl > 0 else b""
+
         def do_GET(self):
             self._capture_headers()
             store["log"].append("GET")
@@ -35,20 +43,22 @@ def http_server_rw():
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(store["data"]).encode("utf-8"))
+
         def do_PUT(self):
             self._capture_headers()
             body = self._read_body()
-            store["log"].append(("PUT", body.decode('utf-8')))
+            store["log"].append(("PUT", body.decode("utf-8")))
             try:
                 store["data"] = json.loads(body)
             except Exception:
-                store["data"] = body.decode('utf-8')
+                store["data"] = body.decode("utf-8")
             self.send_response(200)
             self.end_headers()
+
         def do_POST(self):
             self._capture_headers()
             body = self._read_body()
-            store["log"].append(("POST", body.decode('utf-8')))
+            store["log"].append(("POST", body.decode("utf-8")))
             try:
                 parsed_body = json.loads(body)
                 store["data"].update(parsed_body)
@@ -56,6 +66,7 @@ def http_server_rw():
                 pass
             self.send_response(200)
             self.end_headers()
+
         def do_DELETE(self):
             self._capture_headers()
             store["log"].append("DELETE")
@@ -63,7 +74,7 @@ def http_server_rw():
             self.send_response(204)
             self.end_headers()
 
-    server = HTTPServer(('localhost', 8999), Handler)
+    server = HTTPServer(("localhost", 8999), Handler)
     thread = threading.Thread(target=server.serve_forever)
     thread.daemon = True
     thread.start()
@@ -107,7 +118,7 @@ f: fn {x} [ x ]
 ]
 """
     res = await runner.handle_script(src)
-    assert res.status == 'success', res.error_message
+    assert res.status == "ok", res.error_message
     assert all(res.value), f"type-of checks failed: {res.value!r}"
 
 
@@ -167,20 +178,12 @@ async def test_math_pow_and_not_operators():
 
 
 @pytest.mark.asyncio
-async def test_import_and_channels_and_current_scope_missing_errors_cleanly():
+async def test_import_and_current_scope_missing_errors_cleanly():
     runner = ScriptRunner()
 
     # import missing
     res = await runner.handle_script("import `a.b`")
     assert_error(res, "PathNotFound: import")
-
-    # channels present and functional
-    res = await runner.handle_script("""
-    ch: make-channel
-    task [ send ch 42 ]
-    receive ch
-    """)
-    assert_ok(res, 42)
 
     # current-scope present: returns a scope
     res = await runner.handle_script("is-scope? current-scope")
@@ -228,13 +231,13 @@ async def test_resource_fluent_api(http_server_rw):
     res = await runner.handle_script(src)
     assert_ok(res)
 
-    assert res.value['initial'] == {'initial': True}
-    assert res.value['final_get'] == {'name': 'new-item', 'value': 42, 'extra': True}
+    assert res.value["initial"] == {"initial": True}
+    assert res.value["final_get"] == {"name": "new-item", "value": 42, "extra": True}
 
-    assert store['log'] == [
-        'GET',
-        ('PUT', '{\n  "name": "new-item",\n  "value": 42\n}'),
-        ('POST', '{\n  "extra": true\n}'),
-        'GET',
-        'DELETE'
+    assert store["log"] == [
+        "GET",
+        ("PUT", '{\n  "name": "new-item",\n  "value": 42\n}'),
+        ("POST", '{\n  "extra": true\n}'),
+        "GET",
+        "DELETE",
     ]
