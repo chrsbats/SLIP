@@ -556,7 +556,7 @@ That keeps observation separate from mutation.
 
 **The Solution:** Use multiple function definitions and let dispatch pick the right one.
 
-In current SLIP, dispatch is simpler than the old reference may suggest. The practical rules are:
+The practical dispatch rules are:
 
 - typed methods are considered before untyped methods
 - untyped methods are fallback-only
@@ -719,9 +719,9 @@ Use dispatch when the code wants to read like separate rules.
 1. **Commit Stage:** Call transactions to change state.
 2. **Observe Stage:** Read `cells` and `refs` to update the UI or log events.
 
-### 8.1 Logging conventions (channels and payload shape)
+### 8.1 Logging conventions (topics and payload shape)
 
-Pick a small set of channels and use them consistently:
+Pick a small set of topics and use them consistently:
 
 - `"combat"` for combat events
 - `"movement"` for spatial/movement events

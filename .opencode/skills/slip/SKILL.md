@@ -14,6 +14,7 @@ Read these first if you need more detail:
 - `docs/01 SLIP Scripting.md`
 - `docs/02 SLIP Programs.md`
 - `docs/03 SLIP Advanced.md`
+- `docs/04 SLIP Best Practices.md`
 - `docs/Appendix A - StdLib Reference.md`
 - `docs/Appendix B - SLIP Style Guide.md`
 
@@ -164,7 +165,7 @@ Current dispatch model:
 - guards refine ties within a tier
 - last-defined wins among matching peers
 
-Do not describe dispatch with old “complex scoring” language.
+Describe dispatch only in terms of the current simple contract.
 
 Good use cases for dispatch:
 
@@ -208,12 +209,19 @@ Do not generate code that relies on mutating shared imported definitions as the 
 
 Use these as the default building blocks:
 
+- plain dict/list state for local or temporary data
 - `scope` for objects/prototypes
 - `create` for instances
 - `inherit` for prototype linkage
 - `with` for fluent configuration
 - `resolver` for authority-rooted transactional writes
 - `ref` and `cell` for derived/observed values
+
+Use this rule of thumb:
+
+- plain dict/list when the data is local and does not need ownership rules
+- `scope`/prototype when many values share defaults or behavior shape
+- `resolver` when one place should own the truth for a domain and commit writes centrally
 
 Example:
 
@@ -222,6 +230,21 @@ Character: scope #{ hp: 100 }
 Player: scope #{} |inherit Character
 
 p: create Player |with [ hp: 150 ]
+```
+
+MUD-shaped example:
+
+```slip
+Combat: resolver #{
+    hp: #{ "player-1": 120, "goblin-1": 35 }
+}
+
+apply-damage: fn {this: Combat, target-id, amount} [
+    next: this.hp[target-id] - amount
+    if [next < 0] [ next: 0 ]
+    this.hp[target-id]: next
+    response ok next
+]
 ```
 
 ## 11. Outcomes and effects
@@ -255,6 +278,29 @@ Patterns:
 - mapping-style host objects for path reads/writes
 - top-level exposed host methods in `kebab-case`
 - gateway functions like `host-object "id"` and `host-data "id"`
+
+For embedded applications, prefer a long-lived `ScriptRunner` that preloads SLIP functions once and then calls into that environment repeatedly.
+
+Default embedded pattern:
+
+1. create one long-lived `ScriptRunner`
+2. preload mechanics/modules into its scope once
+3. expose host methods and gateway functions
+4. call preloaded SLIP functions repeatedly from Python
+
+Conceptually:
+
+```python
+runner = ScriptRunner(host_data=load_from_db)
+
+await runner.handle_script("""
+attack: fn {attacker, target} [
+    Combat |apply-damage target.id 10
+]
+""")
+
+await runner.handle_script('attack (host-object "player-1") (host-object "goblin-1")')
+```
 
 Prefer a narrow gateway over exposing a large host graph directly.
 
@@ -318,8 +364,6 @@ task [
 ]
 ```
 
-Do not use channels. They are being removed from the language surface.
-
 ## 15. Metaprogramming rules
 
 Use metaprogramming only when normal functions, closures, scopes, or imports are not enough.
@@ -357,13 +401,13 @@ Avoid these:
 
 - assuming operator precedence exists
 - overusing `run` or `call`
-- explaining old dispatch semantics instead of the current simple contract
+- explaining dispatch in a way that is more complicated than the current contract
 - mutating imported modules instead of shadowing locally
 - using complex metaprogramming when closures or functions are enough
 - forgetting that `[...]` is code, not an eager list literal
 - forgetting that `#{...}` and `#[...]` are data constructors while `dict [...]` and `list [...]` are function forms
 - treating plain dicts as typed scopes without `as-slip`
-- reaching for channels instead of `task`
+- overcomplicating background work instead of using `task`
 
 ## 18. Good defaults checklist
 

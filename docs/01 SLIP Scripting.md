@@ -442,10 +442,10 @@ Scripts usually need to do three things beyond pure calculation:
 
 SLIP scripts report output as **effects**.
 
-- `emit <channel> <message...>` appends an event to the script’s output log.
+- `emit <topic-or-topics> <message...>` appends an event to the script’s output log.
 - Emitting does **not** mutate your variables; it’s for narration/debugging/logging.
 - Your host (or CLI) decides what to do with emitted events (show them, save them, ignore them).
-- `print ...` is a convenience that emits to the standard output channel.
+- `print ...` is a convenience that emits to the standard output topic.
 
 ```slip
 emit "debug" "starting script"
