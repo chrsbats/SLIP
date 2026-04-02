@@ -1,10 +1,18 @@
-# SLIP Architect Guide: Programs and Code Structure
+# SLIP Programs
 
 As your scripts grow, you will eventually run into the limits of a single file. This guide introduces tools for organizing code into multiple files, sharing behavior through prototypes, and centralizing authority with resolvers.
 
+The basic progression in this guide is:
+
+1. split code across files
+2. share behavior cleanly
+3. centralize ownership of important state
+4. derive read-only values from that state
+5. replace brittle conditional logic with rules and tests
+
 ---
 
-## 1. Multi-file scripting with `import`
+## How do I split code across files?
 
 **The Problem:** "My script is 500 lines long and it's getting hard to find the logic I need."
 
@@ -162,9 +170,32 @@ run-with [
 
 This is still just structured shadowing: reuse most of the original module, but replace the names you want locally.
 
+### Takeaway
+
+Use modules to separate concerns, and customize imported behavior by shadowing locally rather than patching shared definitions.
+
 ---
 
-## 2. Prototypes: Share defaults and behavior
+## How do I structure larger programs?
+
+A good default progression is:
+
+- start with plain functions and plain data
+- split code into modules with `import`
+- introduce prototypes when you want shared defaults and behavior
+- introduce resolvers when you want one place to own important state
+
+In practice, that usually means:
+
+- use plain modules for code organization
+- use prototypes for shared defaults and type-shaped behavior
+- use resolvers for authoritative state
+
+The next question is usually: how do I share state and behavior without copying the same fields and helpers everywhere?
+
+---
+
+## How do I share defaults and behavior?
 
 **The Problem:** “I’m creating many player objects, and I'm copying the same default HP and helper functions into every single one.”
 
@@ -247,10 +278,18 @@ p: create Player [ hp: 150 ]
 p.hp
 ```
 
+### Takeaway
+
+Use prototypes when many values share the same defaults or behavior shape.
+
+- `scope` defines the shared shape
+- `inherit` links related prototypes
+- free functions keep behavior separate from data while still dispatching cleanly
+
 
 ---
 
-## 3. Centralize state updates with a Resolver
+## How do I centralize authority over state?
 
 **The Problem:** "I have modules for combat and health regeneration, but they both touch `player.hp` directly. If I want to add a 'max health' rule or a 'death' log, I have to find every single line of code in every file that modifies HP."
 
@@ -326,10 +365,18 @@ Combat |Combat.apply-damage "p1" 10
 
 You now have exactly one place to change HP, and one place to enforce HP rules.
 
+### Takeaway
+
+Use a resolver when one part of the program should own the truth for a domain.
+
+- reads can be broad
+- committed writes should be narrow
+- transactions make rule enforcement explicit
+
 
 ---
 
-## 4. Add rules and errors in the transaction
+### How do I add rules and errors in the transaction?
 
 **The Problem:** "My `apply-damage` function works, but it allows negative damage, which heals the player. I need to validate the input and stop the script if something is wrong."
 
@@ -364,10 +411,16 @@ if [out.status = ok] [
 ]
 ```
 
+This is the normal pattern for resolver transactions:
+
+- validate first
+- commit once
+- return a structured outcome
+
 
 ---
 
-## 5. Cross boundaries by calling transactions
+### How do I cross boundaries without breaking ownership?
 
 **The Problem:** "My `Combat` resolver needs to know which room a player is in to calculate range, but the `Spatial` resolver owns the room data. I don't want `Combat` to be able to accidentally move players."
 
@@ -420,9 +473,16 @@ apply-fire: fn {this: Combat, spatial: Spatial, target-id, amount} [
 ]
 ```
 
+### Takeaway
+
+Cross-domain reads are fine. Cross-domain writes should go through the owner.
+
+- read through `::`
+- commit only through the owning resolver's transaction
+
 ---
 
-## 6. Derived values with `ref` and `cell`
+## How do I compute derived values?
 
 **The Problem:** "I have a UI that needs to show if a player is 'wounded'. I'm currently calculating `hp < 50` every time I draw the screen. If I change the definition of wounded, I have to update the UI code."
 
@@ -481,10 +541,16 @@ Combat |apply-damage "p1" 10
 p1-wounded? -- true
 ```
 
+### Takeaway
+
+Use `ref` for stable reads and `cell` for pure derived values.
+
+That keeps observation separate from mutation.
+
 
 ---
 
-## 7. Replace `if` chains with dispatch
+## How do I replace `if` ladders with dispatch?
 
 **The Problem:** "My `apply-damage` function is becoming a giant mess of `if` and `else` blocks to handle different damage types like fire, ice, and physical."
 
@@ -633,10 +699,18 @@ Use dispatch when:
 
 Avoid putting your whole control structure into one method body. In SLIP, separate methods are often the clearer design.
 
+### Takeaway
+
+Use dispatch when the code wants to read like separate rules.
+
+- typed methods handle the common shape
+- guarded methods handle refinements
+- fallbacks stay explicit
+
 
 ---
 
-## 8. The Tick Loop: Commit then Observe
+### How do I structure a tick loop?
 
 **The Problem:** "I'm building a game loop. I need a clear order of operations so that I don't have 'glitches' where the UI shows old data while the combat logic is half-finished."
 
@@ -718,9 +792,17 @@ Because emits are collected as data, tests can assert on them directly:
 - assert a `"combat"` event was emitted with expected fields
 - assert UI narration was emitted in order
 
+### Takeaway
+
+For game-like programs, a simple tick model works well:
+
+1. commit state changes
+2. observe derived values
+3. emit audit or UI events
+
 ---
 
-## 9. Test your modules with `|example` and `test`
+## How do I test my code?
 
 **The Problem:** "I'm worried that my 'fix' for the math module broke something else. I need a way to verify my functions work as expected without running the whole game."
 
@@ -769,5 +851,13 @@ summary: test-all math-mod
 ```
 
 `test-all` returns a `response` whose `.value` is a summary dict, including a per-function failure list when failures occur.
+
+### Takeaway
+
+Attach examples close to the code they describe.
+
+- use `test` for one function
+- use `test-all` for a scope or module
+- keep examples as both docs and verification
 
 ---

@@ -1,6 +1,8 @@
-# SLIP Scripter Guide
+# SLIP Scripting
 
-This guide is a quick, hands-on introduction to SLIP. We'll start with the basics of evaluating expressions and move quickly into reading, transforming, and writing data.
+This guide is a quick, hands-on introduction to SLIP.
+
+It is organized around the next practical question in the programmer's mind. Start at the top and stop as soon as you know enough to do your work.
 
 By the end, you will be able to:
 - Run a script from a file.
@@ -9,30 +11,76 @@ By the end, you will be able to:
 - Write transformed results back to disk.
 - Handle errors gracefully.
 
-To run a script, execute:
+---
 
-```bash
-slip my-script.slip
+## How do I write and run a SLIP script?
+
+The first useful thing to know is that a SLIP script is just a sequence of expressions in a file.
+
+Here is a complete script:
+
+```slip
+name: "Karl"
+hp: 120
+
+print "{{name}} has {{hp}} HP"
+
+hp
 ```
 
+This script:
+
+- binds two names
+- emits one line of output with `print`
+- returns the value of the last expression
+
+### Run a script file
+
+```bash
+uv run python slip.py my-script.slip
+```
+
+When you run a script file, SLIP evaluates the file from top to bottom.
+
+### Start the REPL
+
+```bash
+uv run python slip.py
+```
+
+The REPL is useful when you want to try small expressions before writing a full script.
+
+### What a script is made of
+
 SLIP is intentionally small:
+
 - everything is an expression
-- there is no operator precedence 
-- all control flow is done with functions that take code blocks (no special forms)
+- there is no operator precedence
+- control flow is mostly regular function calls over code blocks
 
 This guide is about the fast path: read data, transform it, write it back, and handle failures without learning the whole language model first.
 
----
+### Takeaway
 
-## 1) The Golden Rule: Left-to-Right 
+To get started, think of a SLIP script as:
+
+- a file full of expressions
+- evaluated in order
+- with the final expression becoming the script's result
+
+The next thing to learn is the most important rule for reading those expressions: how evaluation works.
+
+## How do expressions evaluate?
+
+The next thing most readers need to know is how to read a line of SLIP correctly.
 
 SLIP evaluates infix operators strictly left-to-right.
 
 ```slip
-In most languages: 
+-- In most languages:
 10 + 5 * 2 = 10 + 10 = 20
 
-In SLIP: 
+-- In SLIP:
 10 + 5 * 2 = 15 * 2 = 30
 ```
 
@@ -48,9 +96,19 @@ You can also separate multiple expressions on one line with `;`:
 a: 1; b: 2
 ```
 
+### Takeaway
+
+Read SLIP exactly in the order it appears on the page.
+
+- no hidden precedence rules
+- parentheses mean "do this first"
+- semicolons let you put more than one expression on a line
+
 ---
 
-## 2) Values 
+## How do I work with values and data?
+
+Most scripts start by binding some values, shaping a little data, and moving on.
 
 Comments use `--` for single lines and `{-- ... --}` for block comments.
 
@@ -86,9 +144,34 @@ greeting: "
 "
 ```
 
+### Lists and dicts
+
+The two most common data structures are lists and dicts.
+
+```slip
+nums: #[ 10, 20, 30 ]
+player: #{ name: "Karl", hp: 120 }
+
+#[ nums[0], player.name ]
+```
+
+### Takeaway
+
+For basic scripting, the values to reach for first are:
+
+- numbers
+- booleans
+- strings
+- lists
+- dicts
+
+The next step is learning how to call functions and put those values through control flow.
+
 ---
 
-## 3) Expressions, Calls, and the Pipe
+## How do I call functions and use control flow?
+
+Once you have values, the next question is how to do work with them.
 
 ### Function calls
 
@@ -129,9 +212,7 @@ Call it:
 result: add-ten 5
 ```
 
----
-
-## 4) Code Blocks and Control Flow
+### Code blocks
 
 A `[...]` block is a **code value** (unevaluated code). Control-flow functions decide when to run it.
 
@@ -177,33 +258,20 @@ foreach {item} items [
 
 Tip: for dicts, `{k}` iterates keys; `{k, v}` iterates key/value pairs.
 
----
+### Takeaway
 
-## 5) Data Structures (Lists and Dicts)
+The common pattern is:
 
-### Lists: `#[...]`
-
-```slip
-nums: #[ 10, 20, 30 ]
-first: nums[0]
-slice: nums[1:3]
-```
-
-### Dicts: `#{...}`
-
-```slip
-player: #{
-    name: "Karl",
-    hp: 120
-}
-
-player.name
-player["hp"]
-```
+- call functions with spaces
+- pipe values when it reads more naturally
+- use `fn` to define reusable behavior
+- pass code blocks to control-flow functions like `if`, `while`, and `foreach`
 
 ---
 
-## 6) The Path Query DSL (Read)
+## How do I query and update collections?
+
+The next thing most scripts want to do is pull specific data out of a list or update matching items.
 
 You can index, slice, filter, and “pluck” with path syntax.
 
@@ -235,16 +303,15 @@ hps: players.hp     -- #[120, 45]
 
 Note: for lists, filters and plucks return normal (eager) lists in the current interpreter.
 
----
-
-## 7) Transform Patterns: Build New Data vs Update In Place
+### Build new data vs update in place
 
 When transforming JSON, you’ll usually use one of these patterns:
 
-- **Build a new value** (beginner-friendly, no mutation of the input)
-- **Update in place** (fast and convenient)
 
-### 7.1 Build a new list/dict (no mutation)
+- **Build a new value** when you want a clean transformed result
+- **Update in place** when you want to change the existing data directly
+
+### Build a new list or dict
 
 This pattern reads from an input list and constructs a new list of output rows.
 
@@ -262,7 +329,7 @@ wounded-report: #{
 }
 ```
 
-### 7.2 Update in place (vectorized updates)
+### Update in place
 
 If a query appears on the left side of an assignment, SLIP can update multiple items.
 
@@ -285,13 +352,21 @@ The “filter then pluck” version is equivalent:
 players[.hp < 50].hp: * 1.1
 ```
 
+### Takeaway
+
+For collection work, the usual progression is:
+
+- filter with `[...]`
+- pluck with `.field`
+- either build a new result or update matching values in place
+
 ---
 
-## 8) I/O: Read JSON, Transform, Write JSON
+## How do I read files and HTTP data?
 
-This is the core “scripting” workflow.
+This is the core scripting workflow: load data, reshape it, and save it again.
 
-### 8.1 Read from a file (`file://`)
+### Read from a file (`file://`)
 
 The file extension controls parsing for structured formats:
 
@@ -303,7 +378,7 @@ The file extension controls parsing for structured formats:
 data: file://input.json
 ```
 
-### Important: scheme GETs are two-step
+### Bind first, then query
 
 In the current interpreter, **you cannot filter/pluck directly on the same `file://...` or `http://...` expression**.
 
@@ -321,7 +396,7 @@ data: file://input.json
 names: data.players.name
 ```
 
-### 8.2 Read from HTTP (`http://` / `https://`)
+### Read from HTTP (`http://` / `https://`)
 
 ```slip
 resp: http://api.example.com/players.json
@@ -336,7 +411,7 @@ players: http://api.example.com/players.json
 names: players.name
 ```
 
-### 8.3 Write to a file
+### Write to a file
 
 Write JSON by using a `.json` filename:
 
@@ -347,9 +422,23 @@ out: #{
 file://out.json: out
 ```
 
+### Takeaway
+
+The standard pattern is:
+
+1. bind the data source to a name
+2. query or transform the bound value
+3. write out the result if needed
+
 ---
 
-## 9) Seeing Output: `emit` (Effects as Data)
+## How do I report output, success, and failure?
+
+Scripts usually need to do three things beyond pure calculation:
+
+- report output
+- signal success or failure
+- recover from expected failure cases
 
 SLIP scripts report output as **effects**.
 
@@ -378,9 +467,7 @@ count-down: fn {n} [
 count-down 3
 ```
 
----
-
-## 10) Handling Errors Like a Scripter
+### Handling failures and expected errors
 
 There are two kinds of “things that go wrong”:
 
@@ -433,9 +520,7 @@ if [status != 200] [
 ]
 ```
 
----
-
-## 11) One Complete Script: JSON In → Transform → JSON Out
+### One complete script: JSON in -> transform -> JSON out
 
 ```slip
 -- 1) Read JSON
@@ -454,5 +539,15 @@ report: #{
 -- 4) Write JSON
 file://out.json: report
 ```
+
+### Takeaway
+
+For everyday scripting:
+
+- use `print` or `emit` for output
+- use `response` for expected success/failure values
+- use `do` when you want to capture a failure instead of stopping immediately
+
+If you can do these seven things, you know enough SLIP to write useful self-contained scripts.
 
 ---

@@ -202,6 +202,10 @@ The project's documentation is structured to guide you from the high-level conce
 - **[02 SLIP Programs](<docs/02 SLIP Programs.md>):** Code organization, dispatch, testing, schemas, and program structure.
 - **[03 SLIP Advanced](<docs/03 SLIP Advanced.md>):** Metaprogramming, host integration, background work, and explicit rehydration.
 
+#### Optional Guidance
+
+- **[04 SLIP Best Practices](<docs/04 SLIP Best Practices.md>):** Practical advice for writing clear, maintainable, moddable SLIP.
+
 #### Appendices
 
 - **[Appendix A - StdLib Reference](<docs/Appendix A - StdLib Reference.md>):** A practical reference for the current standard library surface.
