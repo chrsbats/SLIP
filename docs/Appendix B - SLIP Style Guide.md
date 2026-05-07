@@ -118,7 +118,12 @@ Code blocks and statements should be formatted for maximum readability.
         ]
         ```
 
-*   **Clarity with `return`:** In a multi-line function body, it is strongly recommended to use an explicit `return` for the final expression. This removes any ambiguity about what the function's output is and improves readability.
+*   **Clarity with `return`:** In a multi-line function body, it is strongly recommended to use an explicit `return` for the final expression. This removes any ambiguity about what the function's output is and improves readability. `return` accepts at most one value; when returning a call, comparison, or logical expression, group it explicitly:
+    ```slip
+    return (transition-choice choices roll)
+    return (weather = 'storm')
+    return (not (nighttime-period? period))
+    ```
 
 *   **Refinement with `|where` (default style):** Prefer putting a `|where` clause inside the function signature to refine dispatch or validate parameters. Only one `|where` is allowed per signature.
     ```slip

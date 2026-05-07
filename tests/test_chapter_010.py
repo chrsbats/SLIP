@@ -252,7 +252,7 @@ async def test_inject_function_object_into_code_and_run():
 
 
 @pytest.mark.asyncio
-async def test_istring_mustache_renders_with_lexical_scope():
+async def test_istring_renders_with_lexical_scope():
     src = """
     name: "Kael"
     banner: "

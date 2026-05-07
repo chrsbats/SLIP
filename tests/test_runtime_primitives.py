@@ -56,6 +56,41 @@ async def test_foreach_over_mapping_keys_and_items():
 
 
 @pytest.mark.asyncio
+async def test_small_math_family_is_available():
+    runner = ScriptRunner()
+    await runner._initialize()
+
+    res = await runner.handle_script("""
+    #[
+      floor 1.7,
+      ceil 1.2,
+      trunc -1.7,
+      round 1.6,
+      round 1.234 2,
+      sqrt 9,
+      abs -4
+    ]
+    """)
+
+    assert res.status == "ok", res.error_message
+    assert res.value == [1, 2, -1, 2, 1.23, 3.0, 4]
+
+
+@pytest.mark.asyncio
+async def test_return_multiple_values_explains_parentheses():
+    runner = ScriptRunner()
+
+    res = await runner.handle_script("""
+    f: fn {} [ return 1 = 1 ]
+    f
+    """)
+
+    assert res.status == "err"
+    assert "return takes at most one value" in (res.error_message or "")
+    assert "wrap complex return expressions in parentheses" in (res.error_message or "")
+
+
+@pytest.mark.asyncio
 async def test_get_body_returns_code_for_typed_method():
     runner = ScriptRunner()
     await runner._initialize()

@@ -82,8 +82,66 @@ async def test_as_slip_rehydrated_scope_participates_in_dispatch_from_host_objec
 
 
 @pytest.mark.asyncio
-async def test_as_slip_unknown_prototype_errors_cleanly():
+async def test_as_slip_auto_creates_missing_prototype_and_dispatches():
     runner = ScriptRunner()
+    runner.root_scope["data"] = {
+        "__slip__": {"type": "scope", "prototype": "MissingType"},
+        "hp": 10,
+    }
+
+    res = await runner.handle_script("""
+    describe: fn {x: MissingType} [ "typed" ]
+    describe: fn {x} [ "fallback" ]
+
+    obj: as-slip data
+    #[ describe obj, obj.hp, is-a? obj MissingType ]
+    """)
+
+    assert_ok(res, ["typed", 10, True])
+
+
+@pytest.mark.asyncio
+async def test_as_slip_reuses_generated_prototype_within_runner():
+    runner = ScriptRunner()
+    runner.root_scope["a"] = {
+        "__slip__": {"type": "scope", "prototype": "Ghost"},
+        "hp": 1,
+    }
+    runner.root_scope["b"] = {
+        "__slip__": {"type": "scope", "prototype": "Ghost"},
+        "hp": 2,
+    }
+
+    res = await runner.handle_script("""
+    a1: as-slip a
+    b1: as-slip b
+    #[ is-a? a1 Ghost, is-a? b1 Ghost, eq a1.meta.parent b1.meta.parent ]
+    """)
+
+    assert_ok(res, [True, True, True])
+
+
+@pytest.mark.asyncio
+async def test_as_slip_prefers_existing_local_prototype():
+    runner = ScriptRunner()
+    runner.root_scope["data"] = {
+        "__slip__": {"type": "scope", "prototype": "Character"},
+        "hp": 10,
+    }
+
+    res = await runner.handle_script("""
+    Character: scope #{ kind: "local" }
+    obj: as-slip data
+    #[ is-a? obj Character, obj.kind, obj.hp ]
+    """)
+
+    assert_ok(res, [True, "local", 10])
+
+
+@pytest.mark.asyncio
+async def test_as_slip_errors_if_existing_prototype_name_is_not_scope():
+    runner = ScriptRunner()
+    runner.root_scope["MissingType"] = 123
     runner.root_scope["data"] = {
         "__slip__": {"type": "scope", "prototype": "MissingType"},
         "hp": 10,
@@ -91,4 +149,4 @@ async def test_as_slip_unknown_prototype_errors_cleanly():
 
     res = await runner.handle_script("as-slip data")
 
-    assert_error(res, "as-slip prototype: MissingType")
+    assert_error(res, "invalid-args in (as-slip)")

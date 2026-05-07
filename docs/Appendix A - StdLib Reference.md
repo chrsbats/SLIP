@@ -62,11 +62,17 @@ response ok 123
 
 - Returns the SLIP type as a path literal.
 - Common results include `` `int` ``, `` `float` ``, `` `string` ``, `` `i-string` ``, `` `list` ``, `` `dict` ``, `` `scope` ``, `` `function` ``, `` `path` ``, `` `none` ``.
+- Because the result is a path literal, type guards should compare with backticked literals such as `` `string` ``, not quoted strings.
+- Raw single-quoted strings have type `` `string` ``; double-quoted interpolated strings have type `` `i-string` ``.
 
 Example:
 
 ```slip
-type-of #[1, 2, 3]
+#[
+  type-of #[1, 2, 3],
+  (type-of 'item-1') = `string`,
+  (type-of "item-1") = `i-string`
+]
 ```
 
 ### `status value`
@@ -89,6 +95,30 @@ Example:
 
 ```slip
 to-str u8#[65, 66, 67]
+```
+
+### `to format data`
+
+- Serializes `data` to a text format.
+- Current built-in formats: `` `json` ``, `` `yaml` ``, `` `toml` ``.
+- `format` may be a path literal or a string.
+
+Example:
+
+```slip
+to `json` #{ name: "Karl", hp: 120 }
+```
+
+### `from format text`
+
+- Parses `text` into SLIP data.
+- Current built-in formats: `` `json` ``, `` `yaml` ``, `` `toml` ``.
+- `format` may be a path literal or a string.
+
+Example:
+
+```slip
+from `json` '{"name": "Karl", "hp": 120}'
 ```
 
 ### `call func args`
@@ -125,12 +155,17 @@ obj: as-slip #{
 
 - Appends a side-effect event to the script log.
 - `topics` may be a string or a list of topics.
+- Topic lists are flat tags, not hierarchy. A common convention is `"self"` and `"others"` for audience targeting.
+- A single structured message, such as a dict or list, is preserved as native data in the event `message`.
 - Does not mutate program values.
+- If called as `emit topics format data`, the payload is serialized first using `to`-style formatting rules for supported formats such as `` `json` ``, `` `yaml` ``, and `` `toml` ``.
 
 Example:
 
 ```slip
 emit "debug" "starting"
+emit #["self", "others"] #{ msg_id: 'move.resolved', sentence: 'You move it.' }
+emit "stdout" `json` #{ hp: 120, mana: 30 }
 ```
 
 ### `print msg`
@@ -306,6 +341,18 @@ Example:
 - Returns true if the key exists.
 - Works for dicts and scopes.
 
+### `update target patch`
+
+- Shallow-updates a dict or scope from another mapping.
+- Mutates and returns `target`.
+
+Example:
+
+```slip
+target: #{ hp: 100 }
+update target #{ hp: 80, mana: 20 }
+```
+
 ### `copy value`
 
 - Shallow copy.
@@ -384,6 +431,15 @@ for {i} 1 4 [ print i ]
 
 - Exits the current function early.
 - Also works at top level.
+- Accepts zero or one value. If the returned value is a call, comparison, or logical expression, wrap it in parentheses so it is passed as one value.
+
+Examples:
+
+```slip
+return (transition-choice choices roll)
+return (weather = 'storm')
+return (not (nighttime-period? period))
+```
 
 ### `response status value`
 

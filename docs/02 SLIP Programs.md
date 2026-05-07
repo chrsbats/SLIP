@@ -561,6 +561,8 @@ The practical dispatch rules are:
 - typed methods are considered before untyped methods
 - untyped methods are fallback-only
 - exact arity beats variadic methods
+- typed constraints can appear on any parameter, not just the first
+- when several typed methods match, scope specificity is compared in declared parameter order
 - guards (`|where`) refine ties within a tier
 - last-defined wins among equally matching peers
 
@@ -674,6 +676,40 @@ p: create Player
 
 Even though the untyped method is broader, it is a fallback. It should not steal calls that match a typed method.
 
+Typed parameters do not have to be first. This is useful for host-backed game verbs where the actor id naturally comes first:
+
+```slip
+Item: scope #{}
+
+take: fn {actor-id, obj: Item, original-text} [
+    #[ `typed`, actor-id, obj.id, original-text ]
+]
+
+take: fn {
+    actor-id,
+    object-id,
+    original-text
+    |where (type-of object-id) = `string`
+} [
+    take actor-id (host-object object-id) original-text
+]
+
+#[
+    take 'actor-1' (host-object 'item-1') 'take key',
+    take 'actor-1' 'item-1' 'take key'
+]
+-- => #[
+--   #[`typed`, "actor-1", "item-1", "take key"],
+--   #[`typed`, "actor-1", "item-1", "take key"]
+-- ]
+```
+
+In the first method, `obj: Item` is checked against the second call argument because that is where it appears in the signature.
+
+The wrapper guard uses `type-of`, which returns a path literal. Compare it with a backticked literal like `` `string` ``, not with `'string'` or `"string"`.
+
+When more than one typed method matches, scope-specificity is compared left-to-right by declared parameter order. In other words, earlier typed parameters are the first tie-breakers, then later typed parameters.
+
 ### 7.5 Exact arity beats variadic
 
 ```slip
@@ -687,7 +723,39 @@ format-msg: fn {x: `string`, rest...} [ "variadic" ]
 -- => #["exact", "variadic"]
 ```
 
+Primitive annotations participate in dispatch too. Remember that SLIP has two string types:
+
+```slip
+kind-of-arg: fn {x: `string`} [ "raw string" ]
+kind-of-arg: fn {x: `i-string`} [ "i-string" ]
+
+#[
+    kind-of-arg 'item-1',
+    kind-of-arg "item-1"
+]
+-- => #["raw string", "i-string"]
+```
+
+Use single quotes for raw ids that should match `` `string` ``. Use `` `i-string` `` when you intentionally want double-quoted interpolated strings.
+
 If a call has too many arguments and no variadic method matches, dispatch fails with `No matching method`.
+
+When dispatch cannot find a match, the error shows the runtime argument types, candidate signatures, and why each candidate did not match:
+
+```slip
+choose: fn {x: `int`} [ "int" ]
+choose: fn {x |where x = `fire`} [ "fire" ]
+
+choose `ice`
+```
+
+```text
+No matching method
+args: (path)
+candidates:
+- {x: `int`}: type constraints did not match
+- {x}: guard did not pass
+```
 
 ### 7.6 Design advice
 
@@ -728,12 +796,20 @@ Pick a small set of topics and use them consistently:
 - `"ui"` for user-facing narration
 - `"debug"` for debug-only output
 
+Topic lists are flat tags, not hierarchy. A common MUD-style convention is `"self"` and `"others"`; together they represent room-wide delivery.
+
 Prefer structured payloads (dicts) for events you may want to test or replay:
 
 ```slip
 emit "combat" #{ type: `damage`, target: "p1", amount: 10 }
+emit #["self", "others"] #{
+    msg_id: 'move.resolved',
+    sentence: 'You move it.'
+}
 emit "ui" "You hit p1 for 10"
 ```
+
+A structured message is preserved as native data for the host. Use an explicit format, such as `` `json` ``, only when you want the emitted message serialized to a string.
 
 ### 8.2 Resolver transactions should emit audit events
 

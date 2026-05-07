@@ -125,14 +125,23 @@ missing: none
 
 SLIP has two string types:
 
-- **raw strings**: single quotes, no templating: `'...'`
-- **i-strings**: double quotes, specify templates: `"Hello {{name}}"`
+- **raw strings**: single quotes, no interpolation: `'...'`
+- **i-strings**: double quotes, evaluate `{{...}}` as SLIP expressions: `"Hello {{name}}"`
 
 ```slip
 name: "Karl"
 
 msg: "Hello {{name}}"
 path: '/tmp/data.json'
+```
+
+Interpolation can call functions and read paths in the current scope:
+
+```slip
+display-name: fn {obj} [ obj.name ]
+item: #{ name: 'brass key' }
+
+"You take {{display-name item}}."
 ```
 
 Multi-line i-strings are automatically de-dented:
@@ -444,11 +453,13 @@ SLIP scripts report output as **effects**.
 
 - `emit <topic-or-topics> <message...>` appends an event to the script’s output log.
 - Emitting does **not** mutate your variables; it’s for narration/debugging/logging.
+- A single dict or list message is preserved as structured data for the host.
 - Your host (or CLI) decides what to do with emitted events (show them, save them, ignore them).
 - `print ...` is a convenience that emits to the standard output topic.
 
 ```slip
 emit "debug" "starting script"
+emit "event" #{ type: 'start', ok: true }
 print "Hello, world"
 ```
 

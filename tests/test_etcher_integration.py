@@ -53,3 +53,24 @@ async def test_etcher_host_data_and_host_object_work_with_rd_rl(tmp_path):
     """)
 
     assert_ok(res, [True, True, "a", "person", "location", "Harbor"])
+
+
+@pytest.mark.asyncio
+async def test_foreach_over_empty_etcher_host_list_is_noop(tmp_path):
+    db = DB(str(tmp_path / "state.db"))
+    db["location-1"] = {
+        "__slip__": {"type": "scope", "prototype": "Location"},
+        "states": [],
+    }
+
+    runner = ScriptRunner(host_data=lambda object_id: db[object_id])
+
+    res = await runner.handle_script("""
+    Location: scope #{}
+    location: host-object "location-1"
+    seen: 0
+    foreach {value} location.states [ seen: seen + 1 ]
+    seen
+    """)
+
+    assert_ok(res, 0)

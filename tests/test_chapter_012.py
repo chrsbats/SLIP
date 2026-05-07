@@ -115,7 +115,7 @@ obj.hp
 
 
 @pytest.mark.asyncio
-async def test_host_data_builtin_returns_raw_data_and_host_object_rehydrates():
+async def test_host_data_builtin_returns_raw_data_and_host_object_wraps_lazily():
     registry = {
         "player-1": {
             "__slip__": {"type": "scope", "prototype": "Character"},
@@ -141,6 +141,88 @@ async def test_host_data_builtin_returns_raw_data_and_host_object_rehydrates():
     ]
     """)
     assert_ok(res, [True, True, 7, True])
+
+
+@pytest.mark.asyncio
+async def test_host_object_assignment_converts_slip_dict_to_plain_dict():
+    registry = {
+        "object-1": {
+            "__slip__": {"type": "scope", "prototype": "Item"},
+            "next_to": {"old": True},
+        }
+    }
+
+    runner = ScriptRunner(host_data=lambda object_id: registry.get(object_id))
+
+    res = await runner.handle_script("""
+    Item: scope #{}
+    obj: host-object "object-1"
+    obj.next_to: #{}
+    keys obj.next_to
+    """)
+
+    assert_ok(res, [])
+    assert registry["object-1"]["next_to"] == {}
+    assert type(registry["object-1"]["next_to"]) is dict
+
+
+@pytest.mark.asyncio
+async def test_host_object_does_not_eagerly_traverse_nested_graph():
+    class ExplodingMapping(dict):
+        def items(self):
+            raise AssertionError("nested graph should not be traversed eagerly")
+
+    registry = {
+        "location-1": {
+            "__slip__": {"type": "scope", "prototype": "Location"},
+            "name": "Town",
+            "domain": ExplodingMapping(
+                {
+                    "__slip__": {"type": "scope", "prototype": "Domain"},
+                    "name": "World",
+                }
+            ),
+        }
+    }
+
+    runner = ScriptRunner(host_data=lambda object_id: registry.get(object_id))
+
+    res = await runner.handle_script("""
+    Location: scope #{}
+    loc: host-object "location-1"
+    #[ eq (type-of loc) `scope`, loc.name ]
+    """)
+    assert_ok(res, [True, "Town"])
+
+
+@pytest.mark.asyncio
+async def test_host_object_nested_dispatch_through_lazy_list_and_cycles():
+    location = {
+        "__slip__": {"type": "scope", "prototype": "Location"},
+        "name": "Town",
+    }
+    domain = {
+        "__slip__": {"type": "scope", "prototype": "Domain"},
+        "name": "World",
+        "locations": [location],
+    }
+    location["domain"] = domain
+
+    registry = {"location-1": location}
+    runner = ScriptRunner(host_data=lambda object_id: registry.get(object_id))
+
+    res = await runner.handle_script("""
+    Location: scope #{}
+    Domain: scope #{}
+
+    describe: fn {x: Domain} [ "domain" ]
+    describe: fn {x: Location} [ "location" ]
+    describe: fn {x} [ "other" ]
+
+    loc: host-object "location-1"
+    #[ describe loc.domain, describe loc.domain.locations[0], loc.domain.locations[0].name ]
+    """)
+    assert_ok(res, ["domain", "location", "Town"])
 
 
 @pytest.mark.asyncio
@@ -177,6 +259,45 @@ async def test_host_object_dispatches_and_preserves_identity_within_run():
     #[ describe p, describe l1, l2.name ]
     """)
     assert_ok(res, ["person", "location", "Harbor"])
+
+
+@pytest.mark.asyncio
+async def test_host_object_accepts_already_wrapped_host_object():
+    registry = {
+        "item-1": {
+            "__slip__": {"type": "scope", "prototype": "Item"},
+            "id": "item-1",
+        }
+    }
+    calls = []
+
+    def host_data(object_id: str):
+        calls.append(object_id)
+        return registry[object_id]
+
+    runner = ScriptRunner(host_data=host_data)
+
+    res = await runner.handle_script("""
+    Item: scope #{}
+
+    obj: host-object 'item-1'
+    again: host-object obj
+    #[ obj.id, again.id ]
+    """)
+
+    assert_ok(res, ["item-1", "item-1"])
+    assert calls == ["item-1"]
+
+
+@pytest.mark.asyncio
+async def test_host_object_key_error_formats_without_crashing():
+    runner = ScriptRunner(host_data=lambda object_id: (_ for _ in ()).throw(
+        KeyError(object_id)
+    ))
+
+    res = await runner.handle_script("host-object 'missing'")
+
+    assert_error(res, "PathNotFound: missing")
 
 
 @pytest.mark.asyncio

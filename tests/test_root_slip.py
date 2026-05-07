@@ -148,6 +148,29 @@ obj.name
     assert res.status == 'ok', res.error_message
     assert res.value == "new"
 
+
+@pytest.mark.asyncio
+async def test_core_update_helper_for_dict_and_scope():
+    runner = ScriptRunner()
+
+    script = """
+target: #{ hp: 100 }
+update target #{ hp: 80, mana: 20 }
+#[ target.hp, target.mana ]
+"""
+    res = await runner.handle_script(script)
+    assert res.status == 'ok', res.error_message
+    assert res.value == [80, 20]
+
+    script = """
+obj: scope #{ hp: 100 }
+update obj #{ hp: 75, mana: 30 }
+#[ obj.hp, obj.mana ]
+"""
+    res = await runner.handle_script(script)
+    assert res.status == 'ok', res.error_message
+    assert res.value == [75, 30]
+
 @pytest.mark.asyncio
 async def test_to_int_and_to_float_return_none_on_invalid_input():
     runner = ScriptRunner()

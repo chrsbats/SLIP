@@ -30,8 +30,8 @@ dependencies = [
     "pystache==0.6.8",
     "httpx==0.28.1",
     "xmltodict==0.14.2",
-    "safer-yaml==0.1",
-    "toml>=0.10.2"
+    "safer-yaml==0.1.1",
+    "toml>=0.10.2",
 ]
 
 [project.urls]

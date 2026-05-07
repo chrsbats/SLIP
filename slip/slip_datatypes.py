@@ -1,4 +1,3 @@
-
 """
 Defines the core data types for the SLIP language runtime.
 
@@ -10,22 +9,27 @@ from abc import ABC
 from typing import List, Dict, Any, Optional, Union, TYPE_CHECKING
 import collections.abc
 
+
 class PathNotFound(Exception):
     def __init__(self, key: str):
         super().__init__(key)
         self.key = key
 
+
 # =================================================================
 # Abstract Base Classes
 # =================================================================
 
+
 class SlipCallable(ABC):
     """Abstract base class for all objects callable within SLIP."""
+
     pass
 
 
 class PathSegment(ABC):
     """Abstract base class for all components of a Path."""
+
     pass
 
 
@@ -34,6 +38,7 @@ class SlipBlock(collections.abc.MutableSequence):
     Abstract base class for Code, Group, and List which are sequence-like
     types that hold AST nodes.
     """
+
     def __init__(self, ast_nodes: List[Any]):
         self.nodes = list(ast_nodes)
 
@@ -62,24 +67,24 @@ class SlipBlock(collections.abc.MutableSequence):
 # Core Runtime Types
 # =================================================================
 
+
 class Scope:
-    """Represents a SLIP scope (object), with prototype parent and mixins.
+    """Represents a SLIP scope (object) with a prototype parent.
 
     This is the core data structure for lexical scoping and the basis for
     SLIP's prototype-based object model. It supports:
       - lexical lookup via the enclosing scopes (handled by the evaluator),
-      - object property lookup across instance, mixins, then parent,
+      - object property lookup across instance, then parent,
       - explicit prototype inheritance (meta.parent),
-      - capability composition via mixins (meta.mixins).
+      - dynamic metadata used by dispatch and runtime helpers.
     """
-    def __init__(self, parent: Optional['Scope'] = None):
+
+    def __init__(self, parent: Optional["Scope"] = None):
         # User-visible bindings on this scope.
         self.bindings: Dict[str, Any] = {}
         # System metadata used by the object model and dispatch.
         # name/type_id may be populated during "christening" by set-path logic.
-        self.meta: Dict[str, Any] = {
-            "parent": parent
-        }
+        self.meta: Dict[str, Any] = {"parent": parent}
         # Internal escape hatch to allow the evaluator to bind `this` capability
         # into the call scope without permitting it to be stored elsewhere.
         self._allow_this_token: bool = False
@@ -96,6 +101,7 @@ class Scope:
         # Contract: `This` cannot be stored in a scope (except for the internal
         # evaluator binding of the reserved `this` param in a call scope).
         from slip.slip_datatypes import This as _This
+
         if isinstance(value, _This) and not getattr(self, "_allow_this_token", False):
             raise PermissionError("`this` cannot be stored")
         self.bindings[key] = value
@@ -128,7 +134,7 @@ class Scope:
             return self.find_owner(key) is not None
         return False
 
-    def find_owner(self, key: str) -> Optional['Scope']:
+    def find_owner(self, key: str) -> Optional["Scope"]:
         """Finds the Scope in the lookup chain (self → parent) that owns key."""
         if key in self.bindings:
             return self
@@ -148,24 +154,29 @@ class Scope:
             return owner.bindings[key]
         return default
 
-    def inherit(self, parent: 'Scope'):
+    def inherit(self, parent: "Scope"):
         """Sets the prototype parent once. Raises if already set."""
         if self.meta.get("parent") is not None:
-            raise ValueError("inherit can only be called once on a scope (parent already set).")
+            raise ValueError(
+                "inherit can only be called once on a scope (parent already set)."
+            )
         self.meta["parent"] = parent
 
     def _normalize_key(self, key):
         """Allow a single-name PathLiteral(GetPath(...)) or GetPath to be used as a key."""
         try:
-            from slip.slip_datatypes import PathLiteral as _PL  # local import to avoid cycle during edits
+            from slip.slip_datatypes import (
+                PathLiteral as _PL,
+            )  # local import to avoid cycle during edits
+
             if isinstance(key, _PL):
-                inner = getattr(key, 'inner', None)
+                inner = getattr(key, "inner", None)
                 if isinstance(inner, GetPath):
-                    segs = getattr(inner, 'segments', [])
+                    segs = getattr(inner, "segments", [])
                     if len(segs) == 1 and isinstance(segs[0], Name):
                         return segs[0].text
             if isinstance(key, GetPath):
-                segs = getattr(key, 'segments', [])
+                segs = getattr(key, "segments", [])
                 if len(segs) == 1 and isinstance(segs[0], Name):
                     return segs[0].text
         except Exception:
@@ -173,7 +184,7 @@ class Scope:
         return key
 
     @property
-    def parent(self) -> Optional['Scope']:
+    def parent(self) -> Optional["Scope"]:
         """Returns the prototype parent scope."""
         return self.meta.get("parent")
 
@@ -191,9 +202,261 @@ class Scope:
         raise AttributeError(key)
 
     def __repr__(self) -> str:
-        keys = ', '.join(self.bindings.keys())
+        keys = ", ".join(self.bindings.keys())
         parent_id = f", parent=#{id(self.parent)}" if self.parent else ""
         return f"<Scope bindings=[{keys}]{parent_id}>"
+
+
+def _is_host_sequence(value: Any) -> bool:
+    return isinstance(value, collections.abc.Sequence) and not isinstance(
+        value, (str, bytes, bytearray, collections.abc.Mapping)
+    )
+
+
+def _unwrap_host_value(value: Any) -> Any:
+    if isinstance(value, _HostPathAdapter):
+        return value._resolve_node()
+    return value
+
+
+def _to_host_value(value: Any) -> Any:
+    value = _unwrap_host_value(value)
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, collections.abc.Mapping):
+        return {k: _to_host_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_host_value(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_host_value(v) for v in value]
+    return value
+
+
+def wrap_host_path_value(root: Any, path: list[Any], prototype_resolver) -> Any:
+    node = _resolve_host_path(root, path)
+    if isinstance(node, collections.abc.Mapping):
+        marker = node.get("__slip__")
+        if isinstance(marker, collections.abc.Mapping):
+            return HostScopePath(root, path, prototype_resolver)
+        return HostDictPath(root, path, prototype_resolver)
+    if _is_host_sequence(node):
+        return HostListPath(root, path, prototype_resolver)
+    return node
+
+
+def _resolve_host_path(root: Any, path: list[Any]) -> Any:
+    cur = root
+    for key in path:
+        cur = cur[key]
+    return cur
+
+
+class _HostPathAdapter:
+    def __init__(self, root: Any, path: list[Any], prototype_resolver):
+        self._host_root = root
+        self._host_path = list(path)
+        self._prototype_resolver = prototype_resolver
+
+    def _resolve_node(self) -> Any:
+        return _resolve_host_path(self._host_root, self._host_path)
+
+    def _wrap_child(self, key: Any) -> Any:
+        return wrap_host_path_value(
+            self._host_root,
+            [*self._host_path, key],
+            self._prototype_resolver,
+        )
+
+
+class HostDictPath(_HostPathAdapter, collections.abc.MutableMapping):
+    def __getitem__(self, key: Any) -> Any:
+        return self._wrap_child(key)
+
+    def __setitem__(self, key: Any, value: Any):
+        node = self._resolve_node()
+        node[key] = _to_host_value(value)
+
+    def __delitem__(self, key: Any):
+        node = self._resolve_node()
+        del node[key]
+
+    def __iter__(self):
+        node = self._resolve_node()
+        return iter(node)
+
+    def __len__(self) -> int:
+        node = self._resolve_node()
+        return len(node)
+
+    def __repr__(self) -> str:
+        return f"<HostDictPath path={self._host_path!r}>"
+
+
+class HostListPath(_HostPathAdapter, collections.abc.MutableSequence):
+    def __getitem__(self, index):
+        node = self._resolve_node()
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(node))
+            return [self._wrap_child(i) for i in range(start, stop, step)]
+        return self._wrap_child(index)
+
+    def __setitem__(self, index, value):
+        node = self._resolve_node()
+        if isinstance(index, slice):
+            node[index] = [_to_host_value(v) for v in value]
+            return
+        node[index] = _to_host_value(value)
+
+    def __delitem__(self, index):
+        node = self._resolve_node()
+        del node[index]
+
+    def __len__(self) -> int:
+        node = self._resolve_node()
+        return len(node)
+
+    def __iter__(self):
+        node = self._resolve_node()
+        for index in range(len(node)):
+            yield self._wrap_child(index)
+
+    def insert(self, index: int, value: Any):
+        node = self._resolve_node()
+        node.insert(index, _to_host_value(value))
+
+    def realize(self):
+        return [self[i] for i in range(len(self))]
+
+    def __repr__(self) -> str:
+        return f"<HostListPath path={self._host_path!r}>"
+
+
+class _HostBindingsMap(collections.abc.MutableMapping):
+    def __init__(self, owner: "HostScopePath"):
+        self._owner = owner
+
+    def _node(self):
+        return self._owner._resolve_node()
+
+    def __getitem__(self, key: Any) -> Any:
+        key = self._owner._normalize_key(key)
+        if key == "meta":
+            raise KeyError("'meta'")
+        node = self._node()
+        if key not in node or key == "__slip__":
+            raise KeyError(f"'{key}'")
+        return self._owner._wrap_child(key)
+
+    def __setitem__(self, key: Any, value: Any):
+        key = self._owner._normalize_key(key)
+        if key == "meta":
+            raise KeyError("'.meta' is reserved and cannot be rebound.")
+        node = self._node()
+        node[key] = _to_host_value(value)
+        self._owner._refresh_meta()
+
+    def __delitem__(self, key: Any):
+        key = self._owner._normalize_key(key)
+        if key == "meta":
+            raise KeyError("'.meta' is reserved and cannot be deleted.")
+        node = self._node()
+        if key not in node or key == "__slip__":
+            raise KeyError(f"'{key}'")
+        del node[key]
+        self._owner._refresh_meta()
+
+    def __iter__(self):
+        node = self._node()
+        return iter([k for k in node.keys() if k != "__slip__"])
+
+    def __len__(self) -> int:
+        node = self._node()
+        return sum(1 for k in node.keys() if k != "__slip__")
+
+
+class HostScopePath(Scope, _HostPathAdapter):
+    def __init__(self, root: Any, path: list[Any], prototype_resolver):
+        Scope.__init__(self)
+        _HostPathAdapter.__init__(self, root, path, prototype_resolver)
+        self.bindings = _HostBindingsMap(self)
+        self._refresh_meta()
+
+    def _refresh_meta(self):
+        node = self._resolve_node()
+        marker = (
+            node.get("__slip__") if isinstance(node, collections.abc.Mapping) else None
+        )
+        parent = None
+        if isinstance(marker, collections.abc.Mapping):
+            prototype_name = marker.get("prototype")
+            if prototype_name is not None:
+                parent = self._prototype_resolver(prototype_name)
+        self.meta["parent"] = parent
+
+    def __getitem__(self, key: Any) -> Any:
+        key = self._normalize_key(key)
+        if key == "meta":
+            self._refresh_meta()
+            return self.meta
+        owner = self.find_owner(key)
+        if owner:
+            return owner.bindings[key]
+        raise KeyError(f"'{key}'")
+
+    def __setitem__(self, key: Any, value: Any):
+        key = self._normalize_key(key)
+        if key == "meta":
+            raise KeyError("'.meta' is reserved and cannot be rebound.")
+        if isinstance(value, This) and not getattr(self, "_allow_this_token", False):
+            raise PermissionError("`this` cannot be stored")
+        self.bindings[key] = value
+
+    def __delitem__(self, key: Any):
+        del self.bindings[key]
+
+    def __contains__(self, key: Any) -> bool:
+        key = self._normalize_key(key)
+        if isinstance(key, str):
+            return self.find_owner(key) is not None
+        return False
+
+    def find_owner(self, key: str) -> Optional["Scope"]:
+        key = self._normalize_key(key)
+        if key in self.bindings:
+            return self
+        parent = self.parent
+        if parent:
+            return parent.find_owner(key)
+        return None
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            return default
+        owner = self.find_owner(key)
+        if owner:
+            return owner.bindings[key]
+        return default
+
+    @property
+    def parent(self) -> Optional["Scope"]:
+        self._refresh_meta()
+        return self.meta.get("parent")
+
+    def keys(self):
+        return self.bindings.keys()
+
+    def __getattr__(self, key: str):
+        if key == "meta":
+            self._refresh_meta()
+            return self.meta
+        owner = self.find_owner(key)
+        if owner is not None:
+            return owner.bindings[key]
+        raise AttributeError(key)
+
+    def __repr__(self) -> str:
+        return f"<HostScopePath path={self._host_path!r}>"
 
 
 class Code(SlipBlock):
@@ -202,6 +465,7 @@ class Code(SlipBlock):
     This is a wrapper around a raw AST fragment, making "code" a
     first-class data type that can be passed to functions or manipulated.
     """
+
     def __init__(self, ast_nodes: List[Any]):
         super().__init__(ast_nodes)
 
@@ -218,6 +482,7 @@ class List(SlipBlock):
     This contains unevaluated AST nodes. At evaluation time, the
     expressions are run and their results collected into a new list of values.
     """
+
     def __init__(self, ast_nodes: List[Any]):
         super().__init__(ast_nodes)
 
@@ -230,30 +495,47 @@ class List(SlipBlock):
 
 class ByteStream(SlipBlock):
     """Represents a typed byte stream literal like 'u8#[...]', carrying unevaluated AST nodes."""
+
     def __init__(self, elem_type: str, ast_nodes: List[Any]):
         super().__init__(ast_nodes)
         self.elem_type = elem_type  # e.g., 'u8', 'i16', 'f32', 'b1'
+
     def __repr__(self):
         return f"ByteStream<{self.elem_type}>({self.nodes!r})"
+
     def __eq__(self, other):
-        return isinstance(other, ByteStream) and self.elem_type == other.elem_type and self.nodes == other.nodes
+        return (
+            isinstance(other, ByteStream)
+            and self.elem_type == other.elem_type
+            and self.nodes == other.nodes
+        )
+
 
 class Sig:
-    def __init__(self, positional: List[str], keywords: Dict[str, Any], rest: Optional[str] = None, return_annotation: Optional[Any] = None, where: Optional['Code'] = None):
+    def __init__(
+        self,
+        positional: List[str],
+        keywords: Dict[str, Any],
+        rest: Optional[str] = None,
+        return_annotation: Optional[Any] = None,
+        where: Optional["Code"] = None,
+    ):
         self.positional = positional
         self.keywords = keywords
         self.rest = rest
         self.return_annotation = return_annotation
         self.where = where
+
     def __repr__(self) -> str:
         return f"Sig(pos={self.positional!r}, kw={self.keywords!r}, rest={self.rest!r}, ret={self.return_annotation!r}, where={self.where!r})"
+
     def __eq__(self, other):
         return isinstance(other, Sig) and (
-            self.positional == other.positional and
-            self.keywords == other.keywords and
-            self.rest == other.rest and
-            self.return_annotation == other.return_annotation and
-            self.where == other.where
+            self.positional == other.positional
+            and self.keywords == other.keywords
+            and self.rest == other.rest
+            and self.return_annotation == other.return_annotation
+            and self.where == other.where
         )
 
 
@@ -263,6 +545,7 @@ class IString(str):
     This is a distinct type from a raw string, signaling to the
     evaluator that it must be processed for `{{...}}` expressions.
     """
+
     def __repr__(self) -> str:
         return str(self)
 
@@ -273,7 +556,8 @@ class SlipFunction(SlipCallable):
     This is a closure, bundling the function's arguments, its code body,
     and the lexical scope in which it was defined.
     """
-    def __init__(self, args: 'Code', body: 'Code', closure: 'Scope'):
+
+    def __init__(self, args: "Code", body: "Code", closure: "Scope"):
         self.args = args
         self.body = body
         self.closure = closure
@@ -281,6 +565,7 @@ class SlipFunction(SlipCallable):
 
     def __repr__(self) -> str:
         from slip.slip_printer import Printer
+
         p = Printer()
         # A simplified repr to avoid full formatting.
         return f"fn {p.pformat(self.args)} {p.pformat(self.body)}"
@@ -297,20 +582,24 @@ class GenericFunction(SlipCallable):
         self.name = name
         self.methods: List[SlipFunction] = []
         self.meta: Dict[str, Any] = {}
+
     def add_method(self, fn: SlipFunction):
         self.methods.append(fn)
+
     def __repr__(self) -> str:
         return f"<GenericFunction name={self.name!r} methods={len(self.methods)}>"
 
 
 class Response:
     """Represents a structured outcome from a function call (`response ...`)."""
-    def __init__(self, status: 'PathLiteral', value: Any):
+
+    def __init__(self, status: "PathLiteral", value: Any):
         self.status = status
         self.value = value
 
     def __repr__(self) -> str:
         from slip.slip_printer import Printer
+
         p = Printer()
         return f"response {p.pformat(self.status)} {p.pformat(self.value)}"
 
@@ -326,6 +615,7 @@ class This:
     Wraps an underlying receiver object (usually a Scope) while remaining
     distinguishable from normal values so it can be prevented from escaping.
     """
+
     def __init__(self, receiver):
         self.receiver = receiver
 
@@ -345,12 +635,14 @@ class This:
     def __repr__(self):
         return f"<This receiver={type(self.receiver).__name__}>"
 
+
 class ReturnSignal:
     """Internal control-flow signal for SLIP `return` (early exit).
 
     This is a runtime-only control-flow marker and is NOT a Response.
     It carries a single .value payload (which may itself be a Response).
     """
+
     def __init__(self, value: Any):
         self.value = value
 
@@ -366,7 +658,8 @@ class Ref:
 
     Reading a Ref yields the current value at its target path. There is no write-through.
     """
-    def __init__(self, path: 'GetPath | PathLiteral'):
+
+    def __init__(self, path: "GetPath | PathLiteral"):
         self.path = path
 
     def __repr__(self) -> str:
@@ -384,7 +677,8 @@ class Cell:
 
     Cells are intended to be read-only/pure (no commits); enforcement can be added later.
     """
-    def __init__(self, inputs: dict[str, Any], body: 'Code', closure: 'Scope'):
+
+    def __init__(self, inputs: dict[str, Any], body: "Code", closure: "Scope"):
         self.inputs = inputs
         self.body = body
         self.closure = closure
@@ -404,7 +698,8 @@ class PipedPath(PathSegment):
     """Represents a SLIP piped-path (e.g., |map). Semantically identical
     to a GetPath but signals the evaluator to perform an implicit-pipe call
     when it appears in expression position #2."""
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
+
+    def __init__(self, segments: List[PathSegment], meta: Optional["Group"] = None):
         if not segments:
             raise ValueError("PipedPath must have at least one segment.")
         self.segments = segments
@@ -416,6 +711,7 @@ class PipedPath(PathSegment):
 
     def to_str_repr(self) -> str:
         from slip.slip_printer import Printer
+
         if self._str_repr is None:
             self._str_repr = Printer().pformat(self)
         return self._str_repr
@@ -434,7 +730,8 @@ class PipedPath(PathSegment):
 
 class MultiSetPath(PathSegment):
     """Represents the left-hand pattern `[a, b.c]:` used for destructuring assignment."""
-    def __init__(self, targets: List['SetPath']):
+
+    def __init__(self, targets: List["SetPath"]):
         if not targets:
             raise ValueError("MultiSetPath must contain at least one SetPath target.")
         self.targets = targets
@@ -454,18 +751,22 @@ class MultiSetPath(PathSegment):
 
 class GetPath:
     """Represents a SLIP get-path, an instruction to look up a value."""
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
+
+    def __init__(self, segments: List[PathSegment], meta: Optional["Group"] = None):
         if not segments:
             raise ValueError("GetPath must have at least one segment.")
         self.segments = segments
         self.meta = meta
         self._str_repr: Optional[str] = None
 
-    def __getitem__(self, key: Union[int, slice]) -> Union[PathSegment, List[PathSegment]]:
+    def __getitem__(
+        self, key: Union[int, slice]
+    ) -> Union[PathSegment, List[PathSegment]]:
         return self.segments[key]
 
     def to_str_repr(self) -> str:
         from slip.slip_printer import Printer
+
         if self._str_repr is None:
             self._str_repr = Printer().pformat(self)
         return self._str_repr
@@ -485,12 +786,14 @@ class GetPath:
 
 class PathLiteral:
     """Represents a quoted path value written with backticks. The inner may be any path-shaped object."""
-    def __init__(self, inner: 'GetPath | SetPath | DelPath | PipedPath | MultiSetPath'):
+
+    def __init__(self, inner: "GetPath | SetPath | DelPath | PipedPath | MultiSetPath"):
         self.inner = inner
         self._str_repr: Optional[str] = None
 
     def to_str_repr(self) -> str:
         from slip.slip_printer import Printer
+
         if self._str_repr is None:
             self._str_repr = Printer().pformat(self)
         return self._str_repr
@@ -507,10 +810,6 @@ class PathLiteral:
         return hash(self.to_str_repr())
 
 
-
-
-
-
 # -----------------------------------------------------------------
 # New Literal Types (deprecated in favor of PathLiteral)
 # -----------------------------------------------------------------
@@ -518,7 +817,8 @@ class PathLiteral:
 
 class DelPath:
     """Represents a SLIP del-path (~path), an instruction to delete a binding."""
-    def __init__(self, path: 'GetPath'):
+
+    def __init__(self, path: "GetPath"):
         self.path = path
 
     def __repr__(self) -> str:
@@ -538,18 +838,22 @@ class SetPath:
     """Represents a SLIP set-path, which is a sequence of segments ending with a colon.
     This is the data type representation for an assignment target.
     """
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
+
+    def __init__(self, segments: List[PathSegment], meta: Optional["Group"] = None):
         if not segments:
             raise ValueError("SetPath must have at least one segment.")
         self.segments = segments
         self.meta = meta
         self._str_repr: Optional[str] = None
 
-    def __getitem__(self, key: Union[int, slice]) -> Union[PathSegment, List[PathSegment]]:
+    def __getitem__(
+        self, key: Union[int, slice]
+    ) -> Union[PathSegment, List[PathSegment]]:
         return self.segments[key]
 
     def to_str_repr(self) -> str:
         from slip.slip_printer import Printer
+
         if self._str_repr is None:
             self._str_repr = Printer().pformat(self)
         return self._str_repr
@@ -569,18 +873,22 @@ class SetPath:
 
 class PostPath:
     """Represents a SLIP post-path, e.g., 'url<-', used as the head of a POST expression."""
-    def __init__(self, segments: List[PathSegment], meta: Optional['Group'] = None):
+
+    def __init__(self, segments: List[PathSegment], meta: Optional["Group"] = None):
         if not segments:
             raise ValueError("PostPath must have at least one segment.")
         self.segments = segments
         self.meta = meta
         self._str_repr: Optional[str] = None
 
-    def __getitem__(self, key: Union[int, slice]) -> Union[PathSegment, List[PathSegment]]:
+    def __getitem__(
+        self, key: Union[int, slice]
+    ) -> Union[PathSegment, List[PathSegment]]:
         return self.segments[key]
 
     def to_str_repr(self) -> str:
         from slip.slip_printer import Printer
+
         if self._str_repr is None:
             self._str_repr = Printer().pformat(self)
         return self._str_repr
@@ -589,7 +897,8 @@ class PostPath:
         return f"<PostPath segments={self.segments!r} meta={self.meta!r}>"
 
     def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, PostPath): return NotImplemented
+        if not isinstance(other, PostPath):
+            return NotImplemented
         return self.to_str_repr() == other.to_str_repr()
 
     def __hash__(self) -> int:
@@ -600,8 +909,10 @@ class PostPath:
 # Path and Segment Types
 # =================================================================
 
+
 class Name(PathSegment):
     """A name segment in a path, e.g., 'user' in `user.name`."""
+
     def __init__(self, text: str):
         self.text = text
 
@@ -619,6 +930,7 @@ class Name(PathSegment):
 
 class Index(PathSegment):
     """An index segment in a path, e.g., `[0]`."""
+
     def __init__(self, expr_ast: List[Any]):
         self.expr_ast = expr_ast
 
@@ -631,6 +943,7 @@ class Index(PathSegment):
 
 class Slice(PathSegment):
     """A slice segment in a path, e.g., `[1:5]`."""
+
     def __init__(self, start_ast: Optional[List[Any]], end_ast: Optional[List[Any]]):
         self.start_ast = start_ast
         self.end_ast = end_ast
@@ -639,12 +952,22 @@ class Slice(PathSegment):
         return f"Slice(start={self.start_ast!r}, end={self.end_ast!r})"
 
     def __eq__(self, other):
-        return isinstance(other, Slice) and self.start_ast == other.start_ast and self.end_ast == other.end_ast
+        return (
+            isinstance(other, Slice)
+            and self.start_ast == other.start_ast
+            and self.end_ast == other.end_ast
+        )
 
 
 class FilterQuery(PathSegment):
     """A filter query segment in a path, e.g., `[> 10]` or `[|dist < 10]` or `[* 10 - 20 > 5]`."""
-    def __init__(self, operator: Optional[str], rhs_ast: Optional[List[Any]], predicate_ast: Optional[List[Any]] = None):
+
+    def __init__(
+        self,
+        operator: Optional[str],
+        rhs_ast: Optional[List[Any]],
+        predicate_ast: Optional[List[Any]] = None,
+    ):
         self.operator = operator
         self.rhs_ast = rhs_ast
         self.predicate_ast = predicate_ast
@@ -656,10 +979,10 @@ class FilterQuery(PathSegment):
 
     def __eq__(self, other):
         return (
-            isinstance(other, FilterQuery) and
-            self.operator == other.operator and
-            self.rhs_ast == other.rhs_ast and
-            self.predicate_ast == other.predicate_ast
+            isinstance(other, FilterQuery)
+            and self.operator == other.operator
+            and self.rhs_ast == other.rhs_ast
+            and self.predicate_ast == other.predicate_ast
         )
 
 
@@ -668,6 +991,7 @@ class Group(SlipBlock, PathSegment):
     A dynamic group segment in a path, e.g., `(get-key)`.
     Also represents a group AST node that can be manipulated.
     """
+
     def __init__(self, ast_nodes: List[Any]):
         super().__init__(ast_nodes)
 
@@ -680,15 +1004,16 @@ class Group(SlipBlock, PathSegment):
 
 class _SingletonSegment(PathSegment):
     """Internal helper class for creating stateless singleton path segments."""
+
     def __init__(self, name):
         self._name = name
+
     def __repr__(self):
         return f"{self._name.capitalize()}<>"
+
 
 # Singleton instances for stateless path segments
 Root = _SingletonSegment("root")
 Parent = _SingletonSegment("parent")
 Pwd = _SingletonSegment("pwd")
 IdentityBoundary = _SingletonSegment("identity")
-
-

@@ -4,22 +4,23 @@ import re
 from typing import Any, Optional
 import collections.abc
 
-import json # JSON
-import safer_yaml as yaml # YAML 1.2
-import toml # TOML
-import xmltodict # XML and HTML
+import json  # JSON
+import safer_yaml as yaml  # YAML 1.2
+import toml  # TOML
+import xmltodict  # XML and HTML
 
 # --------------------------
 # Helpers
 # --------------------------
 
+
 def _norm_text(data: bytes | bytearray | str, *, encoding: Optional[str] = None) -> str:
     if isinstance(data, (bytes, bytearray)):
-        enc = encoding or 'utf-8'
+        enc = encoding or "utf-8"
         try:
-            return data.decode(enc, errors='replace')
+            return data.decode(enc, errors="replace")
         except Exception:
-            return data.decode('utf-8', errors='replace')
+            return data.decode("utf-8", errors="replace")
     if isinstance(data, str):
         return data
     return str(data)
@@ -28,7 +29,7 @@ def _norm_text(data: bytes | bytearray | str, *, encoding: Optional[str] = None)
 def _encoding_from_content_type(content_type: Optional[str]) -> Optional[str]:
     if not content_type:
         return None
-    m = re.search(r'charset\s*=\s*([^\s;]+)', content_type, re.IGNORECASE)
+    m = re.search(r"charset\s*=\s*([^\s;]+)", content_type, re.IGNORECASE)
     if m:
         return m.group(1).strip('"').strip("'")
     return None
@@ -41,6 +42,9 @@ def _to_builtin(obj: Any) -> Any:
             obj = obj.realize()
     except Exception:
         pass
+    # Normalize string subclasses (e.g. IString) to plain Python strings.
+    if isinstance(obj, str):
+        return str(obj)
     # Convert mapping-like OrderedDicts from xmltodict to plain dicts recursively
     if isinstance(obj, list):
         return [_to_builtin(x) for x in obj]
@@ -50,29 +54,31 @@ def _to_builtin(obj: Any) -> Any:
     return obj
 
 
-def detect_format(content_type: Optional[str] = None, data_hint: Optional[str] = None) -> Optional[str]:
+def detect_format(
+    content_type: Optional[str] = None, data_hint: Optional[str] = None
+) -> Optional[str]:
     """
     Returns a canonical format name among: 'json', 'yaml', 'toml', 'xml'.
     Uses Content-Type first; falls back to simple data sniffing if provided.
     """
     ct = (content_type or "").lower()
-    if 'json' in ct:
-        return 'json'
-    if 'yaml' in ct or 'x-yaml' in ct:
-        return 'yaml'
-    if 'toml' in ct:
-        return 'toml'
-    if 'xml' in ct or 'html' in ct or 'xhtml' in ct:
-        return 'xml'
+    if "json" in ct:
+        return "json"
+    if "yaml" in ct or "x-yaml" in ct:
+        return "yaml"
+    if "toml" in ct:
+        return "toml"
+    if "xml" in ct or "html" in ct or "xhtml" in ct:
+        return "xml"
 
     # Heuristics based on data
     if data_hint is not None:
         s = data_hint.lstrip()
-        if s.startswith('{') or s.startswith('['):
+        if s.startswith("{") or s.startswith("["):
             # Try JSON first; if it fails, YAML is a superset
-            return 'json'
-        if s.startswith('<'):
-            return 'xml'
+            return "json"
+        if s.startswith("<"):
+            return "xml"
         # TOML heuristic is weak; caller should pass content_type when possible.
     return None
 
@@ -81,10 +87,13 @@ def detect_format(content_type: Optional[str] = None, data_hint: Optional[str] =
 # Public API
 # --------------------------
 
-def deserialize(data: bytes | bytearray | str,
-                *,
-                content_type: Optional[str] = None,
-                fmt: Optional[str] = None) -> Any:
+
+def deserialize(
+    data: bytes | bytearray | str,
+    *,
+    content_type: Optional[str] = None,
+    fmt: Optional[str] = None,
+) -> Any:
     """
     Convert wire data (bytes/string) to native Python/SLIP structures.
     Supported fmt: 'json', 'yaml', 'toml', 'xml'.
@@ -93,8 +102,8 @@ def deserialize(data: bytes | bytearray | str,
     """
     enc = _encoding_from_content_type(content_type)
     text = _norm_text(data, encoding=enc)
-    f = (fmt or detect_format(content_type, text))
-    if f == 'json':
+    f = fmt or detect_format(content_type, text)
+    if f == "json":
         try:
             return json.loads(text)
         except Exception:
@@ -104,19 +113,19 @@ def deserialize(data: bytes | bytearray | str,
                 return y
             except Exception:
                 return text
-    if f == 'yaml':
+    if f == "yaml":
         try:
             return yaml.loads(text)
         except Exception:
             return text
-    if f == 'toml':
+    if f == "toml":
         if toml is None:
             raise RuntimeError("TOML support requires the 'toml' package")
         try:
             return toml.loads(text)  # type: ignore[union-attr]
         except Exception:
             return text
-    if f == 'xml':
+    if f == "xml":
         if xmltodict is None:
             raise RuntimeError("XML/HTML support requires the 'xmltodict' package")
         try:
@@ -129,27 +138,25 @@ def deserialize(data: bytes | bytearray | str,
     return text
 
 
-def serialize(value: Any,
-              *,
-              fmt: str,
-              pretty: bool = True,
-              xml_root: str = "root") -> str:
+def serialize(
+    value: Any, *, fmt: str, pretty: bool = True, xml_root: str = "root"
+) -> str:
     """
     Convert a native Python/SLIP value into a textual representation.
     - fmt: 'json' | 'yaml' | 'toml' | 'xml'
     - For XML, if value is not a dict, it will be wrapped under {xml_root: value}
     """
-    f = (fmt or '').lower()
+    f = (fmt or "").lower()
     built = _to_builtin(value)
-    if f == 'json':
+    if f == "json":
         return json.dumps(built, ensure_ascii=False, indent=2 if pretty else None)
-    if f == 'yaml':
+    if f == "yaml":
         return yaml.dumps(built)
-    if f == 'toml':
+    if f == "toml":
         if toml is None:
             raise RuntimeError("TOML serialization requires the 'toml' package")
         return toml.dumps(built)  # type: ignore[union-attr]
-    if f == 'xml':
+    if f == "xml":
         if xmltodict is None:
             raise RuntimeError("XML serialization requires the 'xmltodict' package")
         root: dict

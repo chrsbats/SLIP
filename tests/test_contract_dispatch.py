@@ -135,6 +135,78 @@ async def test_dispatch_typed_beats_untyped_fallback():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_preserves_mixed_sig_order():
+    """
+    A typed parameter before untyped parameters must dispatch against the same
+    argument position it occupies in source, including recursive generic calls.
+    """
+    registry = {
+        "item-1": {
+            "__slip__": {"type": "scope", "prototype": "Item"},
+            "name": "Brass Key",
+        }
+    }
+    runner = ScriptRunner(host_data=lambda object_id: registry.get(object_id))
+
+    src = """
+    Item: scope #{}
+
+    take: fn {obj: Item, actor-id, original-text} [
+        #[ "typed", obj.name, actor-id, original-text ]
+    ]
+
+    take: fn {object-id, actor-id, original-text |where \
+            (type-of object-id) = `string`} [
+        take (host-object object-id) actor-id original-text
+    ]
+
+    #[
+      take (host-object 'item-1') 'actor-1' 'take key',
+      take 'item-1' 'actor-1' 'take key'
+    ]
+    """
+    res = await runner.handle_script(src)
+
+    assert res.status == "ok", (
+        f"ERROR: {res.error_message}\nEFFECTS: {res.side_effects}"
+    )
+    expected = ["typed", "Brass Key", "actor-1", "take key"]
+    assert res.value == [expected, expected]
+
+
+@pytest.mark.asyncio
+async def test_guarded_same_generic_wrapper_dispatches_to_typed_host_object():
+    registry = {
+        "item-1": {
+            "__slip__": {"type": "scope", "prototype": "Item"},
+            "id": "item-1",
+        }
+    }
+    runner = ScriptRunner(host_data=lambda object_id: registry.get(object_id))
+
+    src = """
+    Item: scope #{}
+
+    describe: fn {obj: Item, actor-id, original-text} [
+        response ok "typed"
+    ]
+
+    describe: fn {object-id, actor-id, original-text |where \
+            (type-of object-id) = `string`} [
+        describe (host-object object-id) actor-id original-text
+    ]
+
+    describe 'item-1' 'actor-1' 'test'
+    """
+    res = await runner.handle_script(src)
+
+    assert res.status == "ok", (
+        f"ERROR: {res.error_message}\nEFFECTS: {res.side_effects}"
+    )
+    assert res.value == {"status": "ok", "value": "typed"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_typed_last_defined_wins_same_type():
     """
     When multiple typed methods match, last-defined wins.
@@ -286,5 +358,24 @@ async def test_dispatch_no_match_raises_error():
     res = await run(src)
     assert res.status == "err"
     assert "No matching method" in (res.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_no_match_reports_args_and_candidates():
+    src = """
+    choose: fn {x: `int`} [ "int" ]
+    choose: fn {x |where x = `fire`} [ "fire" ]
+
+    choose `ice`
+    """
+    res = await run(src)
+
+    assert res.status == "err"
+    message = res.error_message or ""
+    assert "No matching method" in message
+    assert "args: (path)" in message
+    assert "candidates:" in message
+    assert "{x: `int`}: type constraints did not match" in message
+    assert "{x}: guard did not pass" in message
 
 

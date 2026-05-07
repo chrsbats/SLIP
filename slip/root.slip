@@ -68,6 +68,32 @@ replace: fn {s: `string`, old: `string`, new: `string`} [
   str-replace s old new
 ]
 
+-- --- Serialization Utilities ---
+
+to: fn {format, data |where (format = `json`) or (format = 'json')} [
+  core-serialize-value format data
+]
+
+to: fn {format, data |where (format = `yaml`) or (format = 'yaml')} [
+  core-serialize-value format data
+]
+
+to: fn {format, data |where (format = `toml`) or (format = 'toml')} [
+  core-serialize-value format data
+]
+
+from: fn {format, data |where (format = `json`) or (format = 'json')} [
+  core-deserialize-value format data
+]
+
+from: fn {format, data |where (format = `yaml`) or (format = 'yaml')} [
+  core-deserialize-value format data
+]
+
+from: fn {format, data |where (format = `toml`) or (format = 'toml')} [
+  core-deserialize-value format data
+]
+
 -- Unions: ordered sequence-like and mapping-like
 ordered: { code or list or dict or scope }
 mapping: { dict or scope }
@@ -240,6 +266,13 @@ optional: fn {type} [
 has-key?: fn {m: `mapping`, key} [
   probe: do [ m[key] ]
   if [probe.outcome.status = ok] [ true ] [ false ]
+]
+
+update: fn {target: `mapping`, patch: `mapping`} [
+  foreach {k, v} (items patch) [
+    target[k]: v
+  ]
+  return target
 ]
 
 is-default-marker?: fn {x} [

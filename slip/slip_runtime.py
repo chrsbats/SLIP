@@ -234,11 +234,10 @@ class StdLib:
                 # If we're already inside a running event loop, we defer and rely on the
                 # evaluator's own lazy loader to complete before evaluation.
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        return
-                except Exception:
-                    loop = None
+                    asyncio.get_running_loop()
+                    return
+                except RuntimeError:
+                    pass
 
                 try:
                     asyncio.run(evaluator._ensure_core_loaded())
@@ -299,6 +298,24 @@ class StdLib:
 
     def _not(self, x):
         return not x
+
+    def _abs(self, x):
+        return abs(x)
+
+    def _floor(self, x):
+        return math.floor(x)
+
+    def _ceil(self, x):
+        return math.ceil(x)
+
+    def _trunc(self, x):
+        return math.trunc(x)
+
+    def _round(self, x, ndigits=None):
+        return round(x) if ndigits is None else round(x, ndigits)
+
+    def _sqrt(self, x):
+        return math.sqrt(x)
 
     def _exp(self, x):
         return math.exp(x)
@@ -1001,15 +1018,9 @@ class StdLib:
                             pass
 
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.call_soon(asyncio.create_task, _watcher(t))
-                    else:
-                        # Fallback: attach done-callback if loop not running
-                        t.add_done_callback(
-                            lambda _t: host.active_slip_tasks.discard(_t)
-                        )
-                except Exception:
+                    loop = asyncio.get_running_loop()
+                    loop.call_soon(asyncio.create_task, _watcher(t))
+                except RuntimeError:
                     t.add_done_callback(lambda _t: host.active_slip_tasks.discard(_t))
         except Exception:
             # Registration is best-effort; continue even if unavailable
@@ -1031,7 +1042,66 @@ class StdLib:
         topics = (
             topic_or_topics if isinstance(topic_or_topics, list) else [topic_or_topics]
         )
-        message = " ".join(map(str, message_parts))
+
+        def _normalize_format_name(value):
+            if hasattr(value, "to_str_repr"):
+                value = value.to_str_repr()
+            else:
+                value = str(value)
+            if (
+                isinstance(value, str)
+                and len(value) >= 2
+                and value[0] == "`"
+                and value[-1] == "`"
+            ):
+                value = value[1:-1]
+            return value.lower() if isinstance(value, str) else str(value).lower()
+
+        def _normalize_message(value):
+            from slip.slip_datatypes import PathLiteral, Response, Scope
+
+            try:
+                if hasattr(value, "realize") and callable(getattr(value, "realize")):
+                    value = value.realize()
+            except Exception:
+                pass
+
+            if isinstance(value, Response):
+                return {
+                    "status": _normalize_message(value.status),
+                    "value": _normalize_message(value.value),
+                }
+            if isinstance(value, PathLiteral):
+                try:
+                    return value.to_str_repr()
+                except Exception:
+                    return str(value)
+            if isinstance(value, SlipDict):
+                return {str(k): _normalize_message(v) for k, v in value.items()}
+            if isinstance(value, Scope):
+                return {
+                    str(k): _normalize_message(v)
+                    for k, v in value.bindings.items()
+                }
+            if isinstance(value, dict):
+                return {str(k): _normalize_message(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_normalize_message(v) for v in value]
+            if isinstance(value, tuple):
+                return tuple(_normalize_message(v) for v in value)
+            return value
+
+        if len(message_parts) == 2:
+            fmt_name = _normalize_format_name(message_parts[0])
+            if fmt_name in {"json", "yaml", "toml", "xml"}:
+                message = self._serialize_value(fmt_name, message_parts[1])
+            else:
+                message = " ".join(map(str, message_parts))
+        elif len(message_parts) == 1:
+            message = _normalize_message(message_parts[0])
+        else:
+            message = " ".join(map(str, message_parts))
+
         event = {"topics": topics, "message": message}
         if self.evaluator:
             self.evaluator.side_effects.append(event)
@@ -1645,6 +1715,28 @@ class StdLib:
                 return value.decode("utf-8", errors="replace")
         return str(value)
 
+    def _serialize_value(self, fmt, value):
+        from slip.slip_serialize import serialize as _serialize
+
+        if hasattr(fmt, "to_str_repr"):
+            fmt = fmt.to_str_repr()
+        else:
+            fmt = str(fmt)
+        if isinstance(fmt, str) and len(fmt) >= 2 and fmt[0] == "`" and fmt[-1] == "`":
+            fmt = fmt[1:-1]
+        return _serialize(value, fmt=fmt, pretty=True)
+
+    def _deserialize_value(self, fmt, data):
+        from slip.slip_serialize import deserialize as _deserialize
+
+        if hasattr(fmt, "to_str_repr"):
+            fmt = fmt.to_str_repr()
+        else:
+            fmt = str(fmt)
+        if isinstance(fmt, str) and len(fmt) >= 2 and fmt[0] == "`" and fmt[-1] == "`":
+            fmt = fmt[1:-1]
+        return _deserialize(data, fmt=fmt)
+
     def _to_int(self, value):
         try:
             return int(value)
@@ -1693,6 +1785,44 @@ class StdLib:
                 return (type(node).__name__, uid)
             return id(node)
 
+        async def _resolve_prototype(prototype_name):
+            try:
+                proto_path = self._to_getpath(prototype_name)
+                prototype = await self.evaluator.path_resolver.get(proto_path, scope)
+                if not isinstance(prototype, Scope):
+                    raise TypeError(f"{source}: prototype must resolve to a scope")
+                return prototype
+            except PathNotFound:
+                registry = getattr(self.evaluator, "hydration_prototypes", None)
+                if registry is None:
+                    registry = {}
+                    self.evaluator.hydration_prototypes = registry
+                if prototype_name in registry:
+                    return registry[prototype_name]
+
+                from slip.slip_interpreter import TYPE_REGISTRY, _next_type_id
+                import slip.slip_interpreter as _interp
+
+                proto = Scope()
+                proto.meta["name"] = prototype_name
+                proto.meta["type_id"] = _next_type_id
+                proto.meta["type-id"] = _next_type_id
+                proto.meta["generated"] = True
+                proto.meta["generated-from"] = "hydration"
+                TYPE_REGISTRY[prototype_name] = _next_type_id
+                _interp._next_type_id = _next_type_id + 1
+                registry[prototype_name] = proto
+                try:
+                    root_scope = getattr(self.evaluator, "root_scope", None)
+                    if (
+                        isinstance(root_scope, Scope)
+                        and prototype_name not in root_scope
+                    ):
+                        root_scope[prototype_name] = proto
+                except Exception:
+                    pass
+                return proto
+
         async def _rehydrate(node):
             if isinstance(node, collections.abc.Sequence) and not isinstance(
                 node, (str, bytes, bytearray, collections.abc.Mapping)
@@ -1731,15 +1861,7 @@ class StdLib:
             memo[node_key] = out
             prototype_name = marker.get("prototype")
             if prototype_name is not None:
-                try:
-                    proto_path = self._to_getpath(prototype_name)
-                    prototype = await self.evaluator.path_resolver.get(
-                        proto_path, scope
-                    )
-                except Exception as e:
-                    raise PathNotFound(f"{source} prototype: {prototype_name}") from e
-                if not isinstance(prototype, Scope):
-                    raise TypeError(f"{source}: prototype must resolve to a scope")
+                prototype = await _resolve_prototype(prototype_name)
                 out.inherit(prototype)
 
             for k, v in node.items():
@@ -1768,23 +1890,52 @@ class StdLib:
             return await value
         return value
 
+    def _resolve_host_prototype(self, prototype_name):
+        root_scope = getattr(self.evaluator, "root_scope", None)
+        if isinstance(root_scope, Scope):
+            try:
+                prototype = root_scope[prototype_name]
+                if isinstance(prototype, Scope):
+                    return prototype
+            except Exception:
+                pass
+
+        registry = getattr(self.evaluator, "hydration_prototypes", None)
+        if registry is None:
+            registry = {}
+            self.evaluator.hydration_prototypes = registry
+        if prototype_name in registry:
+            return registry[prototype_name]
+
+        from slip.slip_interpreter import TYPE_REGISTRY, _next_type_id
+        import slip.slip_interpreter as _interp
+
+        proto = Scope()
+        proto.meta["name"] = prototype_name
+        proto.meta["type_id"] = _next_type_id
+        proto.meta["type-id"] = _next_type_id
+        proto.meta["generated"] = True
+        proto.meta["generated-from"] = "host-object"
+        TYPE_REGISTRY[prototype_name] = _next_type_id
+        _interp._next_type_id = _next_type_id + 1
+        registry[prototype_name] = proto
+        try:
+            if isinstance(root_scope, Scope) and prototype_name not in root_scope:
+                root_scope[prototype_name] = proto
+        except Exception:
+            pass
+        return proto
+
     async def _host_object(self, object_id, *, scope: Scope):
-        cache = getattr(self.evaluator, "host_object_cache", None)
-        if cache is None:
-            cache = {}
-            self.evaluator.host_object_cache = cache
-        if object_id in cache:
-            return cache[object_id]
+        from slip.slip_datatypes import _HostPathAdapter
+
+        if isinstance(object_id, _HostPathAdapter):
+            return object_id
+
         raw = await self._host_data(object_id, scope=scope)
-        rehydrate_cache = getattr(self.evaluator, "host_rehydrate_cache", None)
-        if rehydrate_cache is None:
-            rehydrate_cache = {}
-            self.evaluator.host_rehydrate_cache = rehydrate_cache
-        value = await self._rehydrate_slip_value(
-            raw, scope=scope, source="host-object", memo=rehydrate_cache
-        )
-        cache[object_id] = value
-        return value
+        from slip.slip_datatypes import wrap_host_path_value
+
+        return wrap_host_path_value(raw, [], self._resolve_host_prototype)
 
     def _type_of(self, value):
         from slip.slip_datatypes import (
@@ -1835,7 +1986,7 @@ class StdLib:
             value, (str, bytes, bytearray, collections.abc.Mapping)
         ):
             return lit("list")
-        if isinstance(value, (dict, SlipDict)):
+        if isinstance(value, (dict, SlipDict, collections.abc.Mapping)):
             return lit("dict")
         if isinstance(value, Scope):
             try:
@@ -2371,7 +2522,8 @@ class ScriptRunner:
                 msg = f"SyntaxError: {str(e)}"
             case PathNotFound() as pn:
                 msg = f"PathNotFound: {pn.key}"
-            case KeyError(inner):
+            case KeyError() as ke:
+                inner = ke.args[0] if ke.args else ""
                 if isinstance(inner, str):
                     stripped = inner
                     if len(stripped) >= 2 and (
@@ -2634,8 +2786,6 @@ class ScriptRunner:
         if host_object:
             self.evaluator.host_object = host_object
         self.evaluator.host_data_loader = host_data
-        self.evaluator.host_object_cache = {}
-        self.evaluator.host_rehydrate_cache = {}
 
         # Load stdlib
         stdlib = StdLib(self.evaluator)
@@ -2758,8 +2908,6 @@ class ScriptRunner:
             # Ensure evaluator has the current host for task registration each run
             self.evaluator.host_object = self.host_object
             self.evaluator.host_data_loader = self.host_data
-            self.evaluator.host_object_cache = {}
-            self.evaluator.host_rehydrate_cache = {}
             # Make source_dir available for file:// resolution; default to CWD when unknown
             import os as _os
 
@@ -2873,25 +3021,25 @@ class ScriptRunner:
                     elif host is not None and hasattr(host, "active_slip_tasks"):
                         host.active_slip_tasks.add(result)
                         try:
-                            loop = asyncio.get_event_loop()
-                        except Exception:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
                             loop = None
 
-                        def _done_cb_host(_t: asyncio.Task):
+                    def _done_cb_host(_t: asyncio.Task):
+                        try:
+                            if loop is not None and loop.is_running():
+                                loop.call_soon_threadsafe(
+                                    host.active_slip_tasks.discard, _t
+                                )
+                            else:
+                                host.active_slip_tasks.discard(_t)
+                        except Exception:
                             try:
-                                if loop is not None and loop.is_running():
-                                    loop.call_soon_threadsafe(
-                                        host.active_slip_tasks.discard, _t
-                                    )
-                                else:
-                                    host.active_slip_tasks.discard(_t)
+                                host.active_slip_tasks.discard(_t)
                             except Exception:
-                                try:
-                                    host.active_slip_tasks.discard(_t)
-                                except Exception:
-                                    pass
+                                pass
 
-                        result.add_done_callback(_done_cb_host)
+                    result.add_done_callback(_done_cb_host)
             except Exception:
                 pass
 

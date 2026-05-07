@@ -242,6 +242,7 @@ class SlipTransformer:
 
                 positional: list[str] = []
                 keywords: dict[str, object] = {}
+                param_order: list[tuple[str, object | None]] = []
                 rest: str | None = None
                 return_annotation = None
                 where_block = None
@@ -275,7 +276,9 @@ class SlipTransformer:
 
                         where_block = self._attach_loc(Code(transformed), ch)
                     elif ctag == 'sig-arg':
-                        positional.append(self._extract_sig_name(ch))
+                        name = self._extract_sig_name(ch)
+                        positional.append(name)
+                        param_order.append((name, None))
                     elif ctag == 'sig-kwarg':
                         c = ch['children']
 
@@ -297,7 +300,9 @@ class SlipTransformer:
                         if key is None:
                             raise ValueError("sig-kwarg missing key")
 
-                        keywords[key] = self._transform_sig_value(val_node)
+                        value = self._transform_sig_value(val_node)
+                        keywords[key] = value
+                        param_order.append((key, value))
                     elif ctag == 'sig-rest-arg':
                         rest = self._extract_sig_name(ch)
                     elif ctag == 'sig-return':
@@ -306,6 +311,7 @@ class SlipTransformer:
                             return_annotation = self._transform_sig_value(val_children[0])
 
                 sig = Sig(positional, keywords, rest, return_annotation, where_block)
+                sig.param_order = param_order
 
                 # Enforce `this: ...` must be the first declared parameter.
                 #

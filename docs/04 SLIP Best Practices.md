@@ -93,6 +93,10 @@ apply-damage: fn {this: Combat, target-id, amount, kind |where kind = 'fire'} [
 ]
 ```
 
+For host-backed verbs, keep the call shape natural. Actor-first signatures are fine, and typed parameters can appear after untyped parameters.
+
+For id wrappers, prefer raw strings (`'item-1'`) when you want `` `string` `` dispatch or guards; double-quoted strings are `` `i-string` `` values.
+
 Bad use is when the reader has to reverse-engineer which of ten overlapping methods will run before they can understand the rule.
 
 ## Use `ref` And `cell` For Observation

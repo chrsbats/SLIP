@@ -618,20 +618,20 @@ wheels = [
 
 [[package]]
 name = "safer-yaml"
-version = "0.1"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
     { name = "yamlcore" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/d6/e600130ff2780bb8800d09ee0b2d09e951d247144b02105a3e0cb4b191ea/safer_yaml-0.1.tar.gz", hash = "sha256:dace44e5e585a0de29fec0968c9596dc80d922c0101e846a21793f826d395439", size = 6107, upload-time = "2025-09-03T05:10:06.308Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/c8/b67cc437c270f0ea44bb5e6564d071028f594dbb2e0748ede34a061cd577/safer_yaml-0.1.1.tar.gz", hash = "sha256:bd930bf908a6ed65477427ea49a2598654ed57044e78961675ef9302481f8222", size = 6411, upload-time = "2025-09-10T06:15:10.468Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/a4/f76ee8f73bcc7abe2e4b34bad5bb508f20c4fe1b1a3e3d12ccbd96116000/safer_yaml-0.1-py3-none-any.whl", hash = "sha256:ef278359d0de5d8baeabcde8d736a4d74d5182d30c2f0d4440f82916587b2fd1", size = 4868, upload-time = "2025-09-03T05:10:04.973Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/4a/0f7e1f6f199894be48962319288948c15be5630e2adc1bb419946b66d95d/safer_yaml-0.1.1-py3-none-any.whl", hash = "sha256:6e7934d1204283695ca1e74f9d59c52898648792af49cebe609cd7e6c3bf28d7", size = 4556, upload-time = "2025-09-10T06:15:09.284Z" },
 ]
 
 [[package]]
 name = "slip"
-version = "0.1"
+version = "0.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -667,7 +667,7 @@ requires-dist = [
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14.0" },
-    { name = "safer-yaml", specifier = "==0.1" },
+    { name = "safer-yaml", specifier = "==0.1.1" },
     { name = "toml", specifier = ">=0.10.2" },
     { name = "xmltodict", specifier = "==0.14.2" },
 ]

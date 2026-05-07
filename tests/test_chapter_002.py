@@ -211,6 +211,36 @@ async def test_i_string_nested_lookup_into_dict():
     res = await run_slip(src)
     assert_ok(res, "User: Kael (HP 100)")
 
+
+@pytest.mark.asyncio
+async def test_i_string_interpolates_function_call_expression():
+    src = """
+    display-name: fn {obj} [ obj.name ]
+    obj: #{ name: 'brass key' }
+
+    "You take {{display-name obj}}."
+    """
+    res = await run_slip(src)
+    assert_ok(res, "You take brass key.")
+
+
+@pytest.mark.asyncio
+async def test_i_string_interpolates_grouped_expression():
+    src = """
+    x: 2
+    "total {{(x + 3)}}"
+    """
+    res = await run_slip(src)
+    assert_ok(res, "total 5")
+
+
+@pytest.mark.asyncio
+async def test_i_string_missing_interpolation_name_errors():
+    src = '"Hello, {{missing-name}}!"'
+    res = await run_slip(src)
+    assert res.status == "err"
+    assert "missing-name" in (res.error_message or "")
+
 @pytest.mark.asyncio
 async def test_i_string_auto_dedent_multiline():
     src = """
