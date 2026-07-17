@@ -8,10 +8,18 @@ It achieves this by revisiting a few core assumptions of language design, result
 
 ### Dive Deeper
 
-This README provides a high-level overview. To truly understand the project, choose your path:
+This README provides a high-level overview. To truly understand the language, read the docs in order:
 
-- **[Start with Part 1 »](<docs/01 SLIP Scripting.md>)** — Learn just enough SLIP to be productive quickly.
-- **[Read the Design Philosophy »](<docs/Appendix C - Design Philosophy.md>)** — Understand the "why" behind SLIP's design after you know the basics.
+- **[01 SLIP Scripting](<docs/01 SLIP Scripting.md>)** — Learn just enough SLIP to be productive quickly.
+- **[02 SLIP Programs](<docs/02 SLIP Programs.md>)** — Learn code organization, dispatch, testing, schemas, and program structure.
+- **[03 SLIP Advanced](<docs/03 SLIP Advanced.md>)** — Learn metaprogramming, host integration, background work, and explicit rehydration.
+- **[Appendix A - StdLib Reference](<docs/Appendix A - StdLib Reference.md>)** — Check the current standard library surface.
+- **[Appendix B - SLIP Style Guide](<docs/Appendix B - SLIP Style Guide.md>)** — Follow the canonical formatting and idioms.
+- **[Appendix C - Design Philosophy](<docs/Appendix C - Design Philosophy.md>)** — Understand the "why" behind SLIP's design.
+- **[04 SLIP Best Practices](<docs/04 SLIP Best Practices.md>)** — Optional guidance for writing clear, maintainable, moddable SLIP.
+
+Then use the README paths as needed:
+
 - **[See the Core Ideas Below »](#the-core-ideas)** — Continue reading for a quick, scannable summary of the key features.
 - **[Get Started Immediately »](#getting-started)** — Jump to the instructions to clone the repo and run your first script.
 
@@ -26,13 +34,13 @@ Imagine you want to apply a "poison" effect, but stone golems in your world are 
 -- This is the general rule for applying poison to any character.
 handle-effect: fn {target: Character, effect: `poison`} [
     target.hp: target.hp - 5
-    emit "log" "{target.name} takes 5 poison damage."
+    emit "log" "{{target.name}} takes 5 poison damage."
 ]
 
 -- This is a more specific rule that runs ONLY for Golems.
 -- SLIP automatically chooses the most specific rule to run.
 handle-effect: fn {target: Golem, effect: `poison`} [
-    emit "log" "The Golem is immune to poison!"
+    emit "log" "The {{target.name}} is immune to poison!"
 ]
 
 -- Now, simulate the world using these rules.
@@ -94,7 +102,7 @@ In most languages, words like `for` or `if` are special keywords baked into the 
 ```slip
 -- 'for' is just a function that takes a code block as an argument
 for {i} 0 5 [
-    print "The number is {i}"
+    print "The number is {{i}}"
 ]
 ```
 
@@ -116,7 +124,7 @@ SLIP's simplicity is the result of a deep architectural choice: it revisits thre
 
 2.  **Paths, Not Symbols:** The `path` is the language's true primitive for identity and location. A "symbol" is just a path with one segment. This unifies variable lookup, member access, and data queries into a single, powerful mechanism.
 
-3.  **Functions, Not Keywords:** With the exception of assignment (`:`), all control flow is handled by regular functions operating on first-class `code` objects. This makes the language's core grammar radically simple and user-extensible by default.
+3.  **Functions, Not Keywords:** With the exception of assignment (`:`) and short-circuiting `and`/`or`, control flow is handled by regular functions operating on first-class `code` objects. This makes the language's core grammar radically simple and user-extensible by default.
 
 To read the full argument for this design, see **[Appendix C - Design Philosophy](<docs/Appendix C - Design Philosophy.md>)**.
 
@@ -136,6 +144,7 @@ This project is a **stable alpha**. The Python implementation is the active refe
 
 - Python 3.10+
 - Git
+- uv
 
 #### Installation & Running
 
@@ -155,9 +164,9 @@ This project is a **stable alpha**. The Python implementation is the active refe
 
 3.  **Run a script file:**
     ```bash
-    uv run python slip.py test.slip
+    uv run python3 slip.py test.slip
     ```
-    _(Note: Running `uv run python slip.py` with no arguments will start a REPL for interactive use.)_
+    _(Note: Running `uv run python3 slip.py` with no arguments will start a REPL for interactive use.)_
 
 #### Embedding in Python
 
@@ -165,7 +174,7 @@ SLIP is designed to be embedded. A key advantage is that it provides a safe, sim
 
 ```python
 import asyncio
-from slip import ScriptRunner # Adjust import to your actual project structure
+from slip import ScriptRunner
 
 async def main():
     script = """
@@ -192,27 +201,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Documentation
-
-The project's documentation is structured to guide you from the high-level concepts down to the implementation details.
-
-#### Tutorial Path
-
-- **[01 SLIP Scripting](<docs/01 SLIP Scripting.md>):** The fastest practical path to writing useful SLIP.
-- **[02 SLIP Programs](<docs/02 SLIP Programs.md>):** Code organization, dispatch, testing, schemas, and program structure.
-- **[03 SLIP Advanced](<docs/03 SLIP Advanced.md>):** Metaprogramming, host integration, background work, and explicit rehydration.
-
-#### Optional Guidance
-
-- **[04 SLIP Best Practices](<docs/04 SLIP Best Practices.md>):** Practical advice for writing clear, maintainable, moddable SLIP.
-
-#### Appendices
-
-- **[Appendix A - StdLib Reference](<docs/Appendix A - StdLib Reference.md>):** A practical reference for the current standard library surface.
-- **[Appendix B - SLIP Style Guide](<docs/Appendix B - SLIP Style Guide.md>):** Formatting and idioms for readable SLIP code.
-- **[Appendix C - Design Philosophy](<docs/Appendix C - Design Philosophy.md>):** The rationale behind SLIP's core design choices.
-
-#### Agent Guidance
+### Agent Guidance
 
 - **[OpenCode Skill: SLIP](<.opencode/skills/slip/SKILL.md>):** Repository-local skill for agents writing idiomatic SLIP.
 
