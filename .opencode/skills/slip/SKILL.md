@@ -47,6 +47,8 @@ Important mental model:
 - parentheses change order explicitly
 - `[...]` is code data, not immediate execution
 - `{...}` is a sig literal used for parameter declarations and other metadata-like binding patterns
+- statements are separated by newlines or `;`
+- commas separate list, dict, and signature items, not calls or statements
 
 Examples:
 
@@ -86,6 +88,8 @@ Common forms:
 - `x:`
 - `~x`
 - `|map`
+
+Use `to-path` when converting a string into path data. Do not rely on implicit string/path coercion.
 
 When you need to update data, prefer path updates over rebuilding whole structures manually.
 
@@ -151,7 +155,7 @@ add-ten: fn {n} [ n + 10 ]
 
 apply-damage: fn {state, target-id, amount} [
     state.hp[target-id]: state.hp[target-id] - amount
-    response ok state.hp[target-id]
+    state.hp[target-id]
 ]
 ```
 
@@ -243,17 +247,18 @@ apply-damage: fn {this: Combat, target-id, amount} [
     next: this.hp[target-id] - amount
     if [next < 0] [ next: 0 ]
     this.hp[target-id]: next
-    response ok next
+    next
 ]
 ```
 
 ## 11. Outcomes and effects
 
-Use outcomes explicitly.
+Return ordinary values on success. Use `fail` for failures and `do` when the caller needs to inspect one.
 
-- `response status value`
-- `respond status value`
-- `do [ ... ]` to capture outcome and effects
+- final expression for ordinary success
+- `return value` for early success
+- `fail value` or `fail code value` for structured failure
+- `do [ ... ]` to capture a failure and effects as an Outcome
 
 Use `print` for standard output.
 Use `emit` when you want structured side-effect topics.
@@ -262,12 +267,24 @@ Example:
 
 ```slip
 probe: do [ risky-call ]
-if [probe.outcome.status = err] [
-    print probe.outcome.value
+if [probe.status = err] [
+    print probe.error.message
 ]
 ```
 
-Do not model all errors as strings in ordinary values when a `response` is the clearer contract.
+An Outcome exposes `.status`, `.value`, `.error`, and `.effects` directly. `return` passes through `do` and exits the enclosing function.
+
+For public host commands, keep mechanics typed and adapt the boundary explicitly:
+
+```slip
+take-method: fn {actor: Persona, object: Item, original-text} [
+    ...
+]
+
+take: take-method |command |public
+```
+
+`|command` is implemented in SLIP. It projects prototype-typed parameters to the `` `id` `` refinement and hydrates them through `host-object`; `|public` only marks the resulting callable for exposure. The `id:` prefix is part of the canonical entity ID and is passed unchanged to exact host lookup. Overloaded methods remain overloaded after projection.
 
 ## 12. Host integration
 
@@ -277,7 +294,7 @@ Patterns:
 
 - mapping-style host objects for path reads/writes
 - top-level exposed host methods in `kebab-case`
-- gateway functions like `host-object "id"` and `host-data "id"`
+- gateway functions like `host-object "id:player-1"` and `host-data "id:player-1"`
 
 For embedded applications, prefer a long-lived `ScriptRunner` that preloads SLIP functions once and then calls into that environment repeatedly.
 
@@ -299,7 +316,9 @@ attack: fn {attacker, target} [
 ]
 """)
 
-await runner.handle_script('attack (host-object "player-1") (host-object "goblin-1")')
+await runner.handle_script(
+    'attack (host-object "id:player-1") (host-object "id:goblin-1")'
+)
 ```
 
 Prefer a narrow gateway over exposing a large host graph directly.
@@ -313,7 +332,7 @@ Current contract:
 - looks for `__slip__`
 - version 1 supports `scope`
 - optional `prototype` is resolved by name
-- unknown prototypes should error clearly
+- unknown prototype names create and reuse a generated prototype in the current runner
 
 Example shape:
 

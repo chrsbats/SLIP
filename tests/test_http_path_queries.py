@@ -16,11 +16,10 @@ async def test_http_get_applies_trailing_segments_client_side(monkeypatch):
     monkeypatch.setattr(http_mod, "http_get", fake_http_get, raising=True)
 
     runner = ScriptRunner()
-    src = "\n".join([
-        "data: http://game-api/players",
-        "mage-names: data[.class = 'Mage' and .is-active = true and .hp > 100].name",
-        "mage-names",
-    ])
+    src = (
+        "http://game-api/players"
+        "[.class = 'Mage' and .is-active = true and .hp > 100].name"
+    )
     res = await runner.handle_script(src)
     if res.status != 'ok':
         print("\n--- DEBUG error_message ---\n", res.error_message, "\n---------------------------\n")

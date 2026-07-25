@@ -1,28 +1,29 @@
 
-### **The Official SLIP Style Guide v1.0**
+# Appendix B - SLIP Style Guide
 
-**1. Philosophy**
+For a guided introduction, start with [SLIP Scripting](<01 SLIP Scripting.md>). For language contracts, use the [StdLib Reference](<Appendix A - StdLib Reference.md>).
 
-This guide defines the canonical formatting conventions for the SLIP language. The goal is to produce code that is clean, consistent, and easy to read. While the language grammar is flexible in some areas, this guide presents the single, official style that should be used in all SLIP projects.
+## Philosophy
 
-The official formatting tool, `slipfmt`, will automatically enforce these rules.
+This guide collects formatting conventions that make SLIP easy to read. Most of it is advice; the short **Syntax Constraints** section calls out the spacing that changes how code is tokenized.
 
-**2. Naming Conventions**
+## Naming Conventions
 
-SLIP uses distinct naming conventions to signal the intended role of a variable. The linter (`sliplint`) will enforce these conventions to prevent common errors.
+SLIP uses distinct naming conventions to signal the intended role of a value.
 
-*   **`kebab-case` for Variables and Functions:** All standard assignments, including generic functions and instances of objects, **MUST** use `kebab-case`.
+*   **`kebab-case` for Variables and Functions:** Use `kebab-case` for ordinary assignments, generic functions, and object instances.
     ```slip
     -- Correct
-    main-player: create Player "Kael"
+    Player: scope #{}
+    main-player: create Player [ name: "Kael" ]
     add-numbers: fn {a, b} [ a + b ]
 
     -- Incorrect
-    main_player: ...
-    addNumbers: ...
+    main_player: none
+    addNumbers: none
     ```
 
-*   **`PascalCase` for Prototypes, Types, and Schemas:** Any name intended to be used as a prototype, a type alias, or a validation schema **MUST** use `PascalCase`. The linter will warn if a `PascalCase` name is assigned a value other than a `scope`, `schema`, or `sig`.
+*   **`PascalCase` for Prototypes, Types, and Schemas:** Use `PascalCase` for names intended to be prototypes, type aliases, or validation schemas.
     ```slip
     -- Correct: A prototype is a `scope`.
     Character: scope #{
@@ -39,55 +40,67 @@ SLIP uses distinct naming conventions to signal the intended role of a variable.
     UserID: {string or int}
     ```
 
-*   **`UPPER-KEBAB-CASE` for Application Constants:** Names representing fixed, constant values specific to an application or domain **MUST** use `UPPER-KEBAB-CASE`.
+*   **`UPPER-KEBAB-CASE` for Application Constants:** Use `UPPER-KEBAB-CASE` for fixed values specific to an application or domain.
     ```slip
     -- Correct
     MAX-HP: 1000
     DEFAULT-TIMEOUT: 5
     ```
 
-*   **`kebab-case` for Core Aliases:** Core library aliases that function like keywords (e.g., for response statuses) **SHOULD** use `kebab-case`. This aligns them with built-in literals like `true` and `none`.
+*   **`kebab-case` for Core Aliases:** Core library aliases that read like language words use `kebab-case`. This aligns them with built-in literals like `true` and `none`.
     ```slip
     -- Correct (in core.slip)
     ok: `ok`
     err: `err`
 
     -- Correct usage in code
-    respond ok "Success"
+    if [result.status = ok] [ print "Success" ]
     ```
 
-**3. Spacing and Indentation**
+## Syntax Constraints
 
-SLIP's syntax requires specific spacing rules for clarity and to avoid ambiguity.
+These two spacing rules are part of the syntax rather than style preferences.
 
-*   **Indentation:** Use **4 spaces** for each level of indentation.
-
-*   **Assignment (`:`):** There **MUST NOT** be any whitespace between a name and the assignment colon. This is a syntactic requirement, as `name:` is a single `set-path` token.
+*   **Assignment (`:`):** Keep the name and assignment colon together because `name:` is a single `set-path` token.
     ```slip
     -- Correct
     x: 10
-
+    ```
+    <!-- slip-test: parse-error -->
+    ```slip
     -- Syntax Error
     x : 10
     ```
 
-*   **Piped Paths (`|`):** There **MUST NOT** be any whitespace between the pipe character and the following path. This is a syntactic requirement, as `|path` is a single `piped-path` token. There **MUST** be whitespace *before* the pipe character to separate it from the preceding term.
+*   **Piped Paths (`|`):** Keep the pipe and following path together because `|path` is a single `piped-path` token.
     ```slip
     -- Correct
-    data |map [ ... ]
-
+    data |map (fn {item} [ item.name ])
+    ```
+    <!-- slip-test: parse-error -->
+    ```slip
     -- Syntax Error: `| map` is not a valid token.
-    data | map [ ... ]
-
-    -- Syntax Error: `data|map` would be parsed as a single, invalid path name.
-    data|map [ ... ]
+    data | map (fn {item} [ item.name ])
+    ```
+    ```slip
+    -- Valid, though spacing before the pipe is easier to scan.
+    data|map (fn {item} [ item.name ])
     ```
 
-- Filters: In filter predicates, reference the current item’s fields with a leading dot (e.g., .hp, .name). Bare names are lexical. Example: players[.hp > 100 and .name = 'Karl'].
+Other call-shape constraints are worth remembering:
 
-- Identity Boundaries: Use `::` to separate an authority (Resolver, Ref, Cell) from its internal state. Example: `Combat::hp`.
+*   Commas separate list, dict, and signature items. They do not separate function arguments or statements.
+*   A function signature can contain at most one `|where` clause.
 
-**4. Formatting Blocks and Statements**
+## Spacing and Indentation
+
+These are readability recommendations:
+
+*   **Indentation:** Use **4 spaces** for each level of indentation.
+
+*   **Pipes:** Put whitespace before a piped path: `data |map transform`.
+
+## Formatting Blocks and Statements
 
 Code blocks and statements should be formatted for maximum readability.
 
@@ -100,8 +113,10 @@ Code blocks and statements should be formatted for maximum readability.
         config: #{ host: "localhost", port: 8080 }
         ```
 
-    - **Multi-line Blocks (Egyptian Style):** For any block that spans multiple lines, the opening delimiter (`[`, `{`, etc.) **MUST** remain on the same line as the statement that introduces it. The content is indented, and the closing delimiter is on its own line, aligned with the start of the statement.
+    - **Multi-line Blocks (Egyptian Style):** When a block spans multiple lines, keep the opening delimiter (`[`, `{`, etc.) on the introducing line. Indent the content and align the closing delimiter with the start of the statement.
         ```slip
+        x: 12
+
         -- Correct multi-line formatting for `if`
         if [x > 10] [
             print "Greater"
@@ -113,52 +128,57 @@ Code blocks and statements should be formatted for maximum readability.
 
         -- Correct multi-line formatting for a long function
         my-long-func: fn {arg1, arg2} [
-            -- ... implementation
+            result: arg1 + arg2
             return result
         ]
+
+        my-long-func 1 2
+        -- => 3
         ```
 
-*   **Clarity with `return`:** In a multi-line function body, it is strongly recommended to use an explicit `return` for the final expression. This removes any ambiguity about what the function's output is and improves readability. `return` accepts at most one value; when returning a call, comparison, or logical expression, group it explicitly:
+*   **Clarity with `return`:** An explicit `return` often makes the result of a multi-line function easier to spot. `return` accepts at most one value; when returning a call, comparison, or logical expression, group it explicitly:
     ```slip
-    return (transition-choice choices roll)
-    return (weather = 'storm')
-    return (not (nighttime-period? period))
+    sum: fn {} [ return (add 1 2) ]
+    is-storm?: fn {weather} [ return (weather = `storm`) ]
+    is-day?: fn {nighttime?} [ return (not nighttime?) ]
     ```
 
-*   **Refinement with `|where` (default style):** Prefer putting a `|where` clause inside the function signature to refine dispatch or validate parameters. Only one `|where` is allowed per signature.
+*   **Refinement with `|where` (default style):** Put a `|where` clause inside the function signature when it makes a dispatch rule clearer.
     ```slip
     -- Correct
-    apply-damage: fn {
-        this: Combat, 
-        amount 
-        |where amount > 0
-    } [ ... ]
+    apply-damage: fn {this: Combat, amount |where amount > 0} [
+        this.hp: this.hp - amount
+    ]
     ```
 
-*   **Function Calls:** Arguments to functions are separated by spaces. Commas are not used.
+*   **Function Calls:** Arguments to functions are separated by spaces.
+    <!-- slip-test: parse-error -->
     ```slip
     add 10 20      -- Correct
     (add 10 20)    -- Correct
-    add 10, 20     -- Syntax Error
+    add 10, 20     -- Wrong: `add` receives only one argument.
     ```
 
 *   Call formatting is line-aware (no special forms). Keep calls on one line when all parts render as single-line. If any argument renders multi-line, keep the head and any consecutive single-line args on the first line; put each remaining argument on its own line at the current indentation. The block/list/dict printers handle the indentation of their contents.
     ```slip
+    cond: true
+    then: "yes"
+    else: "no"
+
     if [cond] [then] [else]               -- all one-liners
-    if [ cond ] [
+    if [cond] [
         then
     ] [
         else
     ]
     ```
 
-Use {} for meta-parameters (sig literals) in functions that bind variables
-- When a function’s argument is declarative metadata (never evaluated) and will be inspected to bind names dynamically, pass it as a sig literal.
-- This convention is used by the core and should be followed in user code:
-  - `fn {args} [body]`
-  - `foreach {vars} collection [body]`
-  - `for {i} start end [body]`
-Rationale for readers from other languages: A sig literal is structurally distinct and unevaluated. Seeing `x {y} ys [ … ]` signals “{y} is metadata that will bind y”, not “evaluate {y}”. This keeps evaluation rules uniform and call sites self-documenting.
+*   **Sig literals for binding metadata:** Use `{}` when an argument declares names to bind rather than computes a value:
+    - `fn {args} [body]`
+    - `foreach {vars} collection [body]`
+    - `for {i} start end [body]`
+
+    Follow the same convention in user-defined binding forms. The braces make the call site self-explanatory: `{y}` declares a binding named `y`.
 
 *   **Commas:** Use one space after a comma inside `sig`, `dict`, and `list` literals.
     ```slip
@@ -167,7 +187,7 @@ Rationale for readers from other languages: A sig literal is structurally distin
     items: #[ 1, 2, 3 ]
     ```
 
-**5. Comments**
+## Comments
 
 *   **Single-line Comments:** Use `--` followed by a space.
     ```slip
@@ -175,23 +195,38 @@ Rationale for readers from other languages: A sig literal is structurally distin
     x: 10
     ```
 
-**6. Metadata and Configuration**
+*   **Executable Results:** Put `-- =>` immediately after an expression when the documentation states its result. Every active marker is executed by the documentation test suite.
+    ```slip
+    10 + 5
+    -- => 15
+    ```
+
+    For a multiline value, put the opening form after `-- =>` and continue it with consecutive comment lines.
+
+    Python fences are executed by default. If a Python example is intentionally a fragment that depends on surrounding code, mark it explicitly:
+
+    ```html
+    <!-- slip-test: fragment -->
+    ```
+
+## Metadata and Configuration
 
 *   **Persistent Metadata (`.meta`):** Use standard property access on the reserved `.meta` property to set documentation and other persistent metadata.
     ```slip
     -- Correct
+    Character: scope #{}
     Character.meta.doc: "The base prototype for all characters."
     ```
 
 *   **Transient Configuration (`#(...)`):** Use the `#(...)` block immediately following a path to provide one-time configuration for an operation.
     ```slip
     -- Correct
-    response: api/call#(timeout: 5)
+    result: api/call#(timeout: 5)
     ```
 
-**7. Parentheses**
+## Parentheses
 
-*   **Evaluation Groups:** Use parentheses `(...)` only when necessary to override the default left-to-right evaluation order. Their presence should be a strong signal to the reader that something non-standard is happening.
+*   **Evaluation Groups:** Use parentheses `(...)` to override left-to-right evaluation or to pass a call, comparison, or logical expression as one argument. Their presence should make the intended grouping clearer.
     ```slip
     -- Default left-to-right evaluation is preferred for clarity.
     result: 10 + 5 * 2  -- -> 30

@@ -511,7 +511,74 @@ class ByteStream(SlipBlock):
         )
 
 
-class Sig:
+_UNTYPED = object()
+
+
+class SigParameter(collections.abc.MutableMapping):
+    """One ordered signature parameter with an optional annotation."""
+
+    def __init__(self, name: Any, annotation: Any = _UNTYPED):
+        self.name = name
+        self._annotation = annotation
+
+    @property
+    def annotation(self):
+        return None if self._annotation is _UNTYPED else self._annotation
+
+    @annotation.setter
+    def annotation(self, value):
+        self._annotation = value
+
+    @property
+    def is_typed(self):
+        return self._annotation is not _UNTYPED
+
+    def copy(self):
+        return SigParameter(self.name, self._annotation)
+
+    def __getitem__(self, key):
+        if key == "name":
+            return self.name
+        if key == "type" and self.is_typed:
+            return self.annotation
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        if key == "type":
+            self.annotation = value
+            return
+        if key == "name" and value == self.name:
+            return
+        raise KeyError(f"Sig parameter {key!r} is read-only")
+
+    def __delitem__(self, key):
+        if key != "type" or not self.is_typed:
+            raise KeyError(key)
+        self._annotation = _UNTYPED
+
+    def __iter__(self):
+        yield "name"
+        if self.is_typed:
+            yield "type"
+
+    def __len__(self):
+        return 1 + int(self.is_typed)
+
+    def __repr__(self):
+        return repr(dict(self))
+
+
+class Sig(collections.abc.MutableMapping):
+    _mapping_keys = (
+        "parameters",
+        "positional",
+        "keywords",
+        "rest",
+        "return-annotation",
+        "where",
+        "param-order",
+    )
+
     def __init__(
         self,
         positional: List[str],
@@ -520,11 +587,108 @@ class Sig:
         return_annotation: Optional[Any] = None,
         where: Optional["Code"] = None,
     ):
-        self.positional = positional
-        self.keywords = keywords
+        self._parameters = [
+            *(SigParameter(name) for name in positional),
+            *(SigParameter(name, annotation) for name, annotation in keywords.items()),
+        ]
         self.rest = rest
         self.return_annotation = return_annotation
         self.where = where
+
+    @property
+    def parameters(self):
+        return list(self._parameters)
+
+    @property
+    def positional(self):
+        return [parameter.name for parameter in self._parameters if not parameter.is_typed]
+
+    @property
+    def keywords(self):
+        return {
+            parameter.name: parameter.annotation
+            for parameter in self._parameters
+            if parameter.is_typed
+        }
+
+    @property
+    def param_order(self):
+        return [
+            (
+                parameter.name,
+                parameter.annotation if parameter.is_typed else None,
+            )
+            for parameter in self._parameters
+        ]
+
+    @param_order.setter
+    def param_order(self, order):
+        typed_names = [
+            parameter.name for parameter in self._parameters if parameter.is_typed
+        ]
+        self._parameters = [
+            SigParameter(
+                name,
+                annotation if name in typed_names else _UNTYPED,
+            )
+            for name, annotation in order
+        ]
+
+    def copy(self):
+        out = Sig([], {}, self.rest, self.return_annotation, self.where)
+        out._parameters = [parameter.copy() for parameter in self._parameters]
+        return out
+
+    def __getitem__(self, key):
+        if key == "parameters":
+            return self.parameters
+        if key == "positional":
+            return list(self.positional)
+        if key == "keywords":
+            return dict(self.keywords)
+        if key == "rest":
+            return self.rest
+        if key in {"return-annotation", "return_annotation"}:
+            return self.return_annotation
+        if key == "where":
+            return self.where
+        if key in {"param-order", "param_order"}:
+            return list(self.param_order)
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        if key == "parameters":
+            parameters = []
+            for parameter in value:
+                if not isinstance(parameter, collections.abc.Mapping):
+                    raise TypeError("Sig parameters must be mappings")
+                name = str(parameter["name"])
+                annotation = parameter.get("type", _UNTYPED)
+                parameters.append(SigParameter(name, annotation))
+            self._parameters = parameters
+            return
+        if key == "rest":
+            self.rest = value
+            return
+        if key in {"return-annotation", "return_annotation"}:
+            self.return_annotation = value
+            return
+        if key == "where":
+            self.where = value
+            return
+        raise KeyError(f"Sig field {key!r} is read-only")
+
+    def __delitem__(self, key):
+        if key in {"rest", "return-annotation", "return_annotation", "where"}:
+            self[key] = None
+            return
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(self._mapping_keys)
+
+    def __len__(self):
+        return len(self._mapping_keys)
 
     def __repr__(self) -> str:
         return f"Sig(pos={self.positional!r}, kw={self.keywords!r}, rest={self.rest!r}, ret={self.return_annotation!r}, where={self.where!r})"
@@ -590,23 +754,34 @@ class GenericFunction(SlipCallable):
         return f"<GenericFunction name={self.name!r} methods={len(self.methods)}>"
 
 
-class Response:
-    """Represents a structured outcome from a function call (`response ...`)."""
+class SlipFailure(Exception):
+    """Structured failure raised by the ordinary SLIP `fail` function."""
 
-    def __init__(self, status: "PathLiteral", value: Any):
+    def __init__(self, code: "PathLiteral", data: Any, message: str):
+        super().__init__(message)
+        self.code = code
+        self.data = data
+        self.message = message
+
+
+class ProtocolFailure(Exception):
+    """Structured failure from an external path protocol."""
+
+    def __init__(
+        self,
+        protocol: str,
+        message: str,
+        *,
+        status: Any = None,
+        data: Any = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message)
+        self.protocol = protocol
         self.status = status
-        self.value = value
-
-    def __repr__(self) -> str:
-        from slip.slip_printer import Printer
-
-        p = Printer()
-        return f"response {p.pformat(self.status)} {p.pformat(self.value)}"
-
-    def __eq__(self, other):
-        if not isinstance(other, Response):
-            return NotImplemented
-        return self.status == other.status and self.value == other.value
+        self.data = data
+        self.meta = dict(meta or {})
+        self.message = message
 
 
 class This:
@@ -637,11 +812,7 @@ class This:
 
 
 class ReturnSignal:
-    """Internal control-flow signal for SLIP `return` (early exit).
-
-    This is a runtime-only control-flow marker and is NOT a Response.
-    It carries a single .value payload (which may itself be a Response).
-    """
+    """Internal control-flow signal for SLIP `return` (early exit)."""
 
     def __init__(self, value: Any):
         self.value = value

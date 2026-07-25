@@ -34,24 +34,22 @@ async def test_schema_creation_and_is_schema_predicate():
 
 
 @pytest.mark.asyncio
-async def test_validate_helper_is_currently_missing_errors_cleanly():
-    # Pipe style usage described in the chapter should error if validate is not implemented
+async def test_validate_helper_accepts_valid_data_in_pipe_and_prefix_forms():
     src = """
     UserSchema: schema #{ name: `string` }
-    raw: #{ name: "Alice" }
+    raw: #{ name: 'Alice' }
     raw |validate UserSchema
     """
     res = await run_slip(src)
-    assert_ok(res)
+    assert_ok(res, {"name": "Alice"})
 
-    # Prefix call form should also error cleanly
     src2 = """
     UserSchema: schema #{ name: `string` }
-    raw: #{ name: "Alice" }
+    raw: #{ name: 'Alice' }
     validate raw UserSchema
     """
     res2 = await run_slip(src2)
-    assert_ok(res2)
+    assert_ok(res2, {"name": "Alice"})
 
 
 @pytest.mark.asyncio

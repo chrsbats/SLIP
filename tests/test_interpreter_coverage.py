@@ -1,7 +1,6 @@
 import pytest
 
 from slip import ScriptRunner
-from slip.slip_datatypes import PathLiteral, GetPath, Name
 
 async def run_slip(src: str):
     runner = ScriptRunner()
@@ -57,7 +56,7 @@ async def test_examples_synthesize_methods_and_dispatch_with_do_capture():
     adder: fn {a, b} [ a + b ] |example { a: 2, b: 3 -> 5 }
     okv: adder 2 3
     probe: do [ adder 'x' 'y' ]
-    #[ okv, probe.outcome.status ]
+    #[ okv, probe.status ]
     """
     res = await run_slip(src)
     assert res.status == 'ok'

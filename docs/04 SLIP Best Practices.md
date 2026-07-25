@@ -4,6 +4,8 @@ This guide is optional reading after `docs/03 SLIP Advanced.md`.
 
 It is not about learning what the language can do. It is about writing SLIP that stays clear, maintainable, and easy to mod.
 
+These are the language's intended idioms, not a neutral list of patterns. SLIP is designed around direct data flow, local rebinding, dispatchable rules, and explicit authority. Code that follows those shapes will usually be simpler than code that imitates Python inside SLIP.
+
 Use it when:
 
 - you already know the language features
@@ -30,7 +32,7 @@ Good:
 ```slip
 apply-damage: fn {state, target-id, amount} [
   state.hp[target-id]: state.hp[target-id] - amount
-  response ok state.hp[target-id]
+  return state.hp[target-id]
 ]
 ```
 
@@ -87,15 +89,15 @@ Avoid turning dispatch into a puzzle. If a simple `if` is clearer, keep the simp
 Good use:
 
 ```slip
-apply-damage: fn {this: Combat, target-id, amount, kind |where kind = 'fire'} [
+apply-damage: fn {this: Combat, target-id, amount, kind |where kind = `fire`} [
   this.hp[target-id]: this.hp[target-id] - (amount * 2)
-  response ok none
+  return this.hp[target-id]
 ]
 ```
 
 For host-backed verbs, keep the call shape natural. Actor-first signatures are fine, and typed parameters can appear after untyped parameters.
 
-For id wrappers, prefer raw strings (`'item-1'`) when you want `` `string` `` dispatch or guards; double-quoted strings are `` `i-string` `` values.
+Use raw strings for IDs and other values intended for `` `string` `` or `` `id` `` dispatch. Double-quoted strings are `` `i-string` `` values.
 
 Bad use is when the reader has to reverse-engineer which of ten overlapping methods will run before they can understand the rule.
 
@@ -109,7 +111,7 @@ When you want to observe world state without owning it:
 This keeps read-side logic separate from commit-side logic.
 
 ```slip
-p1-hp: ref Combat::hp["p1"]
+p1-hp: ref `Combat::hp["p1"]`
 p1-wounded?: cell {hp: p1-hp} [ hp < 50 ]
 ```
 
@@ -120,8 +122,20 @@ Use the host boundary tools intentionally:
 - `host-object` for live dispatchable objects
 - `host-data` for raw persisted data
 - `as-slip` for explicit rehydration outside that host boundary
+- `|command` for an explicit public boundary that represents prototype-typed parameters as `` `id` `` values
 
 Do not rely on hidden magical conversion of plain data into runtime objects.
+
+```slip
+take-method: fn {actor: Persona, object: Item, original-text} [
+  object.owner: actor
+  object
+]
+
+take: take-method |command |public
+```
+
+The mechanics stay typed. The command adapter is the visible declaration that external entity IDs should be hydrated before invocation. Keep `id:` as part of the canonical entity ID everywhere; the adapter recognizes the refinement but passes the complete value unchanged to `host-object`.
 
 ## Prefer `host-object` For Live Entities
 

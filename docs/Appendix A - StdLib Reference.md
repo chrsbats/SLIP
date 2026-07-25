@@ -4,14 +4,8 @@ This appendix is a practical reference for the current SLIP standard library sur
 
 It is not a tutorial. For a guided introduction, start with:
 
-- `docs/01 SLIP Scripting.md`
-- `docs/02 SLIP Programs.md`
-
-Source of truth for this appendix:
-
-- `slip/root.slip`
-- `slip/slip_runtime.py`
-- focused tests, especially `tests/test_chapter_014.py`
+- [SLIP Scripting](<01 SLIP Scripting.md>)
+- [SLIP Programs](<02 SLIP Programs.md>)
 
 ## Reading This Reference
 
@@ -20,7 +14,26 @@ Source of truth for this appendix:
 - Infix operators like `+` and `>` are aliases for piped core functions.
 - Some names are implemented in `root.slip`, others are host primitives. Both are part of the user-facing stdlib.
 
-## Status Aliases And Operators
+### Categories
+
+- [Statuses and operators](#outcome-statuses-and-operators)
+- [Introspection and conversion](#core-introspection-and-conversion)
+- [Output and effects](#output-and-effects)
+- [Predicates and types](#predicates-and-type-helpers)
+- [Strings and paths](#strings-and-paths)
+- [Collections](#collections-and-sequence-helpers)
+- [Control flow](#control-flow-helpers)
+- [Functions and code](#functions-and-code)
+- [Objects, scopes, and resolvers](#object-scope-and-resolver-helpers)
+- [Schemas and validation](#schemas-and-validation)
+- [Host command APIs](#host-command-apis)
+- [Testing](#testing-helpers)
+- [Resources and I/O](#resources-imports-and-external-io)
+- [Tasks and time](#tasks-and-time)
+- [Byte streams](#byte-stream-literals)
+- [Common patterns](#frequently-used-patterns)
+
+## Outcome Statuses And Operators
 
 ### Operators
 
@@ -41,19 +54,24 @@ Source of truth for this appendix:
   - Boolean negation.
   - Example: `not done`
 
-### Standard statuses
+### Outcome statuses
 
 - `ok`
 - `err`
+
+These path literals appear in `Outcome.status`.
+
+### Common failure codes
+
 - `not-found`
 - `invalid`
 
-These are path literals used in `response` values and status checks.
+Failure codes are ordinary path literals. Applications can define codes that fit their own domain.
 
 Example:
 
 ```slip
-response ok 123
+if [result.status = ok] [ result.value ]
 ```
 
 ## Core Introspection And Conversion
@@ -73,17 +91,6 @@ Example:
   (type-of 'item-1') = `string`,
   (type-of "item-1") = `i-string`
 ]
-```
-
-### `status value`
-
-- If `value` is a `response`, returns its status.
-- Otherwise returns `ok`.
-
-Example:
-
-```slip
-#[ status 1, status (response err "bad") ]
 ```
 
 ### `to-str value`
@@ -119,6 +126,21 @@ Example:
 
 ```slip
 from `json` '{"name": "Karl", "hp": 120}'
+```
+
+### `to-path value`
+
+- Converts a raw string, interpolated string, or get-path literal to a path literal.
+- URL-like and special path strings remain a single path segment; ordinary dotted or slash-separated strings become segmented paths.
+
+Example:
+
+```slip
+#[
+  to-path 'player.hp',
+  to-path "Combat::hp",
+  to-path `items[0]`
+]
 ```
 
 ### `call func args`
@@ -427,6 +449,16 @@ for {i} 1 4 [ print i ]
 - Constructs a function.
 - Functions are generic containers: multiple definitions with the same name add implementations.
 
+### `partial function args...`
+
+- Returns a function with `args` pre-supplied.
+- Arguments passed to the returned function follow the pre-supplied arguments.
+
+### `compose functions...`
+
+- Returns a function that applies `functions` from right to left.
+- `compose f g h` produces a function equivalent to `f(g(h(value)))`.
+
 ### `return value?`
 
 - Exits the current function early.
@@ -436,35 +468,45 @@ for {i} 1 4 [ print i ]
 Examples:
 
 ```slip
-return (transition-choice choices roll)
-return (weather = 'storm')
-return (not (nighttime-period? period))
+sum: fn {} [ return (add 1 2) ]
+is-storm?: fn {weather} [ return (weather = `storm`) ]
+is-day?: fn {nighttime?} [ return (not nighttime?) ]
+
+#[sum, is-storm? `storm`, is-day? false]
+-- => #[3, true, true]
 ```
 
-### `response status value`
+### `fail data`
+### `fail code data`
 
-- Creates a `response` value.
+- Signals a structured domain failure.
+- With one argument, the code defaults to `error`.
+- With two arguments, `code` is a path or string and `data` may be any value.
+- A mapping without its own `message` uses the code as the error message.
 
-### `respond status value`
+Example:
 
-- Exits the current function with a `response`.
+```slip
+fail `not-found` #{ item-id: "item-1" }
+```
 
 ### `do code`
 
 - Runs a code block and captures both effects and outcome.
-- Returns a log-like structure with:
-  - `.outcome`
-  - `.effects`
+- Returns an `Outcome` directly with `.status`, `.value`, `.error`, and `.effects`.
 
 Behavior:
 
-- normal return -> `response ok value`
-- thrown error -> `response err message`
-- existing `response` is preserved
+- normal completion sets `.status` to `ok` and `.value` to the block's ordinary value
+- `fail` and runtime errors set `.status` to `err` and provide structured `.error` details
+- `.effects` contains effects emitted while the block ran
+- `return` passes through `do` and exits the surrounding function
 
 ### `run code`
 
-- Executes a code block in the current lexical context.
+- Executes code in a fresh sandbox that can see the root language environment.
+- Caller values must be supplied with `inject` or `splice`.
+- Writes do not leak into the caller. Use `run-with` to target a specific scope.
 
 ### `run-with code target-scope`
 
@@ -479,6 +521,32 @@ Behavior:
 
 - Returns the code body for the implementation matching `sig`.
 - Useful for advanced reflection and tooling.
+
+### `get-sig function`
+
+- Returns a detached copy of the function's `Sig`.
+- The callable must have exactly one method.
+- The returned Sig is dict-accessible. Its ordered `.parameters` are the canonical parameter representation, with `name` and, for typed parameters, `type`.
+- Changing `parameter.type` changes that detached signature without changing the source function.
+- `.positional`, `.keywords`, and `.param-order` are derived compatibility views.
+
+### `sig value`
+
+- Validates and copies an existing `Sig`.
+- Also constructs a Sig from a mapping with `parameters`, `rest`, `return-annotation`, and `where` fields.
+- A grouped call can provide a computed signature to `fn`.
+
+Example:
+
+```slip
+description: get-sig source-method
+description.parameters[0].type: `string`
+
+adapter: fn (sig description) [
+  -- The computed parameter names are bound in this call scope.
+  current-scope
+]
+```
 
 ## Object, Scope, And Resolver Helpers
 
@@ -512,7 +580,10 @@ Behavior:
 Example:
 
 ```slip
+Player: scope #{}
 p: create Player |with [ hp: 150 ]
+p.hp
+-- => 150
 ```
 
 ### `is-a? obj proto`
@@ -553,7 +624,39 @@ p: create Player |with [ hp: 150 ]
 ### `validate data schema`
 
 - Validates a mapping against a schema.
-- Returns `response ok normalized-data` or `response err errors`.
+- Returns normalized data when valid.
+- Signals an `invalid` failure with the errors as structured data when validation fails.
+
+## Host Command APIs
+
+### `|public`
+
+- Marks a function or generic function as part of a host-visible public command API.
+- Intended for command API modules that re-export only player-facing operations.
+- Returns a marked callable value without mutating the imported function, so it works with the normal shadowing style.
+
+Example:
+
+```slip
+movement: import `file://movement.slip`
+
+take: movement.take |public
+put: movement.put |public
+```
+
+### `|command`
+
+- Adapts every method of a function to an entity-ID host command boundary.
+- Prototype-typed parameters become `` `id` `` parameters in projected signatures.
+- `` `id` `` matches strings beginning with `id:` and is more specific than `` `string` ``.
+- Calls `host-object` with each complete ID unchanged before invoking the original generic function.
+- The original generic performs typed dispatch and evaluates its `|where` guards after hydration.
+- Is implemented in SLIP using `get-sig`, `sig`, closures, and `current-scope`.
+- Use `|public` separately to expose the adapter to a host.
+
+```slip
+take: take-method |command |public
+```
 
 ## Testing Helpers
 
@@ -564,12 +667,14 @@ p: create Player |with [ hp: 150 ]
 ### `test function?`
 
 - Runs examples for one function.
-- Returns a `response`.
+- Returns the number of passing examples.
+- Signals a structured `test-failed` failure when an example fails.
 
 ### `test-all scope?`
 
 - Runs examples across the current scope or a provided scope.
-- Returns a `response` containing a summary.
+- Returns a summary mapping when all examples pass.
+- Signals `test-failed` with the summary as failure data when any function fails.
 
 ## Resources, Imports, And External I/O
 
@@ -581,6 +686,7 @@ p: create Player |with [ hp: 150 ]
 ### `host-object id`
 
 - Loads a host-managed object by id.
+- Entity IDs retain their canonical `id:` prefix and are looked up exactly as supplied.
 - Auto-rehydrates `__slip__`-marked data into live SLIP objects.
 - Use this when you want dispatchable runtime objects.
 
@@ -617,42 +723,28 @@ get api
   - Structured files such as `.json`, `.yaml`, `.yml`, and `.toml` are parsed automatically.
   - Writing serializes based on extension or explicit content type.
   - Reading a `.slip` file returns `code`, not the executed result.
+  - A read may continue directly into bracket queries and field access, such as `file://players.json[0].name`.
 
 - `http://...` and `https://...`
   - Direct GET by default.
-  - Non-2xx responses raise errors unless you request an alternate response mode.
+  - A successful request returns the decoded body.
+  - A non-2xx response signals a structured protocol failure.
+  - A read may continue directly into bracket queries and field access.
 
 - `http://...<- value`
   - Direct POST form.
 
-### Response modes
+### Full HTTP response mode
 
-- Default mode, or explicit:
-
-```slip
-#(response-mode: `none`)
-```
-
-  - Return the body directly.
-  - Non-2xx errors raise.
-
-- Lite mode:
+- The default is the decoded body on success or a structured protocol failure on non-2xx.
+- Request full mode only when you need the HTTP response envelope:
 
 ```slip
-#(response-mode: `lite`)
+http://api.example.com/data#(response-mode: `full`)
 ```
 
-  - Return `#[status, value]`.
-
-- Full mode:
-
-```slip
-#(response-mode: `full`)
-```
-
-  - Return `#{ status: ..., value: ..., meta: #{ headers: ... } }`.
-
-- Legacy flags `#(lite: true)` and `#(full: true)` are still accepted.
+- Returns `#{ status: ..., value: ..., meta: #{ headers: ... } }`.
+- Non-2xx responses are returned in the same full envelope for explicit handling.
 
 ## Tasks And Time
 
@@ -709,15 +801,18 @@ file://out.json: #{ names: names }
 
 ```slip
 probe: do [ risky-call ]
-if [probe.outcome.status = err] [
-  print probe.outcome.value
+if [probe.status = err] [
+  print probe.error.message
 ]
 ```
 
 ### Configure an object fluently
 
 ```slip
+Player: scope #{}
 p: create Player |with [ hp: 150 ]
+p.hp
+-- => 150
 ```
 
 ### Data-first collection piping

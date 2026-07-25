@@ -31,7 +31,7 @@ async def test_run_executes_code_in_current_scope_and_returns_last_value():
       x + 2
     ]
     probe: do [ x ]
-    status-is-err: eq probe.outcome.status err
+    status-is-err: eq probe.status err
     #[ res, status-is-err ]
     """
     res = await run_slip(src)
@@ -97,7 +97,7 @@ async def test_code_is_first_class_and_can_be_run_later():
     t1: is-code? c
     v: run c
     probe: do [ y ]
-    status-is-err: eq probe.outcome.status err
+    status-is-err: eq probe.status err
     #[ t1, v, status-is-err ]
     """
     res = await run_slip(src)
@@ -219,7 +219,7 @@ async def test_call_dynamic_set_and_delete_via_string():
     probe: do [ x ]
 
     -- Expect value set to 10, then deletion causes an error outcome
-    logical-and (eq ok1 10) (eq probe.outcome.status err)
+    logical-and (eq ok1 10) (eq probe.status err)
     """
     res = await run_slip(src)
     assert_ok(res, True)

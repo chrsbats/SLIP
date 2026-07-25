@@ -48,7 +48,6 @@ rules:
     ast: { discard: true }
     choice:
       - { literal: ";" }
-      - { literal: "," }
       - { rule: NEWLINE }
 
   expression_separator_plus:
@@ -57,7 +56,39 @@ rules:
       - { rule: WS_OPT }
       - one_or_more:
           sequence:
-            - { rule: expression_separator }
+             - { rule: expression_separator }
+             - { rule: WS_OPT }
+
+  non_empty_item_list:
+    ast: { promote: true }
+    sequence:
+      - { rule: line_expression }
+      - zero_or_more:
+          ast: { promote: true }
+          sequence:
+            - { rule: item_separator_plus }
+            - { rule: line_expression }
+      - optional: { rule: item_separator_plus }
+
+  item_list:
+    ast: { promote: true }
+    choice:
+      - { rule: non_empty_item_list }
+      - { rule: empty_list_producer }
+
+  item_separator:
+    ast: { discard: true }
+    choice:
+      - { literal: "," }
+      - { rule: NEWLINE }
+
+  item_separator_plus:
+    ast: { discard: true }
+    sequence:
+      - { rule: WS_OPT }
+      - one_or_more:
+          sequence:
+            - { rule: item_separator }
             - { rule: WS_OPT }
 
   NEWLINE:
@@ -329,7 +360,7 @@ rules:
       - { rule: typed_list_type, ast: { name: "t" } }
       - { literal: "#[", ast: { discard: true } }
       - { rule: WS_OPT_NL }
-      - { rule: expression_list, ast: { name: "items" } }
+      - { rule: item_list, ast: { name: "items" } }
       - { rule: WS_OPT_NL }
       - { literal: "]", ast: { discard: true } }
 
@@ -342,7 +373,7 @@ rules:
     sequence:
       - { literal: "#[", ast: { discard: true } }
       - { rule: WS_OPT_NL }
-      - { rule: expression_list }
+      - { rule: item_list }
       - { rule: WS_OPT_NL }
       - { literal: "]", ast: { discard: true } }
 
@@ -351,7 +382,7 @@ rules:
     sequence:
       - { literal: "#{", ast: { discard: true } }
       - { rule: WS_OPT_NL }
-      - { rule: expression_list }
+      - { rule: item_list }
       - { rule: WS_OPT_NL }
       - { literal: "}", ast: { discard: true } }
 

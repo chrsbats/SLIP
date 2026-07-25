@@ -18,7 +18,6 @@ from slip.slip_datatypes import (
     IString,
     SlipFunction,
     GenericFunction,
-    Response,
     PathLiteral,
     PathNotFound,
     GetPath,
@@ -661,11 +660,6 @@ class PathResolver:
         # TODO: Handle path.meta for things like API timeouts
         url = self._extract_http_url(path)
         if url:
-            # Enforce two-step policy: no trailing segments on HTTP GET
-            if self._has_http_trailing_segments(path):
-                raise TypeError(
-                    "http get does not support trailing path segments; bind the response then filter"
-                )
             from slip.slip_http import (
                 http_get,
             )  # local import to avoid hard dependency until needed
@@ -676,32 +670,30 @@ class PathResolver:
 
             mode = normalize_response_mode(cfg)
             raw = await http_get(url, cfg)
-            if mode == "lite" and isinstance(raw, tuple) and len(raw) == 3:
-                status, value, headers = raw
-                return [status, value]
             if mode == "full" and isinstance(raw, tuple) and len(raw) == 3:
                 status, value, headers = raw
                 headers_map = {str(k).lower(): v for k, v in (headers or {}).items()}
-                return {
+                raw = {
                     "status": status,
                     "value": value,
                     "meta": {"headers": headers_map},
                 }
-            return raw
+            trailing = list(getattr(path, "segments", []) or [])[1:]
+            return await self._apply_segments(raw, trailing, scope) if trailing else raw
         file_loc = self._extract_file_locator(path)
         if file_loc:
-            # Enforce two-step policy: no trailing segments on file GET
-            if self._has_file_trailing_segments(path):
-                raise TypeError(
-                    "file get does not support trailing path segments; bind the response then filter"
-                )
             from slip.slip_file import file_get
 
             cfg = await self._meta_to_dict(getattr(path, "meta", None), scope)
             base_dir = getattr(self.evaluator, "source_dir", None)
             try:
                 data = await file_get(file_loc, cfg, base_dir=base_dir)
-                return data
+                trailing = list(getattr(path, "segments", []) or [])[1:]
+                return (
+                    await self._apply_segments(data, trailing, scope)
+                    if trailing
+                    else data
+                )
             except FileNotFoundError:
                 raise PathNotFound(file_loc)
         # Resolve the path normally
@@ -915,9 +907,6 @@ class PathResolver:
             from slip.slip_http import normalize_response_mode
 
             mode = normalize_response_mode(cfg)
-            if mode == "lite" and isinstance(raw, tuple) and len(raw) == 3:
-                status, value, headers = raw
-                return [status, value]
             if mode == "full" and isinstance(raw, tuple) and len(raw) == 3:
                 status, value, headers = raw
                 headers_map = {str(k).lower(): v for k, v in (headers or {}).items()}
@@ -976,9 +965,6 @@ class PathResolver:
 
             raw = await http_delete(url, cfg)
             mode = normalize_response_mode(cfg)
-            if mode == "lite" and isinstance(raw, tuple) and len(raw) == 3:
-                status, value, headers = raw
-                return [status, value]
             if mode == "full" and isinstance(raw, tuple) and len(raw) == 3:
                 status, value, headers = raw
                 headers_map = {str(k).lower(): v for k, v in (headers or {}).items()}
@@ -1190,7 +1176,7 @@ class PathResolver:
                 continue
 
             key = await self._get_segment_key(segment, scope)
-            # Attribute fallback: allow name access on non-mapping objects (e.g., response.status)
+            # Attribute fallback for path-accessible host/runtime objects.
             if isinstance(segment, Name) and not isinstance(
                 container, (Scope, collections.abc.Mapping)
             ):
@@ -2276,12 +2262,62 @@ class Evaluator:
                 # It's a literal (int, str, bool, None, etc.)
                 return node
 
+    def _scheme_query_segments(self, terms: List[Any]):
+        if len(terms) < 2 or not isinstance(terms[0], GetPath):
+            return None
+        head = terms[0]
+        if not (
+            self.path_resolver._extract_http_url(head)
+            or self.path_resolver._extract_file_locator(head)
+        ):
+            return None
+
+        head_loc = getattr(head, "loc", None) or {}
+        first_loc = getattr(terms[1], "loc", None) or {}
+        head_text = head_loc.get("text", "")
+        if first_loc.get("col") != head_loc.get("col", 0) + len(head_text):
+            return None
+
+        segments = []
+        for term in terms[1:]:
+            if isinstance(term, Code):
+                if len(term.nodes) != 1:
+                    raise SyntaxError("scheme query must contain one expression")
+                expr = term.nodes[0]
+                if len(expr) == 1 and isinstance(expr[0], (int, str, IString)):
+                    segments.append(Index(expr))
+                else:
+                    segments.append(FilterQuery(None, None, predicate_ast=expr))
+                continue
+            if isinstance(term, GetPath):
+                names = []
+                for i, segment in enumerate(term.segments):
+                    if not isinstance(segment, Name):
+                        return None
+                    text = segment.text
+                    if i == 0 and text.startswith("."):
+                        text = text[1:]
+                    names.append(Name(text))
+                segments.extend(names)
+                continue
+            return None
+        return segments
+
     async def _eval_expr(self, terms: List[Any], scope: Scope) -> Any:
         """Evaluates a single expression (a list of terms)."""
         if not terms:
             return None
 
         head_uneval = terms[0]
+
+        scheme_query = self._scheme_query_segments(terms)
+        if scheme_query is not None:
+            value = await self.path_resolver.get(head_uneval, scope)
+            return await self.path_resolver._apply_segments(
+                value,
+                scheme_query,
+                scope,
+            )
 
         # Handle assignment/deletion forms first, as they consume the whole expression.
         match head_uneval:
@@ -2718,6 +2754,14 @@ class Evaluator:
                             break
                     arg_end = split_at if split_at is not None else len(remaining_terms)
                     args_raw = remaining_terms[1:arg_end]
+
+                    if (
+                        func_name == "fn"
+                        and args_raw
+                        and isinstance(args_raw[0], Group)
+                    ):
+                        args_raw = list(args_raw)
+                        args_raw[0] = await self._eval(args_raw[0].nodes, scope)
 
                     self._dbg(
                         "SPECIAL",
@@ -3177,6 +3221,7 @@ class Evaluator:
             "int",
             "float",
             "string",
+            "id",
             "i-string",
             "list",
             "dict",
@@ -3301,6 +3346,12 @@ class Evaluator:
             ):
                 ann_name = spec.segments[0].text
             if ann_name in PRIMITIVES:
+                if ann_name == "id":
+                    return (
+                        isinstance(val, str)
+                        and not isinstance(val, IString)
+                        and val.startswith("id:")
+                    )
                 return _type_name(val) == ann_name
             # Sig alias (union of primitives/scopes)
             if isinstance(resolved, Sig):
@@ -4080,7 +4131,7 @@ class Evaluator:
                 )
 
                 vec: list[int] = []
-                any_scope_constraints = False
+                any_specific_constraints = False
 
                 def _dist(arg_scope: Scope, ann_scope: Scope) -> int | None:
                     if arg_scope is ann_scope:
@@ -4122,15 +4173,30 @@ class Evaluator:
                         ann_scope = spec
 
                     if isinstance(ann_scope, Scope):
-                        any_scope_constraints = True
+                        any_specific_constraints = True
                         if not isinstance(arg_val, Scope):
                             return None
                         d = _dist(arg_val, ann_scope)
                         if d is None:
                             return None
                         vec.append(d)
+                        continue
 
-                if not any_scope_constraints:
+                    ann_name = None
+                    if (
+                        isinstance(spec, GetPath)
+                        and len(spec.segments) == 1
+                        and isinstance(spec.segments[0], Name)
+                    ):
+                        ann_name = spec.segments[0].text
+                    if ann_name == "id":
+                        any_specific_constraints = True
+                        vec.append(0)
+                    elif ann_name == "string":
+                        any_specific_constraints = True
+                        vec.append(1)
+
+                if not any_specific_constraints:
                     return None
                 return tuple(vec)
 
@@ -4521,24 +4587,7 @@ class Evaluator:
                     _RS = None
 
                 if _RS is not None and isinstance(result, _RS):
-                    inner = result.value
-                    # If the ReturnSignal carried a Response, return that Response (data).
-                    if isinstance(inner, Response):
-                        return inner
-                    # Otherwise return the payload value directly.
-                    return inner
-
-                if isinstance(result, Response):
-                    # Unwrap legacy Response(return ...) sentinel for compatibility.
-                    if (
-                        isinstance(result.status, PathLiteral)
-                        and isinstance(result.status.inner, GetPath)
-                        and len(result.status.inner.segments) == 1
-                        and isinstance(result.status.inner.segments[0], Name)
-                        and result.status.inner.segments[0].text == "return"
-                    ):
-                        return result.value
-                    return result
+                    return result.value
                 return result
 
             case _ if callable(func):

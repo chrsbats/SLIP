@@ -6,13 +6,13 @@ It comes last on purpose. The earlier guides teach how to use the language. This
 
 Use the practical guides first:
 
-- `docs/01 SLIP Scripting.md`
-- `docs/02 SLIP Programs.md`
-- `docs/03 SLIP Advanced.md`
-- `docs/Appendix A - StdLib Reference.md`
-- `docs/Appendix B - SLIP Style Guide.md`
+- [SLIP Scripting](<01 SLIP Scripting.md>)
+- [SLIP Programs](<02 SLIP Programs.md>)
+- [SLIP Advanced](<03 SLIP Advanced.md>)
+- [StdLib Reference](<Appendix A - StdLib Reference.md>)
+- [SLIP Style Guide](<Appendix B - SLIP Style Guide.md>)
 
-## 1. The main goal: remove accidental complexity
+## Remove Accidental Complexity
 
 Most languages ask you to carry around a lot of extra machinery:
 
@@ -32,35 +32,25 @@ SLIP tries to cut that down by using a small number of ideas repeatedly:
 - effects and outcomes are represented explicitly
 - local rebinding is preferred over mutation at a distance
 
-The point is not minimalism for its own sake. The point is to make more of the language feel predictable.
+The point is not minimalism for its own sake. It is to make more of the language predictable while letting programmers say more with fewer moving parts.
 
-## 2. Succinctness is power, but readability comes first
-
-One of the core values behind SLIP is:
-
-> Succinctness is power.
-
-The language should let you say more with fewer moving parts.
-
-But that is only half of the goal.
-
-SLIP is not trying to be terse in the sense of becoming cryptic. The target is code that is:
+Succinct code still has to read clearly. The target is code that is:
 
 - compact because the abstractions are better
 - readable on first encounter
 - close to pseudocode when possible
 - understandable without mentally decoding a lot of syntax trivia
 
-This is why the language keeps pushing toward:
+The language therefore favors:
 
 - direct path-based access
 - a small number of evaluation rules
 - ordinary function calls in places where other languages introduce special syntax
 - explicit structure instead of hidden precedence and hidden control flow
 
-The ideal result is not “shortest possible code”. It is “the shortest code that still reads clearly the first time”.
+The goal is not the shortest possible code. It is the shortest code that still reads clearly the first time.
 
-## 3. The main lineage: Rebol, Lisp/Scheme, Forth, and Logo
+## Language Lineage
 
 SLIP borrows ideas from many languages, but its main philosophical lineage is narrower than that.
 
@@ -119,7 +109,7 @@ SLIP is not stack-based and does not look like Forth, but it shares a related in
 - execution order should be simple
 - the reader should not have to simulate a large hidden machine
 
-One way to describe SLIP to language people is that it has something like a reverse-Forth instinct: the operational flow matters, but the surface syntax is designed for readability rather than stack notation.
+The shared idea is that operational flow should remain visible, while SLIP's surface syntax favors readability rather than stack notation.
 
 ### Logo
 
@@ -129,7 +119,7 @@ SLIP is not only for children, and it is not an educational language in the narr
 
 That is part of why the language wants to feel like a domain-shaped instruction language rather than a pile of syntax rules.
 
-## 4. Left-to-right evaluation is a design choice
+## Left-To-Right Evaluation
 
 SLIP's most visible philosophical choice is that infix evaluation is left-to-right.
 
@@ -155,7 +145,7 @@ SLIP prefers a simpler rule:
 
 The tradeoff is obvious: this differs from mainstream operator precedence. But the payoff is that control becomes explicit rather than implicit.
 
-## 5. Dumb parser, smart evaluator
+## Structural Parsing, Runtime Meaning
 
 SLIP also makes a strong architectural choice: parsing stays structural, not semantic.
 
@@ -170,7 +160,7 @@ That supports several other goals at once:
 
 This is why SLIP can treat `[...]` as first-class code and why features like `run`, `run-with`, `inject`, and `splice` fit naturally into the language rather than feeling bolted on.
 
-## 6. Paths replace a pile of separate concepts
+## Paths Unify Access And Update
 
 In many languages, these feel like separate systems:
 
@@ -193,7 +183,7 @@ This does not mean every path use is identical. Read, write, delete, and pipe ar
 
 That is why path syntax ends up doing so much work in SLIP.
 
-## 7. Functions instead of keywords
+## Functions Instead Of Keywords
 
 Another core bet is that many things usually treated as syntax should instead be ordinary callable behavior.
 
@@ -213,25 +203,9 @@ This has two important consequences:
 
 The language still has a few unavoidable special cases. Assignment syntax is one. Short-circuiting logical operators are another. But the general direction is clear: special syntax should be rare.
 
-## 8. Metaprogramming without a second language
+## Metaprogramming Without A Second Language
 
-SLIP keeps metaprogramming, but it tries to remove the need for a separate macro world.
-
-That is one of the language's central philosophical choices.
-
-In many languages, advanced abstraction means stepping into a second cognitive layer:
-
-- macros
-- template systems
-- hygiene rules
-- compile-time rewriting languages
-- special privileged syntax transformation tools
-
-SLIP tries to avoid that split.
-
-Code is already data.
-Evaluation is already explicit.
-The language already has runtime tools like:
+SLIP keeps metaprogramming in the normal runtime model instead of introducing a separate macro language. Code is already data, evaluation is explicit, and the language provides tools such as:
 
 - `run`
 - `run-with`
@@ -239,52 +213,27 @@ The language already has runtime tools like:
 - `inject`
 - `splice`
 
-So metaprogramming becomes a more normal form of programming with code values.
+These make metaprogramming a direct form of programming with code values.
 
 ```slip
+x: 10
 c: [ x + 1 ]
 run c
+-- => 11
 ```
 
 This does not make advanced metaprogramming trivial. But it does mean ordinary users do not have to learn a separate macro system just to understand the language.
 
-That is important because SLIP wants advanced machinery to stay optional.
-
-You should be able to ignore metaprogramming for a long time and still write useful, idiomatic SLIP.
-
-The philosophy is:
-
-- power users can assemble and evaluate code dynamically
-- ordinary users do not have to worry about dirty macros, hygiene, or a compile-time sub-language
-
-## 9. Code is data, but that does not mean “use metaprogramming everywhere”
-
-SLIP treats code as a first-class value because it makes the language more uniform and more extensible.
-
-```slip
-c: [ x + 1 ]
-run c
-```
-
-That power supports:
-
-- dynamic code assembly
-- reusable code templates
-- user-defined control abstractions
-- explicit host-controlled evaluation
-
-But the philosophy here is not “everything should be metaprogrammed”.
-
-The preferred order is still:
+Advanced machinery remains optional. You can ignore metaprogramming for a long time and still write useful, idiomatic SLIP. When choosing an implementation, prefer:
 
 1. plain function
 2. closure
 3. scope/prototype composition
 4. only then dynamic code tools like `run`, `call`, `inject`, and `splice`
 
-The language makes advanced code generation possible. It does not require it for ordinary work.
+Power users can assemble and evaluate code dynamically without introducing a compile-time sub-language. Ordinary code does not need to.
 
-## 10. Shadow, don't patch
+## Shadow, Don't Patch
 
 One of SLIP's strongest design principles is locality.
 
@@ -301,26 +250,28 @@ In practice:
 - behavior changes should stay near the code that needs them
 - code should not silently change far-away behavior as a side effect
 
-This is the reasoning behind the repository's guidance:
+This leads to the guidance:
 
 > Shadow, don't patch.
 
 It is not just a style preference. It is a way of preserving locality of reasoning.
 
-## 11. Behavior belongs in dispatch rules, not giant conditionals
+## Behavior Belongs In Dispatch Rules
 
 SLIP uses dispatch to make behavior more declarative.
 
 Instead of writing one function full of branching logic, you can define separate implementations for separate cases.
 
 ```slip
+Character: scope #{}
 describe: fn {x: Character} [ "character" ]
 describe: fn {x} [ "other" ]
+
+#[describe (create Character), describe 10]
+-- => #["character", "other"]
 ```
 
-The current dispatch model is intentionally simpler than earlier versions of the docs suggested.
-
-The philosophical point is not “make dispatch maximally clever”. The point is:
+The goal is not to make dispatch maximally clever. It is to:
 
 - let programmers express separate cases separately
 - let the runtime choose among them predictably
@@ -328,33 +279,32 @@ The philosophical point is not “make dispatch maximally clever”. The point i
 
 This matches the broader SLIP preference for decomposing behavior into small rules rather than building large monolithic handlers.
 
-## 12. Effects and outcomes are part of normal program design
+## Effects And Outcomes
 
 Many languages treat output, logging, and error handling as separate concerns with different conventions and escape hatches.
 
 SLIP tries to make them more uniform.
 
-- `response` gives a structured way to talk about success and failure
-- `do` captures both outcome and emitted effects
+- ordinary values are ordinary function results
+- `fail` signals domain failures with structured details
+- `do` captures a direct `Outcome`, including its value or error and emitted effects
 - `emit` represents intended side effects explicitly
 
 This supports a style where the core logic of a program can stay inspectable and testable.
 
 It also helps embedded use cases, because the host can decide what to do with effects rather than having every script directly own that policy.
 
-## 13. The host boundary should be explicit
+## Keep The Host Boundary Explicit
 
 SLIP is meant to be embedded.
 
 That means the boundary between host-managed data and live SLIP runtime values matters.
 
-Recent language decisions in this repository push toward explicitness here too:
+SLIP keeps this boundary explicit:
 
 - host objects are exposed deliberately
 - task lifecycle is host-aware
 - rehydration of typed values is explicit with `as-slip` outside the host-object boundary
-
-That last point is important.
 
 Instead of automatically turning every dict with special structure into a live runtime object everywhere, SLIP localizes that behavior to clear boundaries.
 
@@ -366,17 +316,14 @@ For persisted host objects there is a useful split:
 Outside that host boundary, explicit conversion is preferred:
 
 ```slip
-obj: as-slip (host-data "player-1")
+obj: as-slip (host-data 'id:player-1')
 ```
 
-This matches the language's broader philosophy:
+This keeps powerful conversion behavior available without making it invisible.
 
-- powerful boundaries are good
-- invisible magic at boundaries is less good
+## Practical Background Work
 
-## 14. Background work should be practical, not ornamental
-
-The concurrency story in current SLIP is centered on `task`.
+SLIP centers background work on `task`.
 
 That is a philosophy choice too.
 
@@ -387,9 +334,9 @@ The language is aiming at practical embedded/background work:
 - timers
 - host-managed side work
 
-Rather than collecting concurrency mechanisms for their own sake, the current design keeps the story centered on the part that has a clear product use case.
+Rather than collecting concurrency mechanisms for their own sake, the language stays focused on practical product use cases.
 
-## 15. World modeling shaped the language, but it is not only for games
+## World Modeling Beyond Games
 
 Historically, SLIP was shaped by the needs of world modeling and MUD-like systems.
 
@@ -408,11 +355,11 @@ Even if you are not building a game, that background still matters. Many busines
 - jobs instead of NPC brains
 - events instead of world effects
 
-So the philosophy is not “SLIP is only for games”. It is that a language forged for dynamic, stateful worlds often generalizes well to other complex domains.
+SLIP is not only for games. A language shaped by dynamic, stateful worlds can also serve other complex domains.
 
-## 16. What SLIP steals selectively
+## Borrow Ideas Selectively
 
-Outside its main lineage, SLIP also steals useful ideas from other places when they fit.
+Outside its main lineage, SLIP borrows useful ideas when they fit.
 
 Examples:
 
@@ -423,40 +370,17 @@ Examples:
 
 But these are borrowed pieces, not the identity of the language.
 
-The philosophy is not “merge every good idea ever invented”.
+The rule is:
 
-The philosophy is:
-
-- steal the useful part
+- borrow the useful part
 - remove as much surrounding complexity as possible
 - make it fit the existing mental model
 
-## 17. The tradeoff: explicitness over convention
+## The Tradeoff And Payoff
 
-SLIP is not trying to feel exactly like mainstream languages.
+SLIP asks users to accept nonstandard choices: left-to-right evaluation, heavy use of paths, code as ordinary data, and function-oriented control flow. In return, it offers fewer implicit conventions and a smaller set of ideas that compose across the language.
 
-It asks the user to accept a few nonstandard choices:
-
-- no precedence-based infix evaluation
-- heavy use of paths
-- code/data duality in normal programming
-- function-oriented control flow
-
-In return, it tries to make the language feel more uniform.
-
-That is the central tradeoff:
-
-- fewer implicit conventions
-- more explicit structure
-- smaller number of ideas doing more work
-
-Whether that is “better” depends on taste and domain. But it is a coherent design direction.
-
-## 18. The payoff: say more with fewer systems
-
-The philosophical claim behind SLIP is that power does not come from piling on unrelated features.
-
-It comes from having a small number of abstractions that compose well.
+The claim is not that unusual syntax is automatically better. It is that power can come from coherent abstractions rather than unrelated features.
 
 When that works, the benefits are practical:
 
@@ -466,10 +390,4 @@ When that works, the benefits are practical:
 - less ceremony around common tasks
 - clearer adaptation of behavior to local context
 
-That is the real goal of the language.
-
-Not novelty.
-
-Not purity.
-
-Just a tool that lets you focus more directly on the world, system, or workflow you are trying to model.
+The goal is a tool that lets you focus more directly on the world, system, or workflow you are trying to model.

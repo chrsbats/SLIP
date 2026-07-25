@@ -4,7 +4,7 @@ A pretty-printer for SLIP data structures.
 import collections.abc
 
 from slip.slip_datatypes import (
-    Code, List, IString, SlipFunction, Response,
+    Code, List, IString, SlipFunction,
     PathLiteral,
     GetPath, SetPath, DelPath, PipedPath, Name, Index, Slice, FilterQuery, Group,
     Root, Parent, Pwd, PathSegment, PostPath, ByteStream, MultiSetPath, IdentityBoundary
@@ -67,7 +67,6 @@ class Printer:
             Code: self._pformat_code,
             List: self._pformat_list_slip,
             ByteStream: self._pformat_byte_stream,
-            Response: self._pformat_response,
             SlipFunction: self._pformat_slip_function,
             SlipDict: self._pformat_dict,
             MultiSetPath: self._pformat_multi_set_path,
@@ -330,11 +329,6 @@ class Printer:
     def _pformat_parent(self, obj, level): return "../"
     def _pformat_pwd(self, obj, level): return "./"
     def _pformat_identity(self, obj, level): return "::"
-
-    def _pformat_response(self, obj, level):
-        status = self.pformat(obj.status, level)
-        value = self.pformat(obj.value, level)
-        return f"response {status} {value}"
 
     def _pformat_slip_function(self, obj, level):
         args = self.pformat(obj.args, level)

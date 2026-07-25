@@ -76,17 +76,17 @@ def test_where_in_resolver_transaction():
 
     withdraw: fn { this: Bank, amount |where amount > 0 and this.balance >= amount } [
         this.balance: this.balance - amount
-        response ok this.balance
+        this.balance
     ]
 
     withdraw: fn { this: Bank, amount } [
-        response err "insufficient-funds"
+        fail "insufficient-funds"
     ]
 
     res1: Bank |withdraw 40
-    res2: Bank |withdraw 100
+    res2: do [ Bank |withdraw 100 ]
 
-    #[ res1.value, res2.status ]
+    #[ res1, res2.status, res2.error.message ]
     """
     res = run_slip(code)
     if res.status != 'ok':
@@ -94,7 +94,7 @@ def test_where_in_resolver_transaction():
         print(res.error_message)
         print("EFFECTS:", res.side_effects)
     assert res.status == 'ok'
-    assert res.value == [60, "`err`"]
+    assert res.value == [60, "`err`", "insufficient-funds"]
 
 def test_where_syntax_error_multiple_clauses():
     # Grammar only allows one optional sig_where; a second |where should be a parse error.

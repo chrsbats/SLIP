@@ -68,20 +68,18 @@ To get started, think of a SLIP script as:
 - evaluated in order
 - with the final expression becoming the script's result
 
-The next thing to learn is the most important rule for reading those expressions: how evaluation works.
-
 ## How do expressions evaluate?
 
-The next thing most readers need to know is how to read a line of SLIP correctly.
+Read a SLIP expression in the order it appears on the page.
 
 SLIP evaluates infix operators strictly left-to-right.
 
 ```slip
--- In most languages:
-10 + 5 * 2 = 10 + 10 = 20
+-- Most languages evaluate the multiplication first, producing 20.
 
--- In SLIP:
-10 + 5 * 2 = 15 * 2 = 30
+-- SLIP reads from left to right: 10 + 5 is 15, then 15 * 2 is 30.
+10 + 5 * 2
+-- => 30
 ```
 
 Use parentheses `(...)` when you need a grouped sub-expression:
@@ -174,7 +172,7 @@ For basic scripting, the values to reach for first are:
 - lists
 - dicts
 
-The next step is learning how to call functions and put those values through control flow.
+With those basic values, you can call functions and use control flow.
 
 ---
 
@@ -280,9 +278,7 @@ The common pattern is:
 
 ## How do I query and update collections?
 
-The next thing most scripts want to do is pull specific data out of a list or update matching items.
-
-You can index, slice, filter, and “pluck” with path syntax.
+Path syntax lets you index, slice, filter, and “pluck” values from collections.
 
 ### Filtering lists with `[ ... ]`
 
@@ -322,7 +318,7 @@ When transforming JSON, you’ll usually use one of these patterns:
 
 ### Build a new list or dict
 
-This pattern reads from an input list and constructs a new list of output rows.
+This pattern reads from an input list and constructs a new result.
 
 ```slip
 players: #[
@@ -352,7 +348,20 @@ players: #[
     #{ name: "Jaina", hp: 45  }
 ]
 
+-- Pluck every HP value.
+players.hp
+-- => #[120, 45]
+
+-- Select HP values below 50.
+players.hp[< 50]
+-- => #[45]
+
+-- Replace each selected value with itself times 1.1.
 players.hp[< 50]: * 1.1
+-- => #[49.5]
+
+players.hp
+-- => #[120, 49.5]
 ```
 
 The “filter then pluck” version is equivalent:
@@ -375,6 +384,25 @@ For collection work, the usual progression is:
 
 This is the core scripting workflow: load data, reshape it, and save it again.
 
+Here is the complete shape:
+
+```slip
+-- Read JSON.
+data: file://input.json
+
+-- Filter and reshape it.
+wounded: data.players[.hp < 50]
+report: #{
+    wounded-count: len wounded,
+    names: wounded.name
+}
+
+-- Write JSON.
+file://out.json: report
+```
+
+The following sections unpack each step.
+
 ### Read from a file (`file://`)
 
 The file extension controls parsing for structured formats:
@@ -387,18 +415,15 @@ The file extension controls parsing for structured formats:
 data: file://input.json
 ```
 
-### Bind first, then query
+### Query a scheme read directly
 
-In the current interpreter, **you cannot filter/pluck directly on the same `file://...` or `http://...` expression**.
-
-This is illegal:
+Read paths can continue into indexes, filters, and fields. The query is applied to the value after the file is loaded:
 
 ```slip
--- ❌ does not work (scheme GETs can't include a trailing query)
-names: file://input.json[0]
+first-name: file://input.json[0].name
 ```
 
-Rule: with `file://...` and `http://...`, **bind first, then query**. Don’t attach `[...]` or `.field` directly to the scheme path; always query the bound value.
+Binding first is also useful when you reuse the data or want to make a longer transformation easier to read:
 
 ```slip
 data: file://input.json
@@ -411,13 +436,10 @@ names: data.players.name
 resp: http://api.example.com/players.json
 ```
 
-Again: bind first, then query.
+HTTP reads work the same way, so a short query can stay attached to the path:
 
 ```slip
-players: http://api.example.com/players.json
-
--- If the API returns a list of player objects:
-names: players.name
+names: http://api.example.com/players.json[.hp > 100].name
 ```
 
 ### Write to a file
@@ -435,8 +457,8 @@ file://out.json: out
 
 The standard pattern is:
 
-1. bind the data source to a name
-2. query or transform the bound value
+1. read and query the data source directly, or bind it when that is clearer
+2. transform the resulting value
 3. write out the result if needed
 
 ---
@@ -483,72 +505,67 @@ count-down 3
 There are two kinds of “things that go wrong”:
 
 1) **Script errors** (type errors, missing paths, etc.) normally stop the script.
-2) **Expected failure** is handled as data (e.g., `response err ...`).
+2) **Expected domain failure** is signaled with `fail`, optionally with a code and structured data.
 
-### Catching a crash with `do`
+Functions return ordinary values. Use `return` when you want to leave a function early:
 
-`do` runs a block and returns:
+```slip
+find-player: fn {players, player-id} [
+    matches: players[.id = player-id]
+    if [(len matches) = 0] [
+        fail `not-found` #{ player-id: player-id }
+    ]
+    return matches[0]
+]
+```
 
-- `log.outcome`: a `response`
-- `log.effects`: the emitted effects during that block
+### Capturing failures with `do`
 
-If the block returns normally, `log.outcome` is `response ok <value>`.
-If the block raises an error, `log.outcome` is `response err <message>`.
-If the block already returns a `response`, `do` preserves it.
+`do` runs a block and returns an `Outcome` directly:
 
-Tip: `ok` and `err` are standard aliases provided by the core library.
+- `.status`: `ok` or `err`
+- `.value`: the ordinary result on success
+- `.error`: structured failure details on error
+- `.effects`: effects emitted during the block
+
+For a domain failure, `.error` includes `.kind`, `.code`, `.message`, and `.data`. Runtime and protocol failures use the same top-level `Outcome` shape.
 
 ```slip
 log: do [
     10 / 0
 ]
 
-if [log.outcome.status = err] [
-    print "It failed: {{log.outcome.value}}"
+if [log.status = err] [
+    print "It failed: {{log.error.message}}"
 ] [
-    print "It worked: {{log.outcome.value}}"
+    print "It worked: {{log.value}}"
 ]
 ```
 
-### HTTP without crashing (lite/full mode)
+### HTTP failures and full responses
 
-By default, HTTP raises an error on non-2xx. If you want to handle it yourself, request a response mode:
-
-- preferred: `#(response-mode: \`lite\`)` returns `#[status, value]`
-- preferred: `#(response-mode: \`full\`)` returns `#{ status: <int>, value: <any>, meta: #{ headers: #{...} } }`
-- legacy `#(lite: true)` and `#(full: true)` are still accepted
+By default, a successful HTTP read returns its decoded body. A non-2xx response signals a structured protocol failure, which `do` can capture:
 
 ```slip
-resp: http://api.example.com/players.json#(response-mode: `lite`)
-status: resp[0]
-body: resp[1]
+request: do [ http://api.example.com/players.json ]
 
-if [status != 200] [
-    print "Request failed with status {{status}}"
+if [request.status = err] [
+    print "Request failed with HTTP status {{request.error.protocol-status}}"
 ] [
-    names: body.players.name
+    names: request.value.players.name
     file://out.json: #{ names: names }
 ]
 ```
 
-### One complete script: JSON in -> transform -> JSON out
+Request `#(response-mode: \`full\`)` only when you need the full HTTP response envelope, including status and headers. Full mode returns `#{ status: <int>, value: <body>, meta: #{ headers: #{...} } }` and leaves non-2xx handling to your code.
 
 ```slip
--- 1) Read JSON
-data: file://input.json
-
--- 2) Extract and filter
-players: data.players
-wounded: players[.hp < 50]
-
--- 3) Transform into a new shape
-report: #{
-    wounded-count: len wounded,
-    names: wounded.name
-}
-
--- 4) Write JSON
-file://out.json: report
+resp: http://api.example.com/players.json#(response-mode: `full`)
+if [(resp.status >= 200) and (resp.status < 300)] [
+    print resp.value
+] [
+    print "Request failed with HTTP status {{resp.status}}"
+]
 ```
 
 ### Takeaway
@@ -556,9 +573,9 @@ file://out.json: report
 For everyday scripting:
 
 - use `print` or `emit` for output
-- use `response` for expected success/failure values
+- return ordinary values and use `fail` for failures
 - use `do` when you want to capture a failure instead of stopping immediately
 
-If you can do these seven things, you know enough SLIP to write useful self-contained scripts.
+With these tools, you know enough SLIP to write useful self-contained scripts.
 
 ---

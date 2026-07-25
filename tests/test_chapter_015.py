@@ -1,6 +1,5 @@
 import pytest
 from slip import ScriptRunner
-from slip.slip_datatypes import Response, PathLiteral, GetPath, Name
 from slip.slip_runtime import SlipObject
 
 
@@ -28,7 +27,7 @@ emit #["a", "b"] "two"
 
 
 @pytest.mark.asyncio
-async def test_pure_function_emits_effects_and_returns_response_ok_with_new_state():
+async def test_pure_function_emits_effects_and_returns_new_state():
     runner = ScriptRunner()
     src = """
 -- Define a function that describes effects and returns a new state.
@@ -46,31 +45,23 @@ calculate-fireball-impact: fn {caster, target, area} [
         element: `fire`
     }
 
-    -- Return new state (pure data) as an ok response
+    -- Return new state as ordinary data.
     new-target-state: clone target
     new-target-state.hp: target.hp - final-damage
-    respond ok new-target-state
+    new-target-state
 ]
 
 -- Inputs
 caster: #{ name: "Mage" }
 target: #{ id: 't1', hp: 100, fire-resistance: 10, position: #{ x: 1, y: 2 } }
 
--- Call the function; the script's final value is a Response object (not unwrapped).
 calculate-fireball-impact caster target none
 """
     res = await runner.handle_script(src)
     assert res.status == "ok", res.error_message
 
-    # Verify we got a normalized response back, and side effects are present and ordered
-    resp = res.value
-    assert isinstance(resp, dict), (
-        f"expected host-normalized response dict, got {type(resp).__name__}"
-    )
-    assert resp.get("status") == "ok"
-
     # New target state should be a plain dict with updated hp (100 - (50 - 10) = 60)
-    state = resp.get("value")
+    state = res.value
     assert isinstance(state, dict)
     assert state["hp"] == 60
 

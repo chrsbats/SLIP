@@ -18,6 +18,13 @@ The basic progression in this guide is:
 
 **The Solution:** Split your code into modules and use `import`.
 
+Start with the smallest useful form:
+
+```slip
+math: import `file://math.slip`
+result: math.add 10 20
+```
+
 When you `import` a module, SLIP gives you a **fresh shadow scope** over that module's exports.
 
 That detail matters because it supports one of SLIP's core design ideas:
@@ -88,6 +95,7 @@ runner: fn {} [
 
 The same idea makes imports composable:
 
+<!-- slip-test: setup=math-module -->
 ```slip
 math1: import `file://math.slip`
 math2: import `file://math.slip`
@@ -118,7 +126,7 @@ This example uses plain dict/list state and mutates it in place.
 ```slip
 apply-damage: fn {state, target-id, amount} [
   state.hp[target-id]: state.hp[target-id] - amount
-  response ok state.hp[target-id]
+  state.hp[target-id]
 ]
 ```
 
@@ -133,6 +141,7 @@ apply-damage: combat.apply-damage
 
 **File: `main.slip`**
 
+<!-- slip-test: setup=three-file-module -->
 ```slip
 world: import `file://world.slip`
 
@@ -140,35 +149,13 @@ state: #{
   hp: #{ "p1": 120 }
 }
 
--- Before:
--- state.hp["p1"] == 120
-
 new-hp: world.apply-damage state "p1" 10
 
--- After:
--- new-hp == 110
--- state.hp["p1"] == 110
+#[ new-hp, state.hp["p1"] ]
+-- => #[110, 110]
 ```
 
 That is enough to build multi-file programs today.
-
-### 1.5 Wrapper scope pattern
-
-For larger programs, a wrapper scope is often the cleanest way to customize one dependency while keeping the rest unchanged.
-
-```slip
-math: import `file://math.slip`
-
-better-math: scope #{}
-run-with [
-  add: fn {a, b} [ math.add a b + 1 ]
-  mul: math.mul
-] better-math
-
-#[ better-math.add 2 3, better-math.mul 2 3 ]
-```
-
-This is still just structured shadowing: reuse most of the original module, but replace the names you want locally.
 
 ### Takeaway
 
@@ -242,7 +229,7 @@ Player: scope #{} |inherit Character
  -- Free function dispatching on the receiver type
 heal: fn {p: Player, amount} [
   p.hp: p.hp + amount
-  response ok p.hp
+  return p.hp
 ]
 
 p: create Player
@@ -254,19 +241,19 @@ You can define multiple implementations with the same name; dispatch chooses the
 ```slip
 heal: fn {c: Character, amount} [
   c.hp: c.hp + amount
-  response ok c.hp
+  return c.hp
 ]
 
 heal: fn {p: Player, amount} [
   -- players heal 2x
   p.hp: p.hp + (amount * 2)
-  response ok p.hp
+  return p.hp
 ]
 
 c: create Character
 p: create Player
 
-#[ (c |heal 10).value, (p |heal 10).value ]
+#[ c |heal 10, p |heal 10 ]
 ```
 
 ### 2.4 Configure an instance fluently
@@ -277,6 +264,22 @@ A common pattern is to create and configure in one expression:
 p: create Player [ hp: 150 ]
 p.hp
 ```
+
+### 2.5 Customize with a wrapper scope
+
+Once you are using scopes, a wrapper scope can customize one dependency while keeping the rest unchanged:
+
+```slip
+math: import `file://math.slip`
+
+better-math: scope #{}
+better-math.add: fn {a, b} [ math.add a b + 1 ]
+better-math.mul: math.mul
+
+#[ better-math.add 2 3, better-math.mul 2 3 ]
+```
+
+This is structured shadowing: reuse most of the imported module, but replace the names you need locally.
 
 ### Takeaway
 
@@ -337,16 +340,16 @@ Write an `apply-*` function. In the resolver model, it takes `this` first.
 
 Idiomatic SLIP style is to define transactions as **free functions** that dispatch on the resolver type (rather than attaching them to the resolver scope).
 
-**Committed writes are legal only when the write target path is syntactically rooted at `this`.** You cannot commit through aliases (e.g. `pos: this.position; pos[id]: ...`), and you can never commit to a path containing `::`.
-
 ```slip
 apply-damage: fn {this: Combat, target-id, amount} [
   next: this.hp[target-id] - amount
   if [next < 0] [ next: 0 ]
   this.hp[target-id]: next
-  response ok next
+  return next
 ]
 ```
+
+Resolver commits stay rooted at the owning resolver: the write target must begin with `this`, and a path containing `::` is always read-only. Write `this.hp[target-id]: next` directly rather than committing through an alias such as `hp: this.hp; hp[target-id]: next`.
 
 ### 3.3 Step 3: call the transaction
 
@@ -376,38 +379,41 @@ Use a resolver when one part of the program should own the truth for a domain.
 
 ---
 
-### How do I add rules and errors in the transaction?
+## How do I add rules and errors in the transaction?
 
-**The Problem:** "My `apply-damage` function works, but it allows negative damage, which heals the player. I need to validate the input and stop the script if something is wrong."
+**The Problem:** "My `apply-damage` function works, but it allows negative damage, which heals the player. I need to reject invalid input before committing a change."
 
-**The Solution:** Use `response err` to reject invalid requests.
+**The Solution:** Use `fail` to reject invalid requests with structured details.
 
 ### 4.1 Step 1: reject invalid input
 
-Update the transaction to return `response err ...` for bad calls.
+Call `fail` for bad input. Successful calls still return an ordinary value.
 
 ```slip
 apply-damage: fn {this: Combat, target-id, amount} [
   if [amount <= 0] [
-    return (response err "invalid" "damage must be positive" #{ amount: amount })
+    fail `invalid` #{
+      message: "damage must be positive",
+      amount: amount
+    }
   ]
 
   next: this.hp[target-id] - amount
   if [next < 0] [ next: 0 ]
 
   this.hp[target-id]: next
-  response ok next
+  return next
 ]
 ```
 
 ### 4.2 Step 2: call it and handle failures
 
 ```slip
-out: Combat |apply-damage "p1" 10
+out: do [ Combat |apply-damage "p1" 10 ]
 if [out.status = ok] [
   print "new hp: {{out.value}}"
 ] [
-  print "damage failed: {{out.value}}"
+  print "damage failed: {{out.error.message}}"
 ]
 ```
 
@@ -415,12 +421,12 @@ This is the normal pattern for resolver transactions:
 
 - validate first
 - commit once
-- return a structured outcome
+- return an ordinary value, or signal a structured failure
 
 
 ---
 
-### How do I cross boundaries without breaking ownership?
+## How do I cross boundaries without breaking ownership?
 
 **The Problem:** "My `Combat` resolver needs to know which room a player is in to calculate range, but the `Spatial` resolver owns the room data. I don't want `Combat` to be able to accidentally move players."
 
@@ -433,6 +439,17 @@ In the resolver model, you split domains. For example:
 * `Combat` owns HP
 * `Spatial` owns rooms / positions
 
+```slip
+Spatial: resolver #{
+  room: #{ "p1": "room.square" }
+  on-fire: #{}
+}
+
+apply-ignite: fn {this: Spatial, target-id} [
+  this.on-fire[target-id]: true
+]
+```
+
 ### 5.2 Step 2: read from another resolver, but don’t write into it
 
 Reading is fine (authoritative read via `::`):
@@ -440,7 +457,7 @@ Reading is fine (authoritative read via `::`):
 ```slip
 apply-fire: fn {this: Combat, spatial: Spatial, target-id, amount} [
   room-id: spatial::room[target-id]
-  response ok room-id
+  return room-id
 ]
 ```
 
@@ -469,7 +486,7 @@ Instead, ask the owning resolver to do it:
 ```slip
 apply-fire: fn {this: Combat, spatial: Spatial, target-id, amount} [
   spatial |apply-ignite target-id
-  response ok none
+  return none
 ]
 ```
 
@@ -491,7 +508,7 @@ Cross-domain reads are fine. Cross-domain writes should go through the owner.
 ### 6.1 Step 1: point at committed state with `ref`
 
 ```slip
-p1-hp: ref Combat::hp["p1"]
+p1-hp: ref `Combat::hp["p1"]`
 ```
 
 Reading `p1-hp` gives the current HP. There is no write-through.
@@ -528,10 +545,10 @@ apply-damage: fn {this: Combat, target-id, amount} [
   next: this.hp[target-id] - amount
   if [next < 0] [ next: 0 ]
   this.hp[target-id]: next
-  response ok next
+  return next
 ]
 
-p1-hp: ref Combat::hp["p1"]
+p1-hp: ref `Combat::hp["p1"]`
 p1-wounded?: cell {hp: p1-hp} [ hp < 50 ]
 
 p1-wounded? -- false
@@ -556,16 +573,6 @@ That keeps observation separate from mutation.
 
 **The Solution:** Use multiple function definitions and let dispatch pick the right one.
 
-The practical dispatch rules are:
-
-- typed methods are considered before untyped methods
-- untyped methods are fallback-only
-- exact arity beats variadic methods
-- typed constraints can appear on any parameter, not just the first
-- when several typed methods match, scope specificity is compared in declared parameter order
-- guards (`|where`) refine ties within a tier
-- last-defined wins among equally matching peers
-
 For day-to-day programming, the main idea is simple: write small methods for distinct cases instead of one giant conditional.
 
 ### 7.1 Step 1: start with a plain fallback
@@ -573,7 +580,7 @@ For day-to-day programming, the main idea is simple: write small methods for dis
 ```slip
 apply-damage: fn {this: Combat, target-id, amount, kind} [
   this.hp[target-id]: this.hp[target-id] - amount
-  response ok none
+  return this.hp[target-id]
 ]
 ```
 
@@ -584,26 +591,14 @@ This is the general case. It matches any `kind`.
 Default style: put the `|where` clause directly inside the function signature.
 
 ```slip
-apply-damage: fn {
-    this: Combat, 
-    target-id, 
-    amount, 
-    kind 
-    |where kind = 'physical'
-} [
+apply-damage: fn {this: Combat, target-id, amount, kind |where kind = `physical`} [
     this.hp[target-id]: this.hp[target-id] - amount
-    response ok none
+    return this.hp[target-id]
 ]
 
-apply-damage: fn {
-    this: Combat, 
-    target-id, 
-    amount, 
-    kind 
-    |where kind = 'fire'
-} [
+apply-damage: fn {this: Combat, target-id, amount, kind |where kind = `fire`} [
     this.hp[target-id]: this.hp[target-id] - (amount * 2)
-    response ok none
+    return this.hp[target-id]
 ]
 ```
 
@@ -623,26 +618,14 @@ When a guard passes, that guarded method can beat an unguarded fallback.
 When several methods could apply, prefer distinct methods over nested conditionals.
 
 ```slip
-apply-damage: fn {
-    this: Combat, 
-    target-id, 
-    amount, 
-    kind 
-    |where kind = 'fire'
-} [
+apply-damage: fn {this: Combat, target-id, amount, kind |where kind = `fire`} [
     this.hp[target-id]: this.hp[target-id] - amount
-    response ok none
+    return this.hp[target-id]
 ]
 
-apply-damage: fn {
-    this: Combat, 
-    target-id, 
-    amount, 
-    kind 
-    |where kind = 'fire' and amount > 10
-} [
+apply-damage: fn {this: Combat, target-id, amount, kind |where (kind = `fire`) and (amount > 10)} [
     this.hp[target-id]: this.hp[target-id] - (amount * 3)
-    response ok none
+    return this.hp[target-id]
 ]
 ```
 
@@ -678,29 +661,25 @@ Even though the untyped method is broader, it is a fallback. It should not steal
 
 Typed parameters do not have to be first. This is useful for host-backed game verbs where the actor id naturally comes first:
 
+<!-- slip-test: setup=item-host -->
 ```slip
 Item: scope #{}
 
-take: fn {actor-id, obj: Item, original-text} [
-    #[ `typed`, actor-id, obj.id, original-text ]
+take: fn {actor-id, obj: Item} [
+    #[ `typed`, actor-id, obj.id ]
 ]
 
-take: fn {
-    actor-id,
-    object-id,
-    original-text
-    |where (type-of object-id) = `string`
-} [
-    take actor-id (host-object object-id) original-text
+take: fn {actor-id, object-id |where (type-of object-id) = `string`} [
+    take actor-id (host-object object-id)
 ]
 
 #[
-    take 'actor-1' (host-object 'item-1') 'take key',
-    take 'actor-1' 'item-1' 'take key'
+    take 'id:actor-1' (host-object 'id:item-1'),
+    take 'id:actor-1' 'id:item-1'
 ]
 -- => #[
---   #[`typed`, "actor-1", "item-1", "take key"],
---   #[`typed`, "actor-1", "item-1", "take key"]
+--   #[`typed`, "id:actor-1", "id:item-1"],
+--   #[`typed`, "id:actor-1", "id:item-1"]
 -- ]
 ```
 
@@ -736,12 +715,13 @@ kind-of-arg: fn {x: `i-string`} [ "i-string" ]
 -- => #["raw string", "i-string"]
 ```
 
-Use single quotes for raw ids that should match `` `string` ``. Use `` `i-string` `` when you intentionally want double-quoted interpolated strings.
+Use single quotes for canonical `id:` values that should match `` `string` ``. Use `` `i-string` `` when you intentionally want double-quoted interpolated strings.
 
 If a call has too many arguments and no variadic method matches, dispatch fails with `No matching method`.
 
 When dispatch cannot find a match, the error shows the runtime argument types, candidate signatures, and why each candidate did not match:
 
+<!-- slip-test: runtime-error -->
 ```slip
 choose: fn {x: `int`} [ "int" ]
 choose: fn {x |where x = `fire`} [ "fire" ]
@@ -778,7 +758,7 @@ Use dispatch when the code wants to read like separate rules.
 
 ---
 
-### How do I structure a tick loop?
+## How do I structure a tick loop?
 
 **The Problem:** "I'm building a game loop. I need a clear order of operations so that I don't have 'glitches' where the UI shows old data while the combat logic is half-finished."
 
@@ -823,11 +803,11 @@ apply-damage: fn {this: Combat, target-id, amount} [
 
   emit "combat" #{ type: `damage`, target: target-id, amount: amount, hp: next }
 
-  response ok next
+  return next
 ]
 ```
 
-Because emitted events are data and are ordered, a host can persist them for audit or deterministic replay.
+Because emitted events are data and are ordered, a host can persist them for audit. Complete events and deterministic handlers can also support replay.
 
 ### 8.3 Where emit fits: stage 1 vs stage 2
 
@@ -848,7 +828,7 @@ if [p1-wounded?] [
 ]
 ```
 
-### 8.6 Example: one tick using Chapter 6 values
+### 8.6 Example: one tick using the derived values above
 
 ```slip
 -- Commit stage
@@ -864,7 +844,7 @@ if [p1-wounded?] [
 
 Because emits are collected as data, tests can assert on them directly:
 
-- assert the transaction returns `response ok ...`
+- assert the transaction returns the expected value
 - assert a `"combat"` event was emitted with expected fields
 - assert UI narration was emitted in order
 
@@ -895,19 +875,19 @@ add |example { x: 2, y: 3 -> 5 }
 
 ### 9.2 Run tests for one function: `test`
 
-`test <function>` runs all attached examples and returns a `response`:
+`test <function>` runs all attached examples:
 
-- `response ok <count>` when all examples pass
-- `response err <failures>` when any example fails
+- it returns the number of passing examples when all examples pass
+- it signals a structured `test-failed` failure when any example fails
 
 ```slip
-res: test add
+res: do [ test add ]
 
 if [res.status = ok] [
   emit "test" "add passed {{res.value}} example(s)"
 ] [
   emit "test" "add failed"
-  emit "debug" res.value
+  emit "debug" res.error.data
 ]
 ```
 
@@ -926,7 +906,7 @@ run-with [
 summary: test-all math-mod
 ```
 
-`test-all` returns a `response` whose `.value` is a summary dict, including a per-function failure list when failures occur.
+`test-all` returns a summary dict when all tests pass. If any function fails, it signals `test-failed` with the summary in the failure data; wrap the call in `do` when you want to inspect that failure without stopping.
 
 ### Takeaway
 

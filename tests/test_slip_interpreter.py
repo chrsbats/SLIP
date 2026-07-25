@@ -683,18 +683,22 @@ async def test_operator_as_path_literal_getpath_unwrap(evaluator, root_scope):
     assert res == 7
 
 @pytest.mark.asyncio
-async def test_http_get_packaging_lite_and_full(monkeypatch, evaluator, root_scope):
-    # Patch http_get to return a tuple (status, value, headers)
+async def test_http_get_default_and_full_contract(
+    monkeypatch, evaluator, root_scope
+):
     async def fake_http_get(url, config=None):
-        return (200, {'ok': True}, {'Content-Type': 'application/json'})
+        if (config or {}).get('response-mode') == 'full':
+            return (200, {'ok': True}, {'Content-Type': 'application/json'})
+        return {'ok': True}
+
     import slip.slip_http as http_mod
     monkeypatch.setattr(http_mod, "http_get", fake_http_get)
-    # Build path with meta #(response-mode: 'lite')
-    meta_lite = Group([[ [SetPath([Name('response-mode')]), 'lite'] ]])
-    p_lite = GetPath([Name('http://example/api')], meta=meta_lite)
-    out_lite = await evaluator.path_resolver.get(p_lite, root_scope)
-    assert out_lite == [200, {'ok': True}]
-    # Full
+
+    out_default = await evaluator.path_resolver.get(
+        GetPath([Name('http://example/api')]), root_scope
+    )
+    assert out_default == {'ok': True}
+
     meta_full = Group([[ [SetPath([Name('response-mode')]), 'full'] ]])
     p_full = GetPath([Name('http://example/api')], meta=meta_full)
     out_full = await evaluator.path_resolver.get(p_full, root_scope)
@@ -702,11 +706,22 @@ async def test_http_get_packaging_lite_and_full(monkeypatch, evaluator, root_sco
     assert out_full['meta']['headers']['content-type'] == 'application/json'
 
 @pytest.mark.asyncio
-async def test_http_get_rejects_trailing_segments(evaluator, root_scope):
-    # Trailing path segments after http URL are rejected
+async def test_http_get_applies_trailing_segments_client_side(
+    monkeypatch, evaluator, root_scope
+):
+    fetched = {}
+
+    async def fake_http_get(url, config=None):
+        fetched['url'] = url
+        return {'extra': {'value': 42}}
+
+    import slip.slip_http as http_mod
+    monkeypatch.setattr(http_mod, "http_get", fake_http_get)
+
     p = GetPath([Name('http://example/api'), Name('extra')])
-    with pytest.raises(TypeError):
-        await evaluator.path_resolver.get(p, root_scope)
+    out = await evaluator.path_resolver.get(p, root_scope)
+    assert fetched['url'] == 'http://example/api'
+    assert out == {'value': 42}
 
 @pytest.mark.asyncio
 async def test_http_put_content_type_promotion_and_serialization(monkeypatch, evaluator, root_scope):
@@ -727,17 +742,25 @@ async def test_http_put_content_type_promotion_and_serialization(monkeypatch, ev
     assert captured['headers'].get('Content-Type') == 'application/json'
 
 @pytest.mark.asyncio
-async def test_http_post_packaging_lite_and_full(monkeypatch, evaluator, root_scope):
+async def test_http_post_default_and_full_contract(
+    monkeypatch, evaluator, root_scope
+):
     async def fake_http_post(url, payload, config=None):
-        return (201, {'id': 7}, {'Content-Type': 'application/json; charset=utf-8'})
+        if (config or {}).get('response-mode') == 'full':
+            return (
+                201,
+                {'id': 7},
+                {'Content-Type': 'application/json; charset=utf-8'},
+            )
+        return {'id': 7}
+
     import slip.slip_http as http_mod
     monkeypatch.setattr(http_mod, "http_post", fake_http_post)
-    # lite
-    meta_lite = Group([[ [SetPath([Name('response-mode')]), 'lite'] ]])
-    pp_lite = PostPath([Name('http://example/items')], meta=meta_lite)
-    out_lite = await evaluator.path_resolver.post(pp_lite, {'x': 1}, root_scope)
-    assert out_lite == [201, {'id': 7}]
-    # full
+
+    pp_default = PostPath([Name('http://example/items')])
+    out_default = await evaluator.path_resolver.post(pp_default, {'x': 1}, root_scope)
+    assert out_default == {'id': 7}
+
     meta_full = Group([[ [SetPath([Name('response-mode')]), 'full'] ]])
     pp_full = PostPath([Name('http://example/items')], meta=meta_full)
     out_full = await evaluator.path_resolver.post(pp_full, {'x': 1}, root_scope)
@@ -813,17 +836,21 @@ async def test_get_bound_pathliteral_returned_verbatim(evaluator, root_scope):
     assert out is lit
 
 @pytest.mark.asyncio
-async def test_http_delete_packaging_lite_and_full(monkeypatch, evaluator, root_scope):
+async def test_http_delete_default_and_full_contract(
+    monkeypatch, evaluator, root_scope
+):
     async def fake_http_delete(url, config=None):
-        return (204, None, {'Content-Type': 'text/plain'})
+        if (config or {}).get('response-mode') == 'full':
+            return (204, None, {'Content-Type': 'text/plain'})
+        return None
+
     import slip.slip_http as http_mod
     monkeypatch.setattr(http_mod, "http_delete", fake_http_delete)
-    # lite
-    meta_lite = Group([[ [SetPath([Name('response-mode')]), 'lite'] ]])
-    dp_lite = DelPath(GetPath([Name('http://example/api')], meta=meta_lite))
-    out_lite = await evaluator.path_resolver.delete(dp_lite, root_scope)
-    assert out_lite == [204, None]
-    # full
+
+    dp_default = DelPath(GetPath([Name('http://example/api')]))
+    out_default = await evaluator.path_resolver.delete(dp_default, root_scope)
+    assert out_default is None
+
     meta_full = Group([[ [SetPath([Name('response-mode')]), 'full'] ]])
     dp_full = DelPath(GetPath([Name('http://example/api')], meta=meta_full))
     out_full = await evaluator.path_resolver.delete(dp_full, root_scope)

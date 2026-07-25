@@ -241,7 +241,7 @@ async def test_del_path_prunes_empty_scopes_cascading():
     ~A.B.C.x
     -- Probing A should now error since it was pruned
     probeA: do [ A ]
-    eq probeA.outcome.status err
+    eq probeA.status err
     """
     res = await run_slip(src)
     assert_ok(res, True)
@@ -262,7 +262,7 @@ async def test_del_pruning_stops_when_parent_not_empty():
     -- Delete the only field in C; C should be pruned but B remains due to 'k'
     ~A.B.C.x
     -- B should still exist and keep key 'k'
-    existsB: eq (do [ A.B ]).outcome.status ok
+    existsB: eq (do [ A.B ]).status ok
     kval: A.B.k
     #[ existsB, kval ]
     """
@@ -279,10 +279,10 @@ async def test_group_then_multiname_chain_preserves_trailing_ok_argument():
       }
     }
     -- This is the minimal reproduction of the folding bug:
-    -- (do [ A.B ]) produces a response ok/value; we then chain
-    -- .outcome.status via folding from a Group base, and must NOT
+    -- (do [ A.B ]) produces an Outcome; we then chain .status
+    -- via folding from a Group base, and must NOT
     -- skip the trailing 'ok' argument to 'eq'.
-    res: eq (do [ A.B ]).outcome.status ok
+    res: eq (do [ A.B ]).status ok
     res
     """
     res = await run_slip(src)

@@ -4,32 +4,38 @@ from slip import ScriptRunner
 
 
 @pytest.mark.asyncio
-async def test_resource_get_lite_and_full(monkeypatch):
+async def test_resource_get_default_and_full(monkeypatch):
     captured = {}
 
     async def fake_http_get(url, cfg):
         captured["url"] = url
         captured["cfg"] = dict(cfg or {})
-        # Return a tuple like httpx path would package for lite/full
-        return (201, {"ok": True}, {"Content-Type": "application/json", "X-Test": "1"})
+        from slip.slip_http import normalize_response_mode
+
+        if normalize_response_mode(captured["cfg"]) == 'full':
+            return 201, {"ok": True}, {
+                "Content-Type": "application/json",
+                "X-Test": "1",
+            }
+        return {"ok": True}
 
     monkeypatch.setattr("slip.slip_http.http_get", fake_http_get)
 
-    # Lite mode via #(lite: true)
+    # Default mode returns the response body.
     runner = ScriptRunner()
     await runner._initialize()
     res = await runner.handle_script("""
-    r: resource `http://example.com/data#(lite: true)`
+    r: resource `http://example.com/data`
     get r
     """)
     assert res.status == 'ok'
-    assert res.value == [201, {"ok": True}]
+    assert res.value == {"ok": True}
 
-    # Full mode via #(full: true)
+    # Explicit full mode returns the response envelope.
     runner = ScriptRunner()
     await runner._initialize()
     res2 = await runner.handle_script("""
-    r: resource `http://example.com/data#(full: true)`
+    r: resource `http://example.com/data#(response-mode: `full`)`
     get r
     """)
     assert res2.status == 'ok'

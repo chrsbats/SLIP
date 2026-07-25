@@ -8,7 +8,7 @@ from slip.slip_printer import Printer
 from slip.slip_serialize import serialize, deserialize, detect_format
 from slip.slip_datatypes import (
     PathLiteral, GetPath, Name, IString,
-    PostPath, Response, ByteStream, SetPath, MultiSetPath
+    PostPath, ByteStream, SetPath, MultiSetPath
 )
 
 def test_resolve_locator_variants(tmp_path):
@@ -76,21 +76,18 @@ async def test_file_put_with_content_type_and_slip_code(tmp_path):
     assert getattr(code, "source_locator", "") == "file://./mod3.slip"
 
 def test_normalize_response_mode_variants():
-    # strings
-    assert normalize_response_mode({"response-mode": "lite"}) == "lite"
     assert normalize_response_mode({"response-mode": IString("FULL")}) == "full"
-    assert normalize_response_mode({"response-mode": "none"}) == "none"
-    # path literal: `lite`
-    lit = PathLiteral(GetPath([Name("lite")]))
-    assert normalize_response_mode({"response-mode": lit}) == "lite"
-    # get-path form: lite
-    gp = GetPath([Name("lite")])
-    assert normalize_response_mode({"response-mode": gp}) == "lite"
-    # legacy flags
-    assert normalize_response_mode({"lite": True}) == "lite"
-    assert normalize_response_mode({"full": True}) == "full"
-    # unknown → None
-    assert normalize_response_mode({"response-mode": "weird"}) is None
+    for config in (
+        {"response-mode": "lite"},
+        {"response-mode": "none"},
+        {"response-mode": PathLiteral(GetPath([Name("lite")]))},
+        {"response-mode": GetPath([Name("lite")])},
+        {"lite": True},
+        {"full": True},
+        {"response-mode": "weird"},
+    ):
+        with pytest.raises(ValueError):
+            normalize_response_mode(config)
 
 def test_printer_misc_types():
     p = Printer()
@@ -98,10 +95,6 @@ def test_printer_misc_types():
     # PostPath
     pp = PostPath([Name("url")])
     assert p.pformat(pp) == "url<-"
-
-    # Response printing
-    resp = Response(PathLiteral(GetPath([Name("ok")])), 123)
-    assert p.pformat(resp) == "response `ok` 123"
 
     # ByteStream printing (pretty, multi-line)
     bs = ByteStream("u8", [1, 2, 3])

@@ -83,7 +83,7 @@ async def test_successful_script_sets_outcome_status_and_value():
 @pytest.mark.asyncio
 async def test_return_inside_script_remains_normal_success():
     runner = ScriptRunner(load_core=False)
-    # A top-level `return` response should be unwrapped by the host and treated
+    # A top-level `return` should be unwrapped by the host and treated
     # as a normal successful run (no extra status leakage).
     res = await runner.handle_script("return 42")
     assert res.status == 'ok'

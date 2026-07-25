@@ -204,7 +204,7 @@ async def test_resource_fluent_api(http_server_rw):
 
     src = f"""
     -- Create a configured resource handle for a JSON API
-    api: resource `{url}/items#(content-type: "application/json", timeout: 1)`
+    api: resource `{url}/items#(content-type: "application/json")`
 
     -- GET initial data
     initial: get api

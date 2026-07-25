@@ -363,38 +363,8 @@ children:
     _run_structural_test(parser, "grouped_expression", case)
 
 def test_mixed_separators(parser):
-    case = """
-a:1; b:2, c:3
-d:4
----
-tag: code
-children:
-  - tag: expr
-    children:
-      - tag: set-path
-        text: 'a:'
-      - tag: number
-        value: 1
-  - tag: expr
-    children:
-      - tag: set-path
-        text: 'b:'
-      - tag: number
-        value: 2
-  - tag: expr
-    children:
-      - tag: set-path
-        text: 'c:'
-      - tag: number
-        value: 3
-  - tag: expr
-    children:
-      - tag: set-path
-        text: 'd:'
-      - tag: number
-        value: 4
-"""
-    _run_structural_test(parser, "mixed_separators", case)
+    parsed = parser.parse("a:1; b:2, c:3")
+    assert parsed["status"] == "error"
 
 def test_path_variants(parser):
     case = r"""
@@ -423,7 +393,7 @@ children:
 
 def test_variadic_function_definition(parser):
     case = """
-my-func: fn [a, b...] []
+my-func: fn [a; b...] []
 ---
 tag: code
 children:

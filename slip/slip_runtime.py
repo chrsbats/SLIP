@@ -3,13 +3,13 @@
 import re
 import asyncio
 import inspect
+import json
 import math
 import time
 import random
 import copy
 import textwrap
 import collections.abc
-import traceback
 from collections import UserDict
 from pathlib import Path
 from typing import Any, List, Optional, Literal, Dict
@@ -22,20 +22,19 @@ from slip.slip_interpreter import Evaluator
 from slip.slip_datatypes import (
     Scope,
     Code,
-    Response,
     PathLiteral,
     Name,
-    SetPath,
     GetPath,
     PathNotFound,
-    Group,
-    List as SlipList,
     ReturnSignal,
+    SlipFailure,
+    ProtocolFailure,
 )
 
 # Canonical PathLiteral status singletons (use these everywhere)
 _OK_STATUS = PathLiteral(GetPath([Name("ok")]))
 _ERR_STATUS = PathLiteral(GetPath([Name("err")]))
+_MISSING = object()
 
 # ===================================================================
 # 1. Core Data Structures & Global State
@@ -68,6 +67,59 @@ class SlipDict(UserDict):
         if name in d:
             return d[name]
         raise AttributeError(name)
+
+
+def _path_literal(name: str) -> PathLiteral:
+    return PathLiteral(GetPath([Name(name)]))
+
+
+def _error_message(data: Any) -> str:
+    if isinstance(data, collections.abc.Mapping) and "message" in data:
+        return str(data["message"])
+    return str(data)
+
+
+def _path_name(value: PathLiteral) -> str:
+    inner = getattr(value, "inner", None)
+    segments = getattr(inner, "segments", None)
+    if segments and len(segments) == 1 and isinstance(segments[0], Name):
+        return segments[0].text
+    return str(value).strip("`")
+
+
+def _exception_code(exc: Exception) -> str:
+    name = type(exc).__name__
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", name).lower()
+
+
+def _failure_error(exc: SlipFailure) -> SlipDict:
+    return SlipDict({
+        "kind": _path_literal("domain"),
+        "code": exc.code,
+        "message": exc.message,
+        "data": exc.data,
+    })
+
+
+def _runtime_error(exc: Exception) -> SlipDict:
+    return SlipDict({
+        "kind": _path_literal("runtime"),
+        "code": _path_literal(_exception_code(exc)),
+        "message": str(exc),
+        "data": None,
+    })
+
+
+def _protocol_error(exc: ProtocolFailure) -> SlipDict:
+    return SlipDict({
+        "kind": _path_literal("protocol"),
+        "code": _path_literal(f"{exc.protocol}-error"),
+        "message": exc.message,
+        "data": exc.data,
+        "protocol": _path_literal(exc.protocol),
+        "protocol-status": exc.status,
+        "meta": exc.meta,
+    })
 
 
 # Backward-compatibility alias
@@ -116,77 +168,6 @@ class SLIPHost(ABC):
                 pass
 
         task.add_done_callback(_done_cb)
-
-
-class _EffectsView(collections.abc.Sequence):
-    __slots__ = ("_backing", "_start", "_end")
-
-    def __init__(self, backing, start, end):
-        self._backing = backing
-        self._start = int(start)
-        self._end = int(end)
-
-    def __len__(self):
-        end = self._end
-        start = self._start
-        if end < start:
-            return 0
-        return end - start
-
-    def __getitem__(self, idx):
-        n = len(self)
-        if isinstance(idx, slice):
-            s_start, s_stop, s_step = idx.indices(n)
-            base = self._start
-            return [self._backing[base + k] for k in range(s_start, s_stop, s_step)]
-        if idx < 0:
-            idx += n
-        if idx < 0 or idx >= n:
-            raise IndexError
-        return self._backing[self._start + idx]
-
-    def __iter__(self):
-        base = self._start
-        for k in range(len(self)):
-            yield self._backing[base + k]
-
-    def __repr__(self):
-        # Avoid going through list(self) to prevent accidental re-entrancy
-        return repr(self._backing[self._start : self._end])
-
-
-class _ResponseView:
-    def __init__(self, evaluator):
-        self._ev = evaluator
-
-    @property
-    def status(self):
-        out = getattr(self._ev, "outcome", None)
-        if out is None:
-            return None
-        return getattr(out, "status", None)
-
-    @property
-    def value(self):
-        out = getattr(self._ev, "outcome", None)
-        if out is None:
-            return None
-        return getattr(out, "value", None)
-
-    @property
-    def effects(self):
-        # Always present; prefer outcome.effects if set, else fallback to evaluator.side_effects
-        out = getattr(self._ev, "outcome", None)
-        if out is not None and getattr(out, "effects", None) is not None:
-            return out.effects
-        return getattr(self._ev, "side_effects", [])
-
-    @property
-    def stacktrace(self):
-        out = getattr(self._ev, "outcome", None)
-        if out is None:
-            return []
-        return getattr(out, "stacktrace", []) or []
 
 
 # ===================================================================
@@ -401,6 +382,13 @@ class StdLib:
             return _GP([_Name(p) for p in parts])
         raise TypeError("expected a path-literal, get-path, or string")
 
+    def _to_path(self, value):
+        if isinstance(value, PathLiteral):
+            if not isinstance(value.inner, GetPath):
+                raise TypeError("to-path expects a get-path literal or string")
+            return value
+        return PathLiteral(self._to_getpath(value))
+
     def _ref(self, p, *, scope: Scope):
         """Create a read-only reference to a get-path literal.
 
@@ -535,12 +523,10 @@ class StdLib:
             pass
 
     def _package_http_result(self, raw, mode: str | None):
-        if mode in (None, "none"):
+        if mode is None:
             return raw
         if isinstance(raw, tuple) and len(raw) == 3:
             status, value, headers = raw
-            if mode == "lite":
-                return [status, value]
             if mode == "full":
                 # Normalize header keys to lowercase for consistent lookups
                 norm_headers = headers
@@ -554,7 +540,7 @@ class StdLib:
                     "value": value,
                     "meta": {"headers": norm_headers},
                 }
-        return raw
+        raise TypeError("full HTTP response expected status, value, and headers")
 
     async def _get(self, target, *, scope: Scope):
         from slip.slip_http import http_get
@@ -651,7 +637,11 @@ class StdLib:
 
             from slip.slip_runtime import ScriptRunner
 
-            runner = ScriptRunner()
+            runner = ScriptRunner(
+                host_object=getattr(ev, "host_object", None),
+                host_data=getattr(ev, "host_data_loader", None),
+            )
+            runner.evaluator.side_effects = ev.side_effects
             if module_dir:
                 runner.source_dir = module_dir
 
@@ -797,7 +787,11 @@ class StdLib:
         # ----------------------------
         from slip.slip_runtime import ScriptRunner
 
-        runner = ScriptRunner()
+        runner = ScriptRunner(
+            host_object=getattr(ev, "host_object", None),
+            host_data=getattr(ev, "host_data_loader", None),
+        )
+        runner.evaluator.side_effects = ev.side_effects
         if module_dir:
             runner.source_dir = module_dir
 
@@ -1058,7 +1052,7 @@ class StdLib:
             return value.lower() if isinstance(value, str) else str(value).lower()
 
         def _normalize_message(value):
-            from slip.slip_datatypes import PathLiteral, Response, Scope
+            from slip.slip_datatypes import PathLiteral, Scope
 
             try:
                 if hasattr(value, "realize") and callable(getattr(value, "realize")):
@@ -1066,11 +1060,6 @@ class StdLib:
             except Exception:
                 pass
 
-            if isinstance(value, Response):
-                return {
-                    "status": _normalize_message(value.status),
-                    "value": _normalize_message(value.value),
-                }
             if isinstance(value, PathLiteral):
                 try:
                     return value.to_str_repr()
@@ -1118,7 +1107,7 @@ class StdLib:
         cond, then_arg = args[0], args[1]
         else_arg = args[2] if len(args) == 3 else None
 
-        # Evaluate condition; propagate control-exits (ReturnSignal or legacy Response(return ...))
+        # Evaluate condition and propagate an early return.
         if isinstance(cond, Code):
             cond_val = await self.evaluator._eval(cond.ast, scope)
             if self._is_control_exit(cond_val):
@@ -1451,6 +1440,39 @@ class StdLib:
             raise TypeError("Arguments to fn must be a code block or a sig literal")
         return fn
 
+    def _get_sig(self, func):
+        from slip.slip_datatypes import GenericFunction, Sig, SlipFunction
+
+        if isinstance(func, GenericFunction):
+            if len(func.methods) != 1:
+                raise TypeError("get-sig expects a callable with exactly one method")
+            func = func.methods[0]
+        if not isinstance(func, SlipFunction):
+            raise TypeError("get-sig expects a function or generic function")
+        signature = getattr(func, "meta", {}).get("type")
+        if not isinstance(signature, Sig):
+            raise TypeError("get-sig expects a function with a Sig")
+        return signature.copy()
+
+    def _sig(self, value):
+        from slip.slip_datatypes import Sig
+
+        if isinstance(value, Sig):
+            return value.copy()
+        if not isinstance(value, collections.abc.Mapping):
+            raise TypeError("sig expects a Sig or mapping")
+        if "parameters" not in value:
+            raise ValueError("sig mapping requires parameters")
+        signature = Sig(
+            [],
+            {},
+            value.get("rest"),
+            value.get("return-annotation"),
+            value.get("where"),
+        )
+        signature["parameters"] = value["parameters"]
+        return signature
+
     # --- Container Constructors ---
     def _list(self, code: Code, *, scope: Scope):
         ev = getattr(self, "evaluator", None)
@@ -1571,108 +1593,41 @@ class StdLib:
                 root = getattr(self.evaluator, "root_scope", None)
                 target_scope.meta["parent"] = root if isinstance(root, Scope) else None
 
-    def _response(self, status: PathLiteral, value: Any):
-        return Response(status, value)
-
-    def _respond(self, status: PathLiteral, value: Any):
-        # Mirror status/value into the unified outcome object and clear stacktrace
-        try:
-            out = getattr(self.evaluator, "outcome", None)
-            if isinstance(out, Outcome):
-                out.status = status
-                out.value = value
-                out.stacktrace = []
-                out.error = None
-        except Exception:
-            pass
-        # Emit stderr side-effect for non-ok statuses (existing behavior)
-        try:
-            inner = getattr(status, "inner", None)
-            if (
-                isinstance(inner, GetPath)
-                and len(inner.segments) == 1
-                and isinstance(inner.segments[0], Name)
-                and inner.segments[0].text != "ok"
-            ):
-                self.evaluator.side_effects.append(
-                    {"topics": ["stderr"], "message": str(value)}
-                )
-        except Exception:
-            pass
-        # Non-local exit: signal an early return carrying a Response(status, value)
-        return ReturnSignal(Response(status, value))
-
-    def _status(self, value):
-        """Minimal status helper exposed as `status` in SLIP.
-
-        - If `value` is a Response, return its .status (a PathLiteral).
-        - Otherwise return the canonical `ok` PathLiteral singleton.
-        """
-        from slip.slip_datatypes import Response as _Resp
-
-        if isinstance(value, _Resp):
-            return value.status
-        return _OK_STATUS
+    def _fail(self, code_or_data: Any, data: Any = _MISSING):
+        if data is _MISSING:
+            code = _path_literal("error")
+            data = code_or_data
+        else:
+            if isinstance(code_or_data, PathLiteral):
+                code = code_or_data
+            elif isinstance(code_or_data, GetPath):
+                code = PathLiteral(code_or_data)
+            elif isinstance(code_or_data, str):
+                code = PathLiteral(self._to_getpath(code_or_data.strip("`")))
+            else:
+                raise TypeError("fail code must be a path or string")
+        message = (
+            _path_name(code)
+            if isinstance(data, collections.abc.Mapping) and "message" not in data
+            else _error_message(data)
+        )
+        raise SlipFailure(code, data, message)
 
     def _is_control_exit(self, val):
-        """Return True if val is a non-local control exit produced by evaluation.
-
-        Accepts:
-          - ReturnSignal (new dedicated control-flow type)
-          - Response with a PathLiteral status whose single segment is the name "return"
-            (legacy sentinel; kept for backward compatibility)
-        """
-        from slip.slip_datatypes import (
-            ReturnSignal as _RS,
-            Response as _Resp,
-            PathLiteral as _PL,
-            GetPath as _GP,
-            Name as _Name,
-        )
-
-        if isinstance(val, _RS):
-            return True
-        if isinstance(val, _Resp):
-            st = getattr(val, "status", None)
-            if isinstance(st, _PL):
-                inner = getattr(st, "inner", None)
-                if (
-                    isinstance(inner, _GP)
-                    and len(inner.segments) == 1
-                    and isinstance(inner.segments[0], _Name)
-                ):
-                    return inner.segments[0].text == "return"
-        return False
+        return isinstance(val, ReturnSignal)
 
     def _return(self, value: Any = None):
-        try:
-            out = getattr(self.evaluator, "outcome", None)
-            if isinstance(out, Outcome):
-                out.status = _OK_STATUS
-                out.value = value
-                out.stacktrace = []
-                out.error = None
-        except Exception:
-            pass
         return ReturnSignal(value)
 
     async def _do(self, code, *, scope: Scope):
-        from slip.slip_datatypes import (
-            Code as _Code,
-            Response as _Resp,
-            PathLiteral as _PL,
-            GetPath as _GP,
-            Name as _Name,
-        )
-        from slip.slip_runtime import SlipDict as _SlipDict
+        from slip.slip_datatypes import Code as _Code, ReturnSignal as _RS
 
         ev = self.evaluator
 
         # Resolve argument to a Code block (allow variable that holds Code)
         if not isinstance(code, _Code):
             val = await ev._eval(code, scope)
-            if isinstance(val, _Resp):
-                # Propagate control-flow (e.g., return) upward
+            if isinstance(val, _RS):
                 return val
             if not isinstance(val, _Code):
                 raise TypeError("do requires a code block")
@@ -1681,30 +1636,32 @@ class StdLib:
         start = len(ev.side_effects)
         try:
             result = await ev._eval(code.ast, scope)
+        except ProtocolFailure as e:
+            outcome = Outcome(
+                status=_ERR_STATUS,
+                value=None,
+                error=_protocol_error(e),
+            )
+        except SlipFailure as e:
+            outcome = Outcome(
+                status=_ERR_STATUS,
+                value=None,
+                error=_failure_error(e),
+            )
         except Exception as e:
-            outcome = _Resp(_ERR_STATUS, str(e))
+            outcome = Outcome(
+                status=_ERR_STATUS,
+                value=None,
+                error=_runtime_error(e),
+            )
         else:
-            # Normalize to a Response, handling internal ReturnSignal control flow.
-            from slip.slip_datatypes import ReturnSignal as _RS
-
-            if isinstance(result, _Resp):
-                outcome = result
-            elif isinstance(result, _RS):
-                # ReturnSignal(value) => unwrap: if the carried value is a Response use it,
-                # otherwise wrap as an ok Response.
-                inner = result.value
-                if isinstance(inner, _Resp):
-                    outcome = inner
-                else:
-                    outcome = _Resp(_OK_STATUS, inner)
-            else:
-                outcome = _Resp(_OK_STATUS, result)
+            if isinstance(result, _RS):
+                return result
+            outcome = Outcome(status=_OK_STATUS, value=result)
 
         end = len(ev.side_effects)
-        out = _SlipDict()
-        out["outcome"] = outcome
-        out["effects"] = _EffectsView(ev.side_effects, start, end)
-        return out
+        outcome.effects = list(ev.side_effects[start:end])
+        return outcome
 
     # --- Type and Conversion ---
     def _to_str(self, value):
@@ -2046,6 +2003,21 @@ class StdLib:
         guards.append(cond)
         return func
 
+    def _public(self, func):
+        from slip.slip_datatypes import SlipFunction, GenericFunction
+
+        if isinstance(func, GenericFunction):
+            out = GenericFunction(func.name)
+            out.methods = list(func.methods)
+            out.meta = dict(getattr(func, "meta", {}) or {})
+        elif isinstance(func, SlipFunction):
+            out = GenericFunction(None)
+            out.add_method(func)
+        else:
+            raise TypeError("public expects a function or generic function")
+        out.meta["public"] = True
+        return out
+
     def _get_body(self, func, sig, *, scope: Scope):
         from slip.slip_datatypes import (
             SlipFunction as _SF,
@@ -2083,20 +2055,6 @@ class StdLib:
 
         if not isinstance(func, (SlipFunction, GenericFunction)):
             raise TypeError("test expects a function or generic function")
-
-        def _status(name: str):
-            # Prefer canonical singletons for ok/err; fall back to constructed PathLiteral.
-            if name == "ok":
-                return _OK_STATUS
-            if name == "err":
-                return _ERR_STATUS
-            from slip.slip_datatypes import (
-                PathLiteral as _PL,
-                GetPath as _GP,
-                Name as _Name,
-            )
-
-            return _PL(_GP([_Name(name)]))
 
         # Collect examples from the container and each method (to support inline chaining after fn)
         examples = []
@@ -2141,8 +2099,6 @@ class StdLib:
               - any path-like placeholders (operators, path literals, etc.),
               - signature objects (Sig), which are metadata/type aliases.
             """
-            from slip.slip_runtime import _ResponseView as _RV
-
             args_out: list = []
             seen: set = set()
             for src in _iter_value_sources():
@@ -2153,9 +2109,6 @@ class StdLib:
                 for k, v in items:
                     # Skip callables and function containers
                     if isinstance(v, (SlipFunction, GenericFunction)) or callable(v):
-                        continue
-                    # Skip the live response-view object
-                    if isinstance(v, _RV):
                         continue
                     # Skip path-like placeholders (operators, path literals, etc.)
                     if isinstance(v, (_GP, _SP, _DP, _PP, _PL, _MSP)):
@@ -2217,24 +2170,15 @@ class StdLib:
                 failures.append({"index": i, "expected": expected, "actual": actual})
 
         if failures:
-            return Response(_status("err"), failures)
-        return Response(_status("ok"), passed)
+            raise SlipFailure(
+                _path_literal("test-failed"),
+                failures,
+                f"{len(failures)} example(s) failed",
+            )
+        return passed
 
     async def _test_all(self, *targets, scope: Scope):
         from slip.slip_datatypes import SlipFunction, GenericFunction
-
-        def _status(name: str):
-            if name == "ok":
-                return _OK_STATUS
-            if name == "err":
-                return _ERR_STATUS
-            from slip.slip_datatypes import (
-                PathLiteral as _PL,
-                GetPath as _GP,
-                Name as _Name,
-            )
-
-            return _PL(_GP([_Name(name)]))
 
         # Determine scopes to scan; default to current lexical scope
         scopes = [s for s in targets if isinstance(s, Scope)] or [scope]
@@ -2262,14 +2206,11 @@ class StdLib:
 
             total_with_examples += 1
             try:
-                res = await self._test(fn, scope=scope)
+                await self._test(fn, scope=scope)
             except Exception as e:
                 failed_details.append({"name": name, "err": str(e)})
                 continue
-            if res.status == _status("ok"):
-                passed_count += 1
-            else:
-                failed_details.append({"name": name, "failures": res.value})
+            passed_count += 1
 
         summary = {
             "scanned": len(scanned),
@@ -2278,8 +2219,13 @@ class StdLib:
             "failed": len(failed_details),
             "details": failed_details,
         }
-        status = _OK_STATUS if not failed_details else _ERR_STATUS
-        return Response(status, summary)
+        if failed_details:
+            raise SlipFailure(
+                _path_literal("test-failed"),
+                summary,
+                f"{len(failed_details)} function(s) failed",
+            )
+        return summary
 
     async def _call(self, target, args_list=None, *, scope: Scope):
         """
@@ -2361,27 +2307,15 @@ class StdLib:
 
 Token = Dict[str, Any]
 
-from typing import Any, Optional, List, Dict
-
 
 @dataclass
 class Outcome:
-    """
-    Unified script outcome object visible to both the host (ExecutionResult)
-    and to running scripts via `outcome` in the root scope.
-    Fields:
-      - status: a PathLiteral (e.g., `ok`/`err`) or None
-      - value: payload (any)
-      - effects: a reference to evaluator.side_effects (list)
-      - error: optional dict { 'message': str, 'token': dict | None }
-      - stacktrace: structured stack frames (list)
-    """
+    """Result of explicitly capturing code with `do`."""
 
     status: Any = None
     value: Any = None
     effects: List[Dict] = field(default_factory=list)
     error: Optional[Dict] = None
-    stacktrace: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -2397,6 +2331,7 @@ class ExecutionResult:
 
     slip_status: str
     value: Any = None
+    error: Optional[Dict] = None
     error_message: Optional[str] = None
     error_token: Optional[Token] = None
     side_effects: List[Dict] = field(default_factory=list)
@@ -2427,6 +2362,442 @@ class ExecutionResult:
         return msg
 
 
+@dataclass(frozen=True)
+class PublicCommandShape:
+    name: str
+    func: Any
+    params: tuple[tuple[str, Any], ...]
+
+    def json_params(self, host_parameters):
+        return tuple(
+            (name, spec)
+            for name, spec in self.params
+            if name not in host_parameters
+        )
+
+
+class PublicModule:
+    """Host-facing view of a SLIP module's `|public` command exports."""
+
+    def __init__(self, runner: "ScriptRunner", exports: dict[str, Any]):
+        self.runner = runner
+        self.exports = dict(exports)
+        self.public_exports = {
+            name: value
+            for name, value in self.exports.items()
+            if self._is_public_callable(value)
+        }
+        self._shapes = self._build_shapes()
+
+    def public_names(self) -> list[str]:
+        return sorted(self.public_exports.keys())
+
+    def json_schema(self, *, host_parameters=()) -> dict[str, Any]:
+        host_parameters = frozenset(host_parameters)
+        shapes = self._visible_shapes(host_parameters)
+        branches = []
+        for name in self.public_names():
+            forms = [
+                self._arguments_schema(shape, host_parameters)
+                for shape in shapes
+                if shape.name == name
+            ]
+            if not forms:
+                continue
+            arguments = forms[0] if len(forms) == 1 else {"anyOf": forms}
+            branches.append({
+                "type": "object",
+                "required": ["function", "arguments"],
+                "properties": {
+                    "function": {"const": name},
+                    "arguments": arguments,
+                },
+                "additionalProperties": False,
+            })
+        return {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            **({"anyOf": branches} if branches else {"not": {}}),
+        }
+
+    def commands_schema(self, *, host_parameters=()) -> dict[str, Any]:
+        return {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "array",
+            "items": self.json_schema(host_parameters=host_parameters),
+        }
+
+    def validate_json_command(
+        self, payload: Any, *, host_parameters=()
+    ) -> dict[str, Any]:
+        from jsonschema import Draft202012Validator
+        from jsonschema.exceptions import ValidationError
+
+        if isinstance(payload, (str, bytes, bytearray)):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"invalid command JSON: {e}") from e
+        try:
+            Draft202012Validator(
+                self.json_schema(host_parameters=host_parameters)
+            ).validate(payload)
+        except ValidationError as e:
+            path = ".".join(str(part) for part in e.absolute_path)
+            where = f" at {path}" if path else ""
+            raise ValueError(f"invalid public command{where}: {e.message}") from e
+        return dict(payload)
+
+    def validate_json_commands(
+        self, payload: Any, *, host_parameters=()
+    ) -> list[dict[str, Any]]:
+        from jsonschema import Draft202012Validator
+        from jsonschema.exceptions import ValidationError
+
+        if isinstance(payload, (str, bytes, bytearray)):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"invalid command JSON: {e}") from e
+        try:
+            Draft202012Validator(
+                self.commands_schema(host_parameters=host_parameters)
+            ).validate(payload)
+        except ValidationError as e:
+            path = ".".join(str(part) for part in e.absolute_path)
+            where = f" at {path}" if path else ""
+            raise ValueError(f"invalid public commands{where}: {e.message}") from e
+        return [dict(command) for command in payload]
+
+    def json_command_from_source(
+        self, source: str, *, host_parameters=()
+    ) -> dict[str, Any]:
+        """Normalize one literal public SLIP call without executing it."""
+        parsed = self.runner.parser.parse(source)
+        if parsed.get("status") != "success":
+            raise ValueError("invalid public command source")
+        code = parsed.get("ast") or {}
+        expressions = code.get("children") or []
+        if code.get("tag") != "code" or len(expressions) != 1:
+            raise ValueError("public command source must contain one expression")
+        expression = expressions[0]
+        parts = expression.get("children") or []
+        if expression.get("tag") != "expr" or not parts:
+            raise ValueError("public command source must contain one call")
+        target = parts[0]
+        target_parts = target.get("children") or []
+        if (
+            target.get("tag") != "get-path"
+            or len(target_parts) != 1
+            or target_parts[0].get("tag") != "name"
+        ):
+            raise ValueError("public command target must be a function name")
+        name = str(target_parts[0].get("text") or "")
+        if name not in self.public_exports:
+            raise ValueError(f"unknown public command: {name}")
+        values = [self._literal_from_ast(part) for part in parts[1:]]
+        host_parameters = frozenset(host_parameters)
+        candidates = []
+        from jsonschema import Draft202012Validator
+
+        for shape in self._visible_shapes(host_parameters):
+            if shape.name != name:
+                continue
+            params = shape.json_params(host_parameters)
+            required = sum(
+                not self._is_optional_spec(spec) for _name, spec in params
+            )
+            if not required <= len(values) <= len(params):
+                continue
+            arguments = {
+                parameter_name: value
+                for (parameter_name, _spec), value in zip(params, values)
+            }
+            if Draft202012Validator(
+                self._arguments_schema(shape, host_parameters)
+            ).is_valid(arguments):
+                candidates.append((shape, arguments))
+        if not candidates:
+            raise ValueError("command does not match any public form")
+        shape, arguments = max(
+            candidates,
+            key=lambda candidate: self._shape_specificity(
+                candidate[0], host_parameters
+            ),
+        )
+        del shape
+        return self.validate_json_command(
+            {"function": name, "arguments": arguments},
+            host_parameters=host_parameters,
+        )
+
+    async def run_json_command(
+        self, payload: Any, *, host_arguments=None
+    ) -> ExecutionResult:
+        host_arguments = dict(host_arguments or {})
+        host_parameters = frozenset(host_arguments)
+        self.runner.evaluator.side_effects.clear()
+        self.runner.evaluator.call_stack.clear()
+        try:
+            command = self.validate_json_command(
+                payload,
+                host_parameters=host_parameters,
+            )
+            shape = self._select_shape(command, host_parameters)
+            values = command["arguments"]
+            args = [
+                host_arguments[name]
+                if name in host_arguments
+                else self._json_to_slip(values.get(name))
+                for name, _spec in shape.params
+            ]
+            result = await self.runner.evaluator.call(
+                shape.func,
+                args,
+                self.runner.root_scope,
+            )
+            return ExecutionResult(
+                _OK_STATUS.to_str_repr(),
+                self.runner._host_normalize(result),
+                side_effects=list(self.runner.evaluator.side_effects),
+                slip_result=result,
+            )
+        except Exception as e:
+            msg, token = self.runner._format_runtime_error(e, "", None)
+            if isinstance(e, ProtocolFailure):
+                error = _protocol_error(e)
+            elif isinstance(e, SlipFailure):
+                error = _failure_error(e)
+            else:
+                error = _runtime_error(e)
+            return ExecutionResult(
+                _ERR_STATUS.to_str_repr(),
+                error=self.runner._host_error(error),
+                error_message=msg,
+                error_token=token,
+                side_effects=list(self.runner.evaluator.side_effects),
+            )
+
+    async def run_json_commands(
+        self, payload: Any, *, host_arguments=None
+    ) -> list[ExecutionResult]:
+        host_arguments = dict(host_arguments or {})
+        commands = self.validate_json_commands(
+            payload,
+            host_parameters=host_arguments,
+        )
+        return [
+            await self.run_json_command(
+                command,
+                host_arguments=host_arguments,
+            )
+            for command in commands
+        ]
+
+    def _is_public_callable(self, value: Any) -> bool:
+        from slip.slip_datatypes import SlipFunction, GenericFunction
+
+        return isinstance(value, (SlipFunction, GenericFunction)) and bool(
+            getattr(value, "meta", {}).get("public")
+        )
+
+    def _build_shapes(self) -> list[PublicCommandShape]:
+        out = []
+        for name, func in sorted(self.public_exports.items()):
+            for method in self._methods(func):
+                params = self._method_params(method)
+                if params is None:
+                    continue
+                out.append(PublicCommandShape(name, func, tuple(params)))
+        return out
+
+    def _visible_shapes(self, host_parameters) -> list[PublicCommandShape]:
+        out = []
+        seen = set()
+        visible_names = set()
+        for shape in self._shapes:
+            params = shape.json_params(host_parameters)
+            if any(not self._is_json_spec(spec) for _name, spec in params):
+                continue
+            key = (
+                shape.name,
+                tuple(
+                    (
+                        pname,
+                        json.dumps(self._param_schema(pspec), sort_keys=True),
+                        self._is_optional_spec(pspec),
+                    )
+                    for pname, pspec in params
+                ),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            visible_names.add(shape.name)
+            out.append(shape)
+        missing = sorted(set(self.public_exports) - visible_names)
+        if missing:
+            names = ", ".join(missing)
+            raise ValueError(
+                f"public functions have no JSON-compatible signatures: {names}"
+            )
+        return out
+
+    def _methods(self, func):
+        from slip.slip_datatypes import SlipFunction, GenericFunction
+
+        if isinstance(func, GenericFunction):
+            return list(func.methods)
+        if isinstance(func, SlipFunction):
+            return [func]
+        return []
+
+    def _method_params(self, method):
+        from slip.slip_datatypes import Sig
+
+        sig = getattr(method, "meta", {}).get("type")
+        if not isinstance(sig, Sig):
+            return None
+        if getattr(sig, "rest", None):
+            return None
+        order = getattr(sig, "param_order", None)
+        if order is None:
+            order = [(name, None) for name in (sig.positional or [])]
+            order.extend((name, spec) for name, spec in (sig.keywords or {}).items())
+        return [(str(name), spec) for name, spec in order]
+
+    def _arguments_schema(
+        self, shape: PublicCommandShape, host_parameters
+    ) -> dict[str, Any]:
+        properties = {}
+        required = []
+        for name, spec in shape.json_params(host_parameters):
+            schema = self._param_schema(spec)
+            properties[name] = schema
+            if not self._is_optional_spec(spec):
+                required.append(name)
+        return {
+            "type": "object",
+            "required": required,
+            "properties": properties,
+            "additionalProperties": False,
+        }
+
+    def _param_schema(self, spec) -> dict[str, Any]:
+        if spec is None:
+            return {"type": "string"}
+        if isinstance(spec, tuple) and spec and spec[0] == "union":
+            non_none = [
+                part for part in (spec[1] or [])
+                if self._schema_type(part) != "null"
+            ]
+            if len(non_none) == 1:
+                return self._param_schema(non_none[0])
+            return {"anyOf": [self._param_schema(part) for part in non_none]}
+        if self._type_name(spec) == "id":
+            return {"type": "string", "pattern": "^id:"}
+        return {"type": self._schema_type(spec)}
+
+    def _schema_type(self, spec) -> str:
+        name = self._type_name(spec)
+        return {
+            "int": "integer",
+            "float": "number",
+            "number": "number",
+            "string": "string",
+            "id": "string",
+            "i-string": "string",
+            "boolean": "boolean",
+            "list": "array",
+            "dict": "object",
+            "none": "null",
+        }.get(name, "string")
+
+    def _is_json_spec(self, spec) -> bool:
+        if spec is None:
+            return True
+        if isinstance(spec, tuple) and spec and spec[0] == "union":
+            return all(self._is_json_spec(part) for part in (spec[1] or []))
+        return self._type_name(spec) in {
+            "int",
+            "float",
+            "number",
+            "string",
+            "id",
+            "i-string",
+            "boolean",
+            "list",
+            "dict",
+            "none",
+        }
+
+    def _type_name(self, spec) -> str | None:
+        from slip.slip_datatypes import GetPath, PathLiteral, Name
+
+        if isinstance(spec, PathLiteral):
+            spec = spec.inner
+        if (
+            isinstance(spec, GetPath)
+            and len(spec.segments) == 1
+            and isinstance(spec.segments[0], Name)
+        ):
+            return str(spec.segments[0].text)
+        if spec is None:
+            return "none"
+        return None
+
+    def _is_optional_spec(self, spec) -> bool:
+        if isinstance(spec, tuple) and spec and spec[0] == "union":
+            return any(
+                self._schema_type(part) == "null" for part in (spec[1] or [])
+            )
+        return False
+
+    def _select_shape(
+        self, command: dict[str, Any], host_parameters
+    ) -> PublicCommandShape:
+        from jsonschema import Draft202012Validator
+
+        name = command["function"]
+        arguments = command["arguments"]
+        matches = [
+            shape
+            for shape in self._visible_shapes(host_parameters)
+            if shape.name == name
+            and Draft202012Validator(
+                self._arguments_schema(shape, host_parameters)
+            ).is_valid(arguments)
+        ]
+        if not matches:
+            raise ValueError("command does not match any public form")
+        return max(
+            matches,
+            key=lambda shape: self._shape_specificity(shape, host_parameters),
+        )
+
+    def _shape_specificity(self, shape, host_parameters) -> tuple[int, int]:
+        params = shape.json_params(host_parameters)
+        refined = sum(self._type_name(spec) == "id" for _name, spec in params)
+        return refined, len(params)
+
+    def _literal_from_ast(self, node: dict[str, Any]) -> Any:
+        tag = node.get("tag")
+        if tag in {"string", "i-string"}:
+            return str(node.get("text") or "")
+        if tag in {"number", "boolean", "null"}:
+            return node.get("value")
+        raise ValueError("public command arguments must be literals")
+
+    def _json_to_slip(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            out = SlipDict()
+            for key, item in value.items():
+                out[str(key)] = self._json_to_slip(item)
+            return out
+        if isinstance(value, list):
+            return [self._json_to_slip(item) for item in value]
+        return value
+
+
 class ScriptRunner:
     """Parses, transforms, and executes SLIP code."""
 
@@ -2434,36 +2805,30 @@ class ScriptRunner:
         """Convert SLIP runtime datatypes into plain Python datatypes for host results."""
         from slip.slip_datatypes import (
             PathLiteral as _PL,
-            GetPath as _GP,
-            Name as _Name,
-            Response as _Resp,
         )
         from slip.slip_runtime import SlipDict as _SlipDict
 
-        # Realize internal lazy selections/views at the host boundary.
-        try:
-            if hasattr(v, "realize") and callable(getattr(v, "realize")):
-                v = v.realize()
-        except Exception:
-            pass
-
-        # Realize internal lazy selections/views at the host boundary.
-        try:
-            if hasattr(v, "realize") and callable(getattr(v, "realize")):
-                v = v.realize()
-        except Exception:
-            pass
-
-        # Responses are SLIP datatypes; normalize to a plain dict for host usage.
-        # Host contract: response.status is a plain string ("ok"/"err"/...), not a backticked PathLiteral string.
-        if isinstance(v, _Resp):
-            st = self._host_normalize(v.status)
-            if isinstance(st, str) and len(st) >= 2 and st[0] == "`" and st[-1] == "`":
-                st = st[1:-1]
+        if isinstance(v, Outcome):
             return {
-                "status": st,
+                "status": self._host_status(v.status),
                 "value": self._host_normalize(v.value),
+                "error": self._host_error(v.error),
+                "effects": self._host_normalize(v.effects),
             }
+
+        # Realize internal lazy selections/views at the host boundary.
+        try:
+            if hasattr(v, "realize") and callable(getattr(v, "realize")):
+                v = v.realize()
+        except Exception:
+            pass
+
+        # Realize internal lazy selections/views at the host boundary.
+        try:
+            if hasattr(v, "realize") and callable(getattr(v, "realize")):
+                v = v.realize()
+        except Exception:
+            pass
 
         # PathLiteral -> string form.
         # IMPORTANT: preserve full SLIP source-ish representation so it can round-trip
@@ -2500,6 +2865,27 @@ class ScriptRunner:
 
         return v
 
+    def _host_status(self, value: Any) -> str:
+        value = self._host_normalize(value)
+        if isinstance(value, str) and value.startswith("`") and value.endswith("`"):
+            return value[1:-1]
+        return str(value)
+
+    def _host_error(self, error: Any) -> Optional[Dict]:
+        if error is None:
+            return None
+        out = self._host_normalize(error)
+        if isinstance(out, dict):
+            for key in ("kind", "code", "protocol"):
+                value = out.get(key)
+                if (
+                    isinstance(value, str)
+                    and value.startswith("`")
+                    and value.endswith("`")
+                ):
+                    out[key] = value[1:-1]
+        return out
+
     _parser: Optional[Parser] = None
     _transformer: Optional[SlipTransformer] = None
     _core_loaded_ast: Optional[Code] = None
@@ -2535,6 +2921,10 @@ class ScriptRunner:
                 else:
                     detail = str(inner)
                 msg = f"PathNotFound: {detail}"
+            case SlipFailure() as failure:
+                msg = f"{self._host_status(failure.code)}: {failure.message}"
+            case ProtocolFailure() as failure:
+                msg = failure.message
             case TypeError() | AttributeError():
                 call_name = None
                 try:
@@ -2552,6 +2942,8 @@ class ScriptRunner:
                 detail = getattr(e, "slip_detail", None)
                 if isinstance(detail, str) and detail:
                     msg = f"{msg}\n{detail}"
+                elif str(e) and str(e) not in {"invalid-args", msg}:
+                    msg = f"{msg}: {e}"
             case _:
                 # Preserve the underlying exception type to make errors self-teaching.
                 msg = f"{type(e).__name__}: {str(e)}"
@@ -2804,8 +3196,6 @@ class ScriptRunner:
                     self.root_scope[q_alias] = member
                     self.root_scope[f"core-{q_alias}"] = member
 
-        # Bind a live, read-only response view for scripts
-        self.root_scope["outcome"] = _ResponseView(self.evaluator)
         # Track which host API names we have bound into the root scope
         self._host_api_names: set[str] = set()
 
@@ -2866,6 +3256,30 @@ class ScriptRunner:
 
         self._initialized = True
 
+    async def import_public_module(self, locator: str) -> PublicModule:
+        """Import a SLIP module and return its `|public` command surface."""
+        await self._initialize()
+        self.evaluator.host_object = self.host_object
+        self.evaluator.host_data_loader = self.host_data
+        import os as _os
+
+        self.evaluator.source_dir = self.source_dir or _os.getcwd()
+        self._bind_host_api_methods()
+        module_scope = await self.evaluator.stdlib._import(
+            locator,
+            scope=self.root_scope,
+        )
+        return PublicModule(self, self._module_exports(module_scope))
+
+    def _module_exports(self, module_scope) -> dict[str, Any]:
+        if isinstance(module_scope, Scope):
+            if module_scope.bindings:
+                return dict(module_scope.bindings)
+            parent = module_scope.parent
+            if isinstance(parent, Scope):
+                return dict(parent.bindings)
+        return {}
+
     def _bind_host_api_methods(self):
         """Bind @slip_api_method methods of the host into the root scope (kebab-case)."""
         # Remove any previously bound host API names to refresh cleanly
@@ -2912,16 +3326,6 @@ class ScriptRunner:
             import os as _os
 
             self.evaluator.source_dir = self.source_dir or _os.getcwd()
-            # Initialize per-run unified Outcome object
-            init_status = _OK_STATUS
-            # Ensure side_effects list is used as the effects reference
-            self.evaluator.outcome = Outcome(
-                status=init_status,
-                value=None,
-                effects=self.evaluator.side_effects,
-                error=None,
-                stacktrace=[],
-            )
             await self._initialize()
             # Bind host API methods after core is loaded so host > root.slip > native
             self._bind_host_api_methods()
@@ -3056,25 +3460,6 @@ class ScriptRunner:
             except Exception:
                 pass
 
-            # Mirror final result into the unified outcome object (status ok, value = final value)
-            # If execution signaled a ReturnSignal, use its payload as the final value.
-            # Responses are data; other values are treated as final value.
-            if isinstance(result, ReturnSignal):
-                final_val = result.value
-            elif isinstance(result, Response):
-                final_val = result
-            else:
-                final_val = result
-            try:
-                out = getattr(self.evaluator, "outcome", None)
-                if isinstance(out, Outcome):
-                    out.status = _OK_STATUS
-                    out.value = final_val
-                    out.stacktrace = []
-                    out.error = None
-            except Exception:
-                pass
-
             # If evaluation produced a ReturnSignal, treat it as an early-exit and
             # return its payload as the host-level successful result.
             if isinstance(result, ReturnSignal):
@@ -3083,15 +3468,6 @@ class ScriptRunner:
                     value=self._host_normalize(result.value),
                     side_effects=self.evaluator.side_effects,
                     slip_result=result.value,
-                )
-
-            # Responses are returned as data values; normal final value otherwise.
-            if isinstance(result, Response):
-                return ExecutionResult(
-                    slip_status="`ok`",
-                    value=self._host_normalize(result),
-                    side_effects=self.evaluator.side_effects,
-                    slip_result=result,
                 )
 
             return ExecutionResult(
@@ -3104,22 +3480,19 @@ class ScriptRunner:
         except Exception as e:
             node = getattr(self.evaluator, "current_node", None)
             err_msg, err_token = self._format_runtime_error(e, source_code, node)
+            if isinstance(e, ProtocolFailure):
+                error = _protocol_error(e)
+            elif isinstance(e, SlipFailure):
+                error = _failure_error(e)
+            else:
+                error = _runtime_error(e)
             # Emit consolidated stderr side-effect
             self.evaluator.side_effects.append(
                 {"topics": ["stderr"], "message": err_msg}
             )
-            # Mirror error into the unified outcome object (status err, include error details)
-            try:
-                out = getattr(self.evaluator, "outcome", None)
-                if isinstance(out, Outcome):
-                    out.status = _ERR_STATUS
-                    out.value = err_msg
-                    out.stacktrace = []
-                    out.error = {"message": err_msg, "token": err_token}
-            except Exception:
-                pass
             return ExecutionResult(
                 slip_status="`err`",
+                error=self._host_error(error),
                 error_message=err_msg,
                 error_token=err_token,
                 side_effects=self.evaluator.side_effects,

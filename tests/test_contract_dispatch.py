@@ -151,18 +151,18 @@ async def test_dispatch_preserves_mixed_sig_order():
     src = """
     Item: scope #{}
 
-    take: fn {obj: Item, actor-id, original-text} [
-        #[ "typed", obj.name, actor-id, original-text ]
+    take: fn {obj: Item, actor-id} [
+        #[ "typed", obj.name, actor-id ]
     ]
 
-    take: fn {object-id, actor-id, original-text |where \
+    take: fn {object-id, actor-id |where \
             (type-of object-id) = `string`} [
-        take (host-object object-id) actor-id original-text
+        take (host-object object-id) actor-id
     ]
 
     #[
-      take (host-object 'item-1') 'actor-1' 'take key',
-      take 'item-1' 'actor-1' 'take key'
+      take (host-object 'item-1') 'actor-1',
+      take 'item-1' 'actor-1'
     ]
     """
     res = await runner.handle_script(src)
@@ -170,7 +170,7 @@ async def test_dispatch_preserves_mixed_sig_order():
     assert res.status == "ok", (
         f"ERROR: {res.error_message}\nEFFECTS: {res.side_effects}"
     )
-    expected = ["typed", "Brass Key", "actor-1", "take key"]
+    expected = ["typed", "Brass Key", "actor-1"]
     assert res.value == [expected, expected]
 
 
@@ -187,23 +187,23 @@ async def test_guarded_same_generic_wrapper_dispatches_to_typed_host_object():
     src = """
     Item: scope #{}
 
-    describe: fn {obj: Item, actor-id, original-text} [
-        response ok "typed"
+    describe: fn {obj: Item, actor-id} [
+        "typed"
     ]
 
-    describe: fn {object-id, actor-id, original-text |where \
+    describe: fn {object-id, actor-id |where \
             (type-of object-id) = `string`} [
-        describe (host-object object-id) actor-id original-text
+        describe (host-object object-id) actor-id
     ]
 
-    describe 'item-1' 'actor-1' 'test'
+    describe 'item-1' 'actor-1'
     """
     res = await runner.handle_script(src)
 
     assert res.status == "ok", (
         f"ERROR: {res.error_message}\nEFFECTS: {res.side_effects}"
     )
-    assert res.value == {"status": "ok", "value": "typed"}
+    assert res.value == "typed"
 
 
 @pytest.mark.asyncio

@@ -85,6 +85,20 @@ async def test_file_read_by_extension_text_and_structured(tmp_path):
     res_toml = await run_slip(url_toml)
     assert_ok(res_toml); assert res_toml.value == {"a": 3, "b": "z"}
 
+
+@pytest.mark.asyncio
+async def test_file_get_applies_attached_query_segments(tmp_path):
+    source = tmp_path / "players.json"
+    source.write_text(
+        '[{"name": "Karl"}, {"name": "Jaina"}]',
+        encoding="utf-8",
+    )
+    locator = f"file:///{str(source).lstrip('/')}"
+
+    result = await run_slip(f"{locator}[1].name")
+
+    assert_ok(result, "Jaina")
+
 @pytest.mark.asyncio
 async def test_file_put_serializes_json_and_yaml_then_roundtrip(tmp_path):
     f_json = tmp_path / "out.json"

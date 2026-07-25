@@ -30,27 +30,44 @@ SLIP's features are designed to work together, allowing you to define the concep
 Imagine you want to apply a "poison" effect, but stone golems in your world are immune.
 
 ```slip
+Character: scope #{}
+Golem: scope #{} |inherit Character
+
 -- First, define the rules of your world using functions.
 -- This is the general rule for applying poison to any character.
-handle-effect: fn {target: Character, effect: `poison`} [
+handle-effect: fn {target: Character, effect |where effect = `poison`} [
     target.hp: target.hp - 5
     emit "log" "{{target.name}} takes 5 poison damage."
 ]
 
 -- This is a more specific rule that runs ONLY for Golems.
 -- SLIP automatically chooses the most specific rule to run.
-handle-effect: fn {target: Golem, effect: `poison`} [
+handle-effect: fn {target: Golem, effect |where effect = `poison`} [
     emit "log" "The {{target.name}} is immune to poison!"
 ]
 
--- Now, simulate the world using these rules.
--- Find all the goblins in the Dragon's Lair.
-lair-goblins: world.dungeons.dragons-lair.creatures[.class = "Goblin"]
-
--- Apply the poison effect to all of them.
-foreach {goblin} lair-goblins [
-    handle-effect goblin `poison`
+goblin: create Character [
+    name: "Goblin"
+    hp: 30
 ]
+golem: create Golem [
+    name: "stone Golem"
+    hp: 100
+]
+
+world: #{
+    dungeons: #{
+        dragons-lair: #{ creatures: #[goblin, golem] }
+    }
+}
+
+-- Apply the effect to every creature in the lair.
+foreach {creature} world.dungeons.dragons-lair.creatures [
+    handle-effect creature `poison`
+]
+
+#[goblin.hp, golem.hp]
+-- => #[25, 100]
 ```
 
 ---

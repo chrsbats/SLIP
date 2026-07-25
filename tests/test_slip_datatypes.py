@@ -1,6 +1,6 @@
 import pytest
 from slip.slip_datatypes import (
-    Scope, Code, List, IString, SlipFunction, Response,
+    Scope, Code, List, IString, SlipFunction,
     PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, Group,
     Root, Parent, Pwd, PipedPath, MultiSetPath,
@@ -156,14 +156,6 @@ def test_slip_function():
     assert f.body is body
     assert f.closure is closure
     assert repr(f) == "fn [] []"
-
-def test_response():
-    p = PathLiteral(GetPath([Name("ok")]))
-    r = Response(p, 123)
-    assert r.status is p
-    assert r.value == 123
-    assert repr(r) == "response `ok` 123"
-
 
 # --- Path and Segment Tests ---
 

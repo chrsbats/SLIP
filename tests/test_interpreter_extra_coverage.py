@@ -59,25 +59,3 @@ async def test_unary_piped_operator_missing_rhs_invokes_function_and_errors():
     # Unary pipe should attempt a single-arg call; add requires 2 args -> invalid-args in (add)
     res = await run_slip("5 |add")
     assert_error(res, "TypeError: invalid-args in (add)")
-
-
-@pytest.mark.asyncio
-async def test_http_get_with_trailing_segments_is_rejected_client_side():
-    # Trailing segments after an http URL should error before any network call
-    src = """
-    probe: do [ http://example.com/data.name ]
-    eq probe.outcome.status err
-    """
-    res = await run_slip(src)
-    assert_ok(res, True)
-
-
-@pytest.mark.asyncio
-async def test_file_get_with_trailing_segments_is_rejected_client_side():
-    # Bracketed trailing segments after a file:// URL should error without touching filesystem
-    src = """
-    probe: do [ file://./[0] ]
-    eq probe.outcome.status err
-    """
-    res = await run_slip(src)
-    assert_ok(res, True)

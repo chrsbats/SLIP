@@ -21,41 +21,39 @@ def assert_error(res, contains: str | None = None):
 
 
 @pytest.mark.asyncio
-async def test_response_constructor_and_fields():
+async def test_function_returns_ordinary_success_value():
     src = """
-    r: response `ok` 123
-    #[ eq r.status ok, r.value ]
+    f: fn {} [ 123 ]
+    f
     """
     res = await run_slip(src)
-    assert_ok(res, [True, 123])
+    assert_ok(res, 123)
 
 
 @pytest.mark.asyncio
-async def test_respond_exits_function_and_returns_response():
+async def test_return_exits_function_with_success_value():
     src = """
     f: fn {} [
-      respond ok 7
+      return 7
       999  -- should not run
     ]
-    out: f
-    #[ eq out.status ok, out.value ]
+    f
     """
     res = await run_slip(src)
-    assert_ok(res, [True, 7])
+    assert_ok(res, 7)
 
 
 @pytest.mark.asyncio
-async def test_respond_err_status_and_payload():
+async def test_fail_exits_function_with_error():
     src = """
     f: fn {} [
-      respond err "oops"
+      fail "oops"
       "unreachable"
     ]
-    out: f
-    #[ eq out.status err, out.value ]
+    f
     """
     res = await run_slip(src)
-    assert_ok(res, [True, "oops"])
+    assert_error(res, "oops")
 
 
 @pytest.mark.asyncio

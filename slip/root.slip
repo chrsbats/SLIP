@@ -24,7 +24,7 @@
 and: |logical-and
 or: |logical-or
 
--- Common aliases for response statuses
+-- Common outcome statuses
 ok:        `ok`
 err:       `err`
 not-found: `not-found`
@@ -265,7 +265,7 @@ optional: fn {type} [
 -- Helpers for validation
 has-key?: fn {m: `mapping`, key} [
   probe: do [ m[key] ]
-  if [probe.outcome.status = ok] [ true ] [ false ]
+  if [probe.status = ok] [ true ] [ false ]
 ]
 
 update: fn {target: `mapping`, patch: `mapping`} [
@@ -320,9 +320,9 @@ validate: fn {data: `mapping`, sch: `scope`} [
       if [is-optional-marker? spec] [
         t: spec["type"]
         if [is-schema? t] [
-          res: validate v t
+          res: do [ validate v t ]
           if [eq res.status ok] [ out[k]: res.value ] [
-            errs: add errs res.value
+            errs: add errs res.error.data
           ]
         ] [
           if [is-path? t] [
@@ -338,9 +338,9 @@ validate: fn {data: `mapping`, sch: `scope`} [
           out[k]: v
         ] [
           if [is-schema? spec] [
-            res: validate v spec
+            res: do [ validate v spec ]
             if [eq res.status ok] [ out[k]: res.value ] [
-              errs: add errs res.value
+              errs: add errs res.error.data
             ]
           ] [
             if [is-path? spec] [
@@ -366,9 +366,9 @@ validate: fn {data: `mapping`, sch: `scope`} [
     ]
   ]
   if [eq (len errs) 0] [
-    response ok out
+    out
   ] [
-    response err errs
+    fail `invalid` errs
   ]
 ]
 
@@ -381,37 +381,86 @@ create: fn {prototype, config-block} [
 ]
 
 
+-- Project one implementation into an ID-facing closure.
+command-method: fn {target, method} [
+    projected: get-sig method
+    steps: #[]
+
+    foreach {signature-parameter} projected.parameters [
+        should-hydrate: false
+        if [has-key? signature-parameter "type"] [
+            should-hydrate: is-scope? signature-parameter.type
+        ]
+
+        steps: add steps #[#{
+            name: signature-parameter.name
+            should-hydrate: should-hydrate
+        }]
+
+        if [should-hydrate] [
+            signature-parameter.type: `id`
+        ]
+    ]
+
+    -- The original method evaluates its guard after hydration.
+    projected.where: none
+
+    fn (sig projected) [
+        call-scope: current-scope
+        arguments: #[]
+
+        foreach {step} steps [
+            value: call-scope[step.name]
+            if [step.should-hydrate] [
+                value: host-object value
+            ]
+            arguments: add arguments #[value]
+        ]
+
+        call target arguments
+    ]
+]
+
+-- Adapt every implementation and aggregate the closures into one generic.
+command: fn {target} [
+    foreach {method} target.methods [
+        adapter: command-method target method
+    ]
+    adapter
+]
+
+
 -- --- Control Flow ---
 
 -- Extract a single, untyped parameter name from a sig like {x}.
--- Errors if the sig has types/keywords, a rest parameter, a return annotation,
--- or does not have exactly one positional parameter. Returns the name string.
+-- Errors if the parameter is typed, the sig has a rest parameter or return
+-- annotation, or there is not exactly one parameter. Returns the name string.
 extract-simple-param: fn {vars} [
     probe: do [
         #{
-            pos: vars.positional,
-            kws: vars.keywords,
+            parameters: vars.parameters,
             rest: vars.rest,
             ret: vars.return_annotation
         }
     ]
-    if [probe.outcome.status = err] [
-        respond err "extract-simple-param expects a sig literal (e.g., {x})"
+    if [probe.status = err] [
+        fail `invalid` "extract-simple-param expects a sig literal (e.g., {x})"
     ]
-    info: probe.outcome.value
+    info: probe.value
     if [info.ret != none] [
-        respond err "extract-simple-param: return annotation is not allowed"
+        fail `invalid` "extract-simple-param: return annotation is not allowed"
     ]
     if [info.rest] [
-        respond err "extract-simple-param: rest parameter is not allowed"
+        fail `invalid` "extract-simple-param: rest parameter is not allowed"
     ]
-    if [(len info.kws) > 0] [
-        respond err "extract-simple-param: typed parameters/keywords are not allowed"
+    if [(len info.parameters) != 1] [
+        fail `invalid` "extract-simple-param: expected exactly one parameter"
     ]
-    if [(len info.pos) != 1] [
-        respond err "extract-simple-param: expected exactly one positional parameter"
+    parameter: info.parameters[0]
+    if [has-key? parameter "type"] [
+        fail `invalid` "extract-simple-param: typed parameters are not allowed"
     ]
-    info.pos[0]
+    parameter.name
 ]
 
 -- Provides a conditional branch without a required 'else' block.

@@ -59,14 +59,14 @@ async def test_write_rooted_at_this_succeeds_inside_resolver_transaction():
     Combat.apply-damage: fn {this: Combat, target-id, amount} [
         next: this.hp[target-id] - amount
         this.hp[target-id]: next
-        response ok next
+        next
     ]
 
     -- non-idiomatic (property access), but supported
     Combat |Combat.apply-damage "p1" 10
     """
     res = await run_slip(src)
-    assert_ok(res, {"status": "ok", "value": 110})
+    assert_ok(res, 110)
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_write_rooted_at_this_fails_if_this_receiver_is_not_a_resolver():
     Combat.apply-damage: fn {this: Combat, target-id, amount} [
         next: this.hp[target-id] - amount
         this.hp[target-id]: next
-        response ok next
+        next
     ]
 
     Combat |Combat.apply-damage "p1" 10
@@ -109,7 +109,7 @@ async def test_write_with_identity_boundary_is_rejected_even_in_transaction():
 
     bad: fn {this: Combat} [
         this::hp["p1"]: 0
-        response ok none
+        none
     ]
 
     Combat |bad

@@ -1,7 +1,7 @@
 import pytest
 from slip.slip_printer import Printer
 from slip.slip_datatypes import (
-    Code, List, IString, SlipFunction, Response,
+    Code, List, IString, SlipFunction,
     PathLiteral,
     GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group,
     PipedPath, Root, Parent, Pwd, Scope, MultiSetPath
@@ -108,11 +108,6 @@ FORMAT_TEST_CASES = [
         "simple_dict",
         SlipObject({'a': 1, 'b': 'foo'}),
         "{\n  a: 1\n  b: 'foo'\n}"
-    ),
-    (
-        "response",
-        Response(PathLiteral(GetPath([Name("ok")])), 42),
-        "response `ok` 42"
     ),
     (
         "slip_function",

@@ -113,15 +113,18 @@ async def test_test_and_test_all_helpers():
     res = await runner.handle_script("""
     good: fn {a, b} [ a + b ] |example { a: 2, b: 3 -> 5 }
     bad: fn {x} [ x + 1 ] |example { x: 2 -> 4 }
-    #[ (eq (test good).status ok), (eq (test bad).status err) ]
+    passed: test good
+    failed: do [ test bad ]
+    #[ passed, failed.status, failed.error.code ]
     """)
     assert res.status == "ok"
-    assert res.value == [True, True]
+    assert res.value == [1, "`err`", "`test-failed`"]
 
     # test-all over current scope finds at least the two above
     res2 = await runner.handle_script("""
-    out: test-all
-    (out.value.passed >=  1) and ( out.value.passed + out.value.failed >= 1)
+    out: do [ test-all ]
+    (out.error.data.passed >= 1) and \
+      (out.error.data.passed + out.error.data.failed >= 1)
     """)
     assert res2.status == "ok"
     assert res2.value is True
@@ -150,24 +153,10 @@ async def test_get_body_missing_sig_errors_cleanly():
     res = await runner.handle_script("""
     add: fn {a: int, b: int} [ a + b ]
     probe: do [ get-body add {a: string, b: string} ]
-    probe.outcome.status
+    probe.status
     """)
     assert res.status == "ok"
-    # do should capture the PathNotFound and return outcome err
-    # Either status is a path-literal `err` or an alias 'err' from core; compare via string for robustness
-    from slip.slip_datatypes import PathLiteral, GetPath, Name
-
-    status = res.value
-    if (
-        isinstance(status, PathLiteral)
-        and isinstance(status.inner, GetPath)
-        and len(status.inner.segments) == 1
-        and isinstance(status.inner.segments[0], Name)
-    ):
-        assert status.inner.segments[0].text == "err"
-    else:
-        # In case the status is resolved to the alias value (host may return "`err`" as a round-trippable string)
-        assert str(status).strip("`").endswith("err")
+    assert res.value == "`err`"
 
 
 @pytest.mark.asyncio

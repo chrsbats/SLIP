@@ -48,7 +48,7 @@ task [
 
 Within task context, long `while` and `foreach` loops cooperate with the event loop so they do not monopolize execution.
 
-That means task-based background work is safe enough for practical timers and watchers without introducing a second concurrency system into your scripts.
+Task loops yield between iterations, so timers and watchers can share the event loop without introducing a second concurrency model. Blocking host operations still need to stay out of the task body.
 
 ### Host-managed lifecycle
 
@@ -72,12 +72,33 @@ SLIP is designed to be embedded in a Python application.
 
 For many real uses, this is the main advanced feature: Python owns the engine, infrastructure, and persistence; SLIP owns game logic, rules, and moddable behavior.
 
+The Python examples in this section show statements inside an async function or async REPL.
+
+### Run one script
+
+Start with a `ScriptRunner` and inspect its result:
+
+```python
+from slip import ScriptRunner
+
+
+runner = ScriptRunner()
+result = await runner.handle_script("10 + 20")
+
+if result.status == "ok":
+    print(result.value)
+else:
+    print(result.error_message)
+```
+
+Every execution returns an `ExecutionResult`. Its main fields are `status`, `value`, `error`, `error_message`, and `side_effects`.
+
 ### Expose host objects as data
 
 If a Python object implements `__getitem__`, `__setitem__`, and `__delitem__`, SLIP can use path access against it.
 
 ```python
-from slip.slip_runtime import SLIPHost
+from slip import ScriptRunner, SLIPHost, slip_api_method
 
 
 class CharacterHost(SLIPHost):
@@ -93,6 +114,15 @@ class CharacterHost(SLIPHost):
 
     def __delitem__(self, key):
         del self._data[key]
+
+    @slip_api_method
+    def take_damage(self, amount: int):
+        self._data["hp"] -= amount
+
+
+host = CharacterHost()
+runner = ScriptRunner(host_object=host)
+runner.root_scope["obj"] = host
 ```
 
 From SLIP, that object looks like ordinary path-accessible data:
@@ -104,24 +134,13 @@ obj.hp
 
 ### Expose host methods deliberately
 
-Python methods marked with `@slip_api_method` are safe to expose to SLIP.
+Python methods marked with `@slip_api_method` are safe to expose to SLIP. The `take_damage` method in the complete class above is one example.
 
+Methods decorated with `@slip_api_method` are exposed automatically under `kebab-case` names when the runner uses that host:
+
+<!-- slip-test: fragment -->
 ```python
-from slip.slip_runtime import slip_api_method
-
-
-class CharacterHost(SLIPHost):
-    ...
-
-    @slip_api_method
-    def take_damage(self, amount: int):
-        self._data["hp"] -= amount
-```
-
-Expose them into the runner scope under `kebab-case` names:
-
-```python
-runner.root_scope["take-damage"] = host.take_damage
+runner = ScriptRunner(host_object=host)
 ```
 
 Then call them from SLIP like any other function:
@@ -138,41 +157,139 @@ For embedded applications, a common pattern is to keep one `ScriptRunner` alive,
 from slip import ScriptRunner
 
 
-runner = ScriptRunner()
+registry = {
+    "id:p1": {"name": "Player"},
+    "id:goblin-1": {"name": "Goblin"},
+}
+runner = ScriptRunner(host_data=lambda object_id: registry[object_id])
 
 await runner.handle_script("""
 attack: fn {attacker, target} [
     print "attack!"
-    response ok none
+    return none
 ]
 """)
 
-result = await runner.handle_script('attack (host-object "p1") (host-object "goblin-1")')
+result = await runner.handle_script(
+    "attack (host-object 'id:p1') (host-object 'id:goblin-1')"
+)
 ```
 
-That is the right model when SLIP owns game logic and Python owns engine infrastructure.
+This pattern keeps loaded SLIP mechanics available while Python manages the surrounding application.
 
-### Use `ExecutionResult` from Python
+### Expose a public command API to Python
 
-Every script execution returns an `ExecutionResult`.
+Public commands cross the persisted-object boundary introduced in full in the next section. At that boundary, `host-object id` loads a live dispatchable object, `host-data id` returns its raw stored shape, and `as-slip` explicitly rehydrates data from other sources. `|command` automates the `host-object` path for prototype-typed parameters.
 
-From Python, the main fields to care about are:
+When a host needs a schema for player-facing commands, keep the mechanics typed and adapt them at the boundary:
 
-- `status`
-- `value`
-- `error_message`
-- `side_effects`
+```slip
+take-method: fn {actor: Persona, object: Item, original-text} [
+  object.owner: actor
+  object
+]
 
-Typical host-side pattern:
+take: take-method |command |public
+```
 
+`|command` projects entity parameters to the `` `id` `` refinement and hydrates them through `host-object`. `|public` marks the resulting function for host discovery.
+
+Put those public adapters in a small command API module instead of exposing every imported definition:
+
+```slip
+-- command-api.slip
+movement: import `file://movement.slip`
+combat: import `file://combat.slip`
+
+take: movement.take |command |public
+put: movement.put |command |public
+attack: combat.attack |command |public
+```
+
+Only names marked with `|public` become host-visible. Internal helpers stay inside their modules. An `` `id` `` is a string beginning with `id:` and is more specific than `` `string` `` during dispatch. Overloaded methods remain overloaded at the command boundary, and the original generic still performs typed dispatch and evaluates its `|where` guards after hydration.
+
+### Generate the command schema
+
+Import the module from Python and generate JSON Schema for the host-facing command format:
+
+<!-- slip-test: setup=command-module -->
 ```python
-result = await runner.handle_script('attack (host-object "p1") (host-object "goblin-1")')
+from slip import ScriptRunner
 
-if result.status == "ok":
-    handle_success(result.value, result.side_effects)
-else:
-    log_error(result.error_message)
+
+runner = ScriptRunner()
+commands = await runner.import_public_module("file://command-api.slip")
+
+schema = commands.json_schema(
+    host_parameters={"actor", "original-text"},
+)
 ```
+
+The schema describes one nested public call. By default, every JSON-compatible function parameter appears in the schema. Use `commands.commands_schema()` when you want an ordered list for compound input.
+
+<!-- slip-test: setup=command-session -->
+```python
+payload = {
+    "function": "take",
+    "arguments": {
+        "object": "id:item.apple.1",
+    },
+}
+
+commands.validate_json_command(
+    payload,
+    host_parameters={"actor", "original-text"},
+)
+result = await commands.run_json_command(
+    payload,
+    host_arguments={
+        "actor": session.actor_id,
+        "original-text": "take the apple",
+    },
+)
+```
+
+`run_json_command` accepts decoded JSON or a JSON string. It validates against the generated schema, converts JSON containers into SLIP runtime values, and invokes the marked function directly. It does not generate SLIP source code.
+
+Some parameters come from trusted host context rather than JSON. The host chooses those names when generating the schema and supplies their values during execution. Host parameters are omitted from the generated schema. A `|command` adapter applies the same signature-driven hydration to IDs supplied by the host and IDs supplied by JSON.
+
+### Keep entity IDs unchanged
+
+The `id:` prefix is part of the canonical entity ID, not a boundary encoding. JSON, host arguments, entity `.id` fields, and registry keys use the same complete value. `|command` passes that value unchanged to `host-object`, which performs an exact lookup. Ordinary strings and lifecycle identifiers such as ULIDs are unaffected.
+
+### Expose command execution to SLIP
+
+A domain host can expose that utility back to SLIP as `run-json-command`. For example, a game host may treat the current actor as trusted context:
+
+<!-- slip-test: fragment -->
+```python
+from slip import SLIPHost, slip_api_method
+
+
+class WorldHost(SLIPHost):
+    ...
+
+    @slip_api_method
+    async def run_json_command(self, actor, command_json):
+        result = await self.commands.run_json_command(
+            command_json,
+            host_arguments={
+                "actor": actor["id"],
+                "original-text": command_json,
+            },
+        )
+        if result.status == "err":
+            raise RuntimeError(result.error_message)
+        return result.slip_result
+```
+
+Then SLIP can use the host bridge normally:
+
+```slip
+actor |run-json-command command-json
+```
+
+If a public function has multiple JSON-compatible call shapes, its arguments schema uses `anyOf`. Methods that differ only by `|where` collapse to the same public shape; guards remain runtime dispatch details and are not exposed in the schema.
 
 ### Takeaway
 
@@ -197,22 +314,22 @@ Use `host-object` when you want normal SLIP behavior such as prototype dispatch.
 ### Use `host-object` for live entities
 
 ```slip
-person: host-object "player-1"
-target: host-object "goblin-1"
+person: host-object 'id:player-1'
+target: host-object 'id:goblin-1'
 
 attack person target
 ```
 
-This is the right shape when game logic should see live typed objects.
+Game logic now receives live typed objects that participate in normal dispatch.
 
 ### Use `host-data` for raw stored values
 
 ```slip
-raw: host-data "player-1"
+raw: host-data 'id:player-1'
 raw.location
 ```
 
-This is the right shape when you want to inspect or manipulate persistence-shaped data directly.
+Use this form to inspect or manipulate the stored shape directly.
 
 ### Use `as-slip` outside the host boundary
 
@@ -221,16 +338,17 @@ Sometimes data comes from somewhere other than `host-object`, but you still want
 That is what `as-slip` is for.
 
 ```slip
-obj: as-slip (host-data "player-1")
+obj: as-slip (host-data 'id:player-1')
 ```
 
-Current behavior:
+Rehydration follows these rules:
 
 - plain dicts and lists stay plain
 - `__slip__`-marked values are rehydrated recursively
 - `type: "scope"` creates a real `scope`
 - if `prototype` is present, it is resolved by name
-- unknown prototypes raise an error
+- unknown prototype names create a generated prototype that is reused by the runner
+- an existing non-scope binding with the prototype name raises an error
 
 ### Serialized shape
 
@@ -254,7 +372,7 @@ Character: scope #{}
 describe: fn {x: Character} [ "typed" ]
 describe: fn {x} [ "fallback" ]
 
-obj: host-object "player-1"
+obj: host-object 'id:player-1'
 describe obj
 ```
 
@@ -303,7 +421,7 @@ res: run [
 ]
 ```
 
-Current behavior:
+`run` follows these rules:
 
 - `run` returns the final value
 - writes inside `run` do not leak into the caller's scope
@@ -315,7 +433,7 @@ res: run [
 ]
 
 probe: do [ x ]
-#[ res, probe.outcome.status = err ]
+#[ res, probe.status = err ]
 -- => #[3, true]
 ```
 
@@ -475,6 +593,17 @@ One of the most powerful advanced workflows is:
 4. run it with `run` or `run-with`
 
 That gives you configurable code templates without inventing a separate macro system.
+
+Put the reusable template in `mod.slip`:
+
+```slip
+x: (inject module-x)
+(splice extra-stmts)
+result: add (splice args)
+x + result + z
+```
+
+Then load and expand it from the caller:
 
 ```slip
 module-x: 5

@@ -5,13 +5,13 @@ from unittest.mock import Mock, MagicMock
 
 from slip.slip_runtime import SlipObject, SLIPHost, StdLib
 from slip.slip_datatypes import Scope, Code
-from slip.slip_runtime import ExecutionResult, ScriptRunner
+from slip.slip_runtime import ExecutionResult, Outcome, ScriptRunner
 from slip.slip_interpreter import Evaluator
 from slip.slip_datatypes import GetPath, Name, PathLiteral, SetPath
 from slip.slip_datatypes import Sig, Group
 from slip.slip_datatypes import PathLiteral as PLit, GetPath as GP, Name as Nm
 from slip.slip_datatypes import SlipFunction, GenericFunction
-from slip.slip_datatypes import PathNotFound, Response
+from slip.slip_datatypes import PathNotFound, SlipFailure
 
 # --- SlipObject Tests ---
 
@@ -181,7 +181,11 @@ async def test_do_effects_view_sequence_and_slicing():
         [42],
     ])
     out = await std._do(code, scope=scope)
-    eff = out['effects']
+    assert isinstance(out, Outcome)
+    assert out.status == PLit(GP([Nm('ok')]))
+    assert out.value == 42
+    assert out.error is None
+    eff = out.effects
     assert len(eff) == 2
     assert eff[0]['message'].endswith('one')
     assert list(eff[:1])[0]['message'].endswith('one')
@@ -189,20 +193,20 @@ async def test_do_effects_view_sequence_and_slicing():
     msgs = [e['message'] for e in eff]
     assert msgs == ["one", "two"]
 
-def test_package_http_result_modes_and_header_lowercasing():
+def test_package_http_result_full_and_default_contract():
     ev = Evaluator()
     std = StdLib(ev)
-    raw = (200, {'ok': True}, {'Content-Type': 'application/json', 'X-Test': 'yes'})
-    # lite
-    lite = std._package_http_result(raw, 'lite')
-    assert lite == [200, {'ok': True}]
-    # full
+    raw = (
+        200,
+        {'ok': True},
+        {'Content-Type': 'application/json', 'X-Test': 'yes'},
+    )
     full = std._package_http_result(raw, 'full')
     assert full['status'] == 200 and full['value'] == {'ok': True}
     assert full['meta']['headers'].get('content-type') == 'application/json'
     assert full['meta']['headers'].get('x-test') == 'yes'
-    # default (None) returns raw tuple
-    assert std._package_http_result(raw, None) == raw
+    body = {'ok': True}
+    assert std._package_http_result(body, None) is body
 
 def test_prepare_payload_json_and_bytes_and_headers():
     ev = Evaluator()
@@ -223,13 +227,12 @@ async def test_normalize_resource_variants_and_response_mode(monkeypatch):
     std = StdLib(ev)
     scope = Scope()
     gp = GetPath([Name('http://example/api')])
-    # meta -> lite via legacy flag
+    # Legacy flags are ignored.
     async def fake_meta(meta, scope):
         return {'lite': True}
     ev.path_resolver._meta_to_dict = fake_meta
-    gp_norm, url, cfg = await std._normalize_resource(gp, scope=scope)
-    assert url == 'http://example/api'
-    assert cfg.get('response-mode') == 'lite'
+    with pytest.raises(ValueError, match="legacy HTTP response flags were removed"):
+        await std._normalize_resource(gp, scope=scope)
     # Resource wrapper + explicit string mode (case-insensitive)
     resource_scope = await std._resource(gp, scope=scope)
     async def fake_meta2(meta, scope):
@@ -326,12 +329,12 @@ async def test_resource_invalid_non_http_and_normalize_cfg(monkeypatch):
     # Non-http path raises
     with pytest.raises(TypeError):
         await std._resource("file://x", scope=Scope())
-    # Normalize resource on direct GP and legacy flags via meta-to-dict
+    # Normalize resource on a direct path; legacy flags stay inert.
     gp = GP([Nm("http://example/api")])
     async def fake_meta(meta, scope): return {"lite": True}
     ev.path_resolver._meta_to_dict = fake_meta
-    gp2, url2, cfg2 = await std._normalize_resource(gp, scope=Scope())
-    assert url2 == "http://example/api" and cfg2.get("response-mode") == "lite"
+    with pytest.raises(ValueError, match="legacy HTTP response flags were removed"):
+        await std._normalize_resource(gp, scope=Scope())
 
 @pytest.mark.asyncio
 async def test_import_reject_invalid_targets(monkeypatch):
@@ -453,17 +456,14 @@ def test_type_conversions_and_type_of():
     assert isinstance(lit, PLit) and isinstance(lit.inner, GP) and lit.inner.segments[-1].text == "int"
     assert std._type_of("s").inner.segments[-1].text == "string"
 
-@pytest.mark.asyncio
-async def test_respond_and_response_emit_stderr():
+def test_fail_raises_structured_failure():
     ev = Evaluator()
     std = StdLib(ev)
-    out = std._respond(PLit(GP([Nm("err")])), "bad")
-    # _respond returns a ReturnSignal carrying a Response(status, value)
-    from slip.slip_datatypes import ReturnSignal as _RS
-    assert isinstance(out, _RS), f"_respond should return ReturnSignal, got {type(out).__name__}"
-    inner = out.value
-    assert isinstance(inner, Response) and isinstance(inner.status, PLit)
-    assert any("bad" in e["message"] for e in ev.side_effects if "stderr" in e["topics"])
+    with pytest.raises(SlipFailure) as captured:
+        std._fail(PLit(GP([Nm("invalid")])), "bad")
+    assert captured.value.code == PLit(GP([Nm("invalid")]))
+    assert captured.value.message == "bad"
+    assert captured.value.data == "bad"
 
 @pytest.mark.asyncio
 async def test_call_pathliteral_invocation_and_value_and_errors():

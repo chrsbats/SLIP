@@ -30,18 +30,18 @@ async def test_do_captures_effects_and_ok_value():
       7
     ]
     emit "debug" "after"
-    #[ r.outcome.status = ok, r.outcome.value, len r.effects, r.effects[0].message, r.effects[1].message ]
+    #[ r.status = ok, r.value, len r.effects, r.effects[0].message, r.effects[1].message ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, 7, 2, "in-1", "in-2"])
 
 
 @pytest.mark.asyncio
-async def test_do_unwraps_return_and_preserves_response():
+async def test_do_captures_success_and_failure():
     src = """
-    r1: do [ respond ok 123 ]
-    r2: do [ response err "bad" ]
-    #[ r1.outcome.status = ok, r1.outcome.value, r2.outcome.status = err, r2.outcome.value ]
+    r1: do [ 123 ]
+    r2: do [ fail "bad" ]
+    #[ r1.status = ok, r1.value, r2.status = err, r2.error.message ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, 123, True, "bad"])
@@ -51,7 +51,7 @@ async def test_do_unwraps_return_and_preserves_response():
 async def test_do_captures_err_on_exception():
     src = """
     r: do [ add "a" 1 ]
-    #[ r.outcome.status = err ]
+    #[ r.status = err ]
     """
     res = await run_slip(src)
     assert_ok(res, [True])
@@ -65,7 +65,7 @@ async def test_do_accepts_code_variable():
       1
     ]
     r: do blk
-    #[ r.outcome.status = ok, r.outcome.value, len r.effects, r.effects[0].message ]
+    #[ r.status = ok, r.value, len r.effects, r.effects[0].message ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, 1, 1, "v"])
