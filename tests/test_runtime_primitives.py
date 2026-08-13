@@ -77,6 +77,74 @@ async def test_small_math_family_is_available():
 
 
 @pytest.mark.asyncio
+async def test_runner_local_randomness_is_repeatable_and_isolated():
+    first = ScriptRunner()
+    second = ScriptRunner()
+
+    first_sequence = await first.handle_script("""
+    seed-random 42
+    #[random, random, random-int 1 6]
+    """)
+    second_sequence = await second.handle_script("""
+    seed-random 42
+    #[random, random, random-int 1 6]
+    """)
+    replay = await first.handle_script("""
+    seed-random 42
+    #[random, random, random-int 1 6]
+    """)
+
+    assert first_sequence.status == "ok", first_sequence.error_message
+    assert second_sequence.status == "ok", second_sequence.error_message
+    assert replay.status == "ok", replay.error_message
+    assert first_sequence.value == second_sequence.value == replay.value
+
+    await first.handle_script("random")
+    second_next = await second.handle_script("random")
+    replay_next = await first.handle_script("seed-random 42\n#[random, random, random-int 1 6, random]")
+    assert second_next.value == replay_next.value[-1]
+
+
+@pytest.mark.asyncio
+async def test_random_ranges_and_seed_return_value():
+    result = await ScriptRunner().handle_script("""
+    seeded: seed-random 7
+    values: #[random-int 1 1, random-int -2 2, random]
+    #[seeded, values]
+    """)
+
+    assert result.status == "ok", result.error_message
+    assert result.value[0] is None
+    assert result.value[1][0] == 1
+    assert -2 <= result.value[1][1] <= 2
+    assert 0 <= result.value[1][2] < 1
+
+
+@pytest.mark.asyncio
+async def test_imported_module_shares_runner_random_stream(tmp_path):
+    (tmp_path / "random-value.slip").write_text(
+        "value: random\n",
+        encoding="utf-8",
+    )
+    runner = ScriptRunner()
+    runner.source_dir = str(tmp_path)
+
+    imported = await runner.handle_script("""
+    seed-random 91
+    module: import `file://random-value.slip`
+    #[module.value, random]
+    """)
+    direct = await runner.handle_script("""
+    seed-random 91
+    #[random, random]
+    """)
+
+    assert imported.status == "ok", imported.error_message
+    assert direct.status == "ok", direct.error_message
+    assert imported.value == direct.value
+
+
+@pytest.mark.asyncio
 async def test_return_multiple_values_explains_parentheses():
     runner = ScriptRunner()
 

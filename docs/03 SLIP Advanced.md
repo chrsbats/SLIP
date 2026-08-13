@@ -251,6 +251,23 @@ result = await commands.run_json_command(
 
 `run_json_command` accepts decoded JSON or a JSON string. It validates against the generated schema, converts JSON containers into SLIP runtime values, and invokes the marked function directly. It does not generate SLIP source code.
 
+Trusted shortcut and UI adapters may start with one literal SLIP call instead.
+`json_command_from_source` parses that call without executing it and returns the
+same JSON envelope:
+
+<!-- slip-test: setup=command-session -->
+```python
+payload = commands.json_command_from_source(
+    "take 'id:item.apple.1'",
+    host_parameters={"actor", "original-text"},
+)
+```
+
+The source must contain exactly one public function call with literal arguments.
+Variables, paths, blocks, multiple expressions, and private functions are
+rejected. Refined `id:` values participate in overload selection, so an ID and
+an ordinary string can select different public forms.
+
 Some parameters come from trusted host context rather than JSON. The host chooses those names when generating the schema and supplies their values during execution. Host parameters are omitted from the generated schema. A `|command` adapter applies the same signature-driven hydration to IDs supplied by the host and IDs supplied by JSON.
 
 ### Keep entity IDs unchanged

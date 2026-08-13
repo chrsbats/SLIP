@@ -382,7 +382,7 @@ create: fn {prototype, config-block} [
 
 
 -- Project one implementation into an ID-facing closure.
-command-method: fn {target, method} [
+command-method: fn {command-callable, method} [
     projected: get-sig method
     steps: #[]
 
@@ -406,25 +406,25 @@ command-method: fn {target, method} [
     projected.where: none
 
     fn (sig projected) [
-        call-scope: current-scope
-        arguments: #[]
+        command-scope: current-scope
+        command-arguments: #[]
 
         foreach {step} steps [
-            value: call-scope[step.name]
+            command-value: command-scope[step.name]
             if [step.should-hydrate] [
-                value: host-object value
+                command-value: host-object command-value
             ]
-            arguments: add arguments #[value]
+            command-arguments: add command-arguments #[command-value]
         ]
 
-        call target arguments
+        call command-callable command-arguments
     ]
 ]
 
 -- Adapt every implementation and aggregate the closures into one generic.
-command: fn {target} [
-    foreach {method} target.methods [
-        adapter: command-method target method
+command: fn {command-callable} [
+    foreach {method} command-callable.methods [
+        adapter: command-method command-callable method
     ]
     adapter
 ]

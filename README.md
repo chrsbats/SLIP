@@ -220,7 +220,7 @@ asyncio.run(main())
 
 ### Agent Guidance
 
-- **[OpenCode Skill: SLIP](<.opencode/skills/slip/SKILL.md>):** Repository-local skill for agents writing idiomatic SLIP.
+- **[Agent Skill: SLIP](<.agents/skills/slip/SKILL.md>):** Repository-local skill for agents writing idiomatic SLIP.
 
 ### License
 

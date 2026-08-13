@@ -178,6 +178,8 @@ class StdLib:
 
     def __init__(self, evaluator):
         self.evaluator = evaluator
+        if not hasattr(evaluator, "random_generator"):
+            evaluator.random_generator = random.Random()
         # Provide a fallback core scope for bare Evaluator usage (outside ScriptRunner).
         # This binds stdlib functions into evaluator.core_scope so operators like '+'
         # resolve inside SlipFunction bodies in tests that construct StdLib(ev) directly.
@@ -607,6 +609,8 @@ class StdLib:
             Code as _Code,
         )
 
+        import os
+
         ev = self.evaluator
 
         # ----------------------------
@@ -622,49 +626,60 @@ class StdLib:
                 or getattr(target, "source_locator", None)
                 or id(target)
             )
+            source_path = getattr(target, "source_path", None)
+            if isinstance(source_path, str) and source_path:
+                cache_key = f"file://{os.path.realpath(source_path)}"
             if cache_key in cache:
                 return Scope(parent=cache[cache_key])
 
+            loading = ev.module_loading
+            if cache_key in loading:
+                raise RuntimeError(f"circular import: {cache_key}")
+            loading.add(cache_key)
+
             module_dir = None
             try:
-                import os
-
                 sp = getattr(target, "source_path", None)
                 if isinstance(sp, str) and sp:
                     module_dir = os.path.dirname(sp) or os.getcwd()
             except Exception:
                 module_dir = None
 
-            from slip.slip_runtime import ScriptRunner
-
+            graph_root = getattr(ev, "import_root_scope", ev.root_scope)
             runner = ScriptRunner(
                 host_object=getattr(ev, "host_object", None),
                 host_data=getattr(ev, "host_data_loader", None),
             )
+            runner.evaluator.random_generator = ev.random_generator
             runner.evaluator.side_effects = ev.side_effects
+            runner.evaluator.module_cache = cache
+            runner.evaluator.module_loading = loading
+            runner.evaluator.import_root_scope = graph_root
             if module_dir:
                 runner.source_dir = module_dir
+                runner.evaluator.source_dir = module_dir
 
-            await runner._initialize()
-            before_bindings = dict(runner.root_scope.bindings)
+            try:
+                await runner._initialize()
+                runner._bind_host_api_methods()
+                before_bindings = dict(runner.root_scope.bindings)
+                await runner.evaluator._eval(target.ast, runner.root_scope)
 
-            # Execute the code AST directly
-            await runner.evaluator._eval(target.ast, runner.root_scope)
+                after_bindings = runner.root_scope.bindings
+                export_names = [
+                    name
+                    for name, val in after_bindings.items()
+                    if (name not in before_bindings)
+                    or (before_bindings.get(name) is not val)
+                ]
+                mod_scope = Scope(parent=runner.root_scope)
+                for name in export_names:
+                    mod_scope[name] = after_bindings[name]
 
-            after_bindings = runner.root_scope.bindings
-            export_names = [
-                name
-                for name, val in after_bindings.items()
-                if (name not in before_bindings)
-                or (before_bindings.get(name) is not val)
-            ]
-
-            mod_scope = Scope(parent=runner.root_scope)
-            for name in export_names:
-                mod_scope[name] = after_bindings[name]
-
-            cache[cache_key] = mod_scope
-            return Scope(parent=mod_scope)
+                cache[cache_key] = mod_scope
+                return Scope(parent=mod_scope)
+            finally:
+                loading.discard(cache_key)
 
         # ----------------------------
         # 1) Normalize target -> locator
@@ -747,18 +762,17 @@ class StdLib:
         cache_key: str
 
         if file_loc:
-            from slip.slip_file import _resolve_locator
-            import os
+            from slip.slip_file import _resolve_locator, file_get
 
             abs_path = _resolve_locator(file_loc, getattr(ev, "source_dir", None))
+            abs_path = os.path.realpath(abs_path)
             cache_key = f"file://{abs_path}"
 
             if cache_key in cache:
                 return Scope(parent=cache[cache_key])
 
-            with open(abs_path, "r", encoding="utf-8") as f:
-                source_text = f.read()
-            module_dir = os.path.dirname(abs_path) or os.getcwd()
+            code = await file_get(f"file://{abs_path}")
+            return await self._import(code, scope=scope)
 
         elif url:
             cache_key = url
@@ -782,39 +796,48 @@ class StdLib:
         else:
             raise PathNotFound("import")
 
+        loading = ev.module_loading
+        if cache_key in loading:
+            raise RuntimeError(f"circular import: {cache_key}")
+        loading.add(cache_key)
+
         # ----------------------------
         # 3) Execute module in an isolated runner and export new/changed bindings
         # ----------------------------
-        from slip.slip_runtime import ScriptRunner
-
         runner = ScriptRunner(
             host_object=getattr(ev, "host_object", None),
             host_data=getattr(ev, "host_data_loader", None),
         )
+        runner.evaluator.random_generator = ev.random_generator
         runner.evaluator.side_effects = ev.side_effects
+        runner.evaluator.module_cache = cache
+        runner.evaluator.module_loading = loading
         if module_dir:
             runner.source_dir = module_dir
 
-        await runner._initialize()
-        before_bindings = dict(runner.root_scope.bindings)
+        try:
+            await runner._initialize()
+            before_bindings = dict(runner.root_scope.bindings)
 
-        res = await runner.handle_script(source_text)
-        if res.status != "ok":
-            raise RuntimeError(res.error_message or "Failed to load module")
+            res = await runner.handle_script(source_text)
+            if res.status != "ok":
+                raise RuntimeError(res.error_message or "Failed to load module")
 
-        after_bindings = runner.root_scope.bindings
-        export_names = [
-            name
-            for name, val in after_bindings.items()
-            if (name not in before_bindings) or (before_bindings.get(name) is not val)
-        ]
+            after_bindings = runner.root_scope.bindings
+            export_names = [
+                name
+                for name, val in after_bindings.items()
+                if (name not in before_bindings) or (before_bindings.get(name) is not val)
+            ]
 
-        mod_scope = Scope(parent=runner.root_scope)
-        for name in export_names:
-            mod_scope[name] = after_bindings[name]
+            mod_scope = Scope(parent=runner.root_scope)
+            for name in export_names:
+                mod_scope[name] = after_bindings[name]
 
-        cache[cache_key] = mod_scope
-        return Scope(parent=mod_scope)
+            cache[cache_key] = mod_scope
+            return Scope(parent=mod_scope)
+        finally:
+            loading.discard(cache_key)
 
     # --- List and Sequence Utilities ---
     def _slice_from(self, data, start):
@@ -1022,10 +1045,13 @@ class StdLib:
         return t
 
     def _random(self):
-        return random.random()
+        return self.evaluator.random_generator.random()
 
     def _random_int(self, a, b):
-        return random.randint(a, b)
+        return self.evaluator.random_generator.randint(a, b)
+
+    def _seed_random(self, seed):
+        self.evaluator.random_generator.seed(seed)
 
     def _len(self, collection):
         return len(collection)
@@ -2518,12 +2544,23 @@ class PublicModule:
                 candidates.append((shape, arguments))
         if not candidates:
             raise ValueError("command does not match any public form")
-        shape, arguments = max(
-            candidates,
-            key=lambda candidate: self._shape_specificity(
-                candidate[0], host_parameters
-            ),
+        best_score = max(
+            self._shape_specificity(shape, host_parameters)
+            for shape, _arguments in candidates
         )
+        best = [
+            candidate
+            for candidate in candidates
+            if self._shape_specificity(candidate[0], host_parameters)
+            == best_score
+        ]
+        argument_forms = {
+            json.dumps(arguments, sort_keys=True)
+            for _shape, arguments in best
+        }
+        if len(argument_forms) != 1:
+            raise ValueError("public command source is ambiguous")
+        shape, arguments = best[0]
         del shape
         return self.validate_json_command(
             {"function": name, "arguments": arguments},
@@ -2694,7 +2731,7 @@ class PublicModule:
                 return self._param_schema(non_none[0])
             return {"anyOf": [self._param_schema(part) for part in non_none]}
         if self._type_name(spec) == "id":
-            return {"type": "string", "pattern": "^id:"}
+            return {"type": "string", "pattern": "^id:.+"}
         return {"type": self._schema_type(spec)}
 
     def _schema_type(self, spec) -> str:
@@ -3034,12 +3071,6 @@ class ScriptRunner:
             return ""
         return lines[line - 1]
 
-    def _source_line(self, source: str, line: int) -> str:
-        lines = source.splitlines()
-        if not line or line < 1 or line > len(lines):
-            return ""
-        return lines[line - 1]
-
     def _format_stacktrace(self) -> str:
         stack = getattr(self.evaluator, "call_stack", None) or []
         if not stack:
@@ -3127,6 +3158,13 @@ class ScriptRunner:
         frames = []
         for frame in stack:
             surface = frame.get("surface")
+            if not surface:
+                call_site_node = frame.get("call_site_node")
+                if call_site_node is not None:
+                    try:
+                        surface = pf(call_site_node)
+                    except Exception:
+                        surface = None
             if isinstance(surface, str) and surface.strip():
                 frames.append(surface.strip())
                 continue
@@ -3157,23 +3195,12 @@ class ScriptRunner:
         self._load_core = load_core
         self.source_dir = None  # directory of the current source file, if known
 
-        if ScriptRunner._parser is None:
-            # TODO: This path is brittle. A package resource approach would be better.
-            grammar_path = (
-                Path(__file__).parent.parent / "grammar" / "slip_grammar.yaml"
-            )
-            ScriptRunner._parser = Parser.from_file(str(grammar_path))
-
-        if ScriptRunner._transformer is None:
-            ScriptRunner._transformer = SlipTransformer()
-
-        self.parser = ScriptRunner._parser
-        self.transformer = ScriptRunner._transformer
-
         self.evaluator = Evaluator()  # Each runner has its own evaluator/side_effects
+        self.evaluator.random_generator = random.Random()
         # Make the runner root scope discoverable to stdlib helpers like `run`,
         # so sandboxed execution still sees root.slip bindings (e.g. '+').
         self.evaluator.root_scope = self.root_scope
+        self.evaluator.import_root_scope = self.root_scope
         # The evaluator needs access to the host object to correctly implement `task`
         if host_object:
             self.evaluator.host_object = host_object
@@ -3198,6 +3225,21 @@ class ScriptRunner:
 
         # Track which host API names we have bound into the root scope
         self._host_api_names: set[str] = set()
+
+    @property
+    def parser(self):
+        if ScriptRunner._parser is None:
+            grammar_path = (
+                Path(__file__).parent.parent / "grammar" / "slip_grammar.yaml"
+            )
+            ScriptRunner._parser = Parser.from_file(str(grammar_path))
+        return ScriptRunner._parser
+
+    @property
+    def transformer(self):
+        if ScriptRunner._transformer is None:
+            ScriptRunner._transformer = SlipTransformer()
+        return ScriptRunner._transformer
 
     async def _initialize(self):
         """Loads core.slip into the root scope if not already loaded."""

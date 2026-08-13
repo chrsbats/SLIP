@@ -1454,6 +1454,7 @@ class Evaluator:
         self.current_local_scope = None
         # Cache of loaded modules keyed by PathLiteral string
         self.module_cache: Dict[str, Any] = {}
+        self.module_loading: set[str] = set()
         # When True, prefer binding into the current container scope even if a parent owns the key.
         # Used by run-with to avoid leaking writes into the caller's scope.
         self.bind_locals_prefer_container: bool = True
@@ -1730,32 +1731,13 @@ class Evaluator:
     def _push_frame(self, name, func, args, call_site_node):
         loc = getattr(call_site_node, "loc", None)
 
-        # Best-effort: capture surface syntax for stacktraces.
-        surface = None
-        try:
-            from slip.slip_printer import Printer
-
-            surface = Printer().pformat(call_site_node)
-        except Exception:
-            surface = None
-
-        # Fallback: use parser-provided token text when available
-        if not surface:
-            try:
-                if isinstance(loc, dict):
-                    t = loc.get("text")
-                    if isinstance(t, str) and t.strip():
-                        surface = t.strip()
-            except Exception:
-                pass
-
         self.call_stack.append(
             {
                 "name": name,
                 "func": func,
                 "args": args,
                 "call_site": loc,
-                "surface": surface,
+                "call_site_node": call_site_node,
                 "source_kind": self.current_source,
             }
         )
@@ -3310,6 +3292,21 @@ class Evaluator:
                         if await _spec_ok(p, val):
                             return True
                     return False
+            ann_name = None
+            if (
+                isinstance(spec, GetPath)
+                and len(spec.segments) == 1
+                and isinstance(spec.segments[0], Name)
+            ):
+                ann_name = spec.segments[0].text
+            if ann_name in PRIMITIVES:
+                if ann_name == "id":
+                    return (
+                        isinstance(val, str)
+                        and not isinstance(val, IString)
+                        and val.startswith("id:")
+                    )
+                return _type_name(val) == ann_name
             # Resolve to Scope or primitive name
             resolved = None
             target_scope = None
@@ -3337,22 +3334,6 @@ class Evaluator:
             if isinstance(resolved, Scope) or isinstance(target_scope, Scope):
                 target = resolved if isinstance(resolved, Scope) else target_scope
                 return isinstance(val, Scope) and _scope_matches(val, target)
-            # Primitive requirement via single-name annotation
-            ann_name = None
-            if (
-                isinstance(spec, GetPath)
-                and len(spec.segments) == 1
-                and isinstance(spec.segments[0], Name)
-            ):
-                ann_name = spec.segments[0].text
-            if ann_name in PRIMITIVES:
-                if ann_name == "id":
-                    return (
-                        isinstance(val, str)
-                        and not isinstance(val, IString)
-                        and val.startswith("id:")
-                    )
-                return _type_name(val) == ann_name
             # Sig alias (union of primitives/scopes)
             if isinstance(resolved, Sig):
                 allowed = set()
@@ -3505,6 +3486,22 @@ class Evaluator:
             # strip backticks
             if isinstance(n, str) and len(n) >= 2 and n[0] == "`" and n[-1] == "`":
                 n = n[1:-1]
+            if n in {
+                "int",
+                "float",
+                "string",
+                "id",
+                "i-string",
+                "list",
+                "dict",
+                "scope",
+                "function",
+                "code",
+                "path",
+                "boolean",
+                "none",
+            }:
+                return {"kind": "prim", "name": n}
             # Try resolve to Scope at definition time (closure first, then current scope)
             try:
                 v = method_closure[n]

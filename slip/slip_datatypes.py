@@ -511,7 +511,16 @@ class ByteStream(SlipBlock):
         )
 
 
-_UNTYPED = object()
+class _Untyped:
+    def __reduce__(self):
+        return _get_untyped, ()
+
+
+def _get_untyped():
+    return _UNTYPED
+
+
+_UNTYPED = _Untyped()
 
 
 class SigParameter(collections.abc.MutableMapping):
@@ -1182,9 +1191,21 @@ class _SingletonSegment(PathSegment):
     def __repr__(self):
         return f"{self._name.capitalize()}<>"
 
+    def __reduce__(self):
+        return _get_singleton_segment, (self._name,)
+
 
 # Singleton instances for stateless path segments
 Root = _SingletonSegment("root")
 Parent = _SingletonSegment("parent")
 Pwd = _SingletonSegment("pwd")
 IdentityBoundary = _SingletonSegment("identity")
+
+
+def _get_singleton_segment(name):
+    return {
+        "root": Root,
+        "parent": Parent,
+        "pwd": Pwd,
+        "identity": IdentityBoundary,
+    }[name]

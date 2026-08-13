@@ -762,9 +762,32 @@ http://api.example.com/data#(response-mode: `full`)
 - Returns the current time.
 
 ### `random`
+
+- Returns a random float in the range `0 <= value < 1`.
+
 ### `random-int a b`
 
-- Random number helpers.
+- Returns a random integer in the inclusive range `a` through `b`.
+
+### `seed-random seed`
+
+- Seeds the current runner's random number generator.
+- The same seed reproduces the same sequence in the same runtime implementation.
+- Each runner has isolated random state; imported modules share their runner's stream.
+- Without an explicit seed, a runner starts nondeterministically.
+
+```slip
+seed-random 42
+first: #[random, random-int 1 6]
+
+seed-random 42
+second: #[random, random-int 1 6]
+
+first = second
+-- => true
+```
+
+Do not depend on a particular numeric sequence across different SLIP runtime implementations unless a portable RNG algorithm is specified in the future.
 
 ## Byte-Stream Literals
 
