@@ -1,14 +1,16 @@
-# SLIP: A Language for World Modeling
+# SLIP
 
 ![alt text](https://img.shields.io/badge/Status-Alpha-orange.svg) ![alt text](https://img.shields.io/badge/Python-3.10%2B-blue.svg) ![alt text](https://img.shields.io/badge/Coverage-80%25-brightgreen.svg) ![alt text](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
 
-SLIP is a new scripting language designed specifically for the challenges of world modeling, game logic, and building domain-specific languages (DSLs). It's built to be approachable for beginners and modders, yet powerful enough to capture the interest of experienced language designers.
+SLIP is a general-purpose, embeddable scripting language with first-class code, signatures, scopes, and paths. It combines prototype inheritance, generic functions, and explicit state ownership in a small, composable programming model.
 
-It achieves this by revisiting a few core assumptions of language design, resulting in a language that is highly consistent, safe to embed, and remarkably expressive.
+Use it to write ordinary scripts, define your own control structures, or give an application its own domain-specific commands.
+
+**Why SLIP?** Read the [design rationale](<docs/Appendix C - Design Philosophy.md>) for the motivation, influences, and choices behind the language.
 
 ### Dive Deeper
 
-This README provides a high-level overview. To truly understand the language, read the docs in order:
+This README introduces the language. For a practical guide, start with SLIP Scripting, then continue through SLIP Programs and SLIP Advanced. Use the references and design rationale as needed:
 
 - **[01 SLIP Scripting](<docs/01 SLIP Scripting.md>)** — Learn just enough SLIP to be productive quickly.
 - **[02 SLIP Programs](<docs/02 SLIP Programs.md>)** — Learn code organization, dispatch, testing, schemas, and program structure.
@@ -25,9 +27,9 @@ Then use the README paths as needed:
 
 ### A Taste of SLIP
 
-SLIP's features are designed to work together, allowing you to define the concepts of your world and then simulate them with clean, declarative code.
+SLIP's features work together to let you define domain concepts and express their behavior as separate rules.
 
-Imagine you want to apply a "poison" effect, but stone golems in your world are immune.
+For example, a poison effect can damage characters while leaving stone golems unharmed.
 
 ```slip
 Character: scope #{}
@@ -78,7 +80,7 @@ SLIP's power comes from a few key concepts that make it uniquely suited for mode
 
 #### 1. Model Behavior With Prototypes And Dispatch
 
-SLIP's object model is designed for dynamic worlds where behavior is often clearer as a set of separate rules instead of one giant conditional.
+SLIP's object model supports stateful domains where behavior is often clearer as a set of separate rules instead of one giant conditional.
 
 **How it works:** You define functions for the cases you care about. SLIP's dispatch engine selects the best match based on the runtime arguments.
 
@@ -149,9 +151,9 @@ To read the full argument for this design, see **[Appendix C - Design Philosophy
 
 ### Project Status & Roadmap
 
-This project is a **stable alpha**. The Python implementation is the active reference runtime, and the docs are now organized around practical scripting first, deeper design later.
+This project is a **stable alpha**. The Python implementation is the active reference runtime.
 
-- **Current:** Refine the language by continuing to build with the Python prototype.
+- **Current:** Refine the language through the Python prototype and an interactive-fiction application that exercises its features together.
 - **Next:** Begin work on a high-performance implementation in a systems language with a hybrid AOT/JIT compilation strategy.
 - **Known Focus Area:** The current work is on persistence boundaries, host integration, and keeping the practical documentation aligned with the real runtime.
 

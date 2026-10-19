@@ -1,0 +1,256 @@
+import pytest
+
+from slip import ScriptRunner
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression, expected, calls", [
+    ("0 |core-add (probe 7)", 7, 1),
+    ("0 + (probe 7)", 7, 1),
+    ("0 + ((probe 7))", 7, 1),
+    ("0 |core-add (probe 1; probe 7)", 7, 2),
+    ("1 |core-add (probe 2) |core-add (probe 3)", 6, 2),
+    ("false and (probe 7)", False, 0),
+    ("true or (probe 7)", True, 0),
+    ("true and (probe 7)", 7, 1),
+    ("false or (probe 7)", 7, 1),
+    ("true and 1 + (probe 7)", 8, 1),
+    ("false and 1 + (probe 7)", False, 0),
+    ("false or 1 + (probe 7)", 8, 1),
+    ("true or 1 + (probe 7)", True, 0),
+    ("logical-and false (probe 7)", False, 0),
+    ("logical-or true (probe 7)", True, 0),
+    ("0 |core-add values[(probe 'answer')]", 7, 1),
+    ("value: values[(probe 'answer')]", 7, 1),
+    ("false and values[(probe 'answer')]", False, 0),
+    ("true or values[(probe 'answer')]", True, 0),
+    ("false and (probe 1) |core-add (probe 7)", False, 0),
+    ("true or (probe 1) |core-add (probe 7)", True, 0),
+])
+async def test_operator_operands_run_only_when_consumed(
+    expression, expected, calls
+):
+    runner = ScriptRunner()
+    result = await runner.handle_script("""
+state: scope #{calls: 0}
+values: #{answer: 7}
+probe: fn {value} [
+    state.calls: state.calls + 1
+    emit 'probe' value
+    value
+]
+""" + expression)
+
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert runner.root_scope["state"]["calls"] == calls
+    assert len(result.side_effects) == calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression, expected, reads", [
+    ("0 |core-add operand.value", 7, 1),
+    ("result: operand.value", 7, 1),
+    ("false and operand.value", False, 0),
+    ("true or operand.value", True, 0),
+])
+async def test_operator_lookahead_does_not_read_host_properties(
+    expression, expected, reads
+):
+    class Operand:
+        def __init__(self):
+            self.reads = 0
+
+        @property
+        def value(self):
+            self.reads += 1
+            return 7
+
+    operand = Operand()
+    runner = ScriptRunner()
+    runner.root_scope["operand"] = operand
+    result = await runner.handle_script(expression)
+
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert operand.reads == reads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression, expected, reads", [
+    ("0 |core-add sample", 7, 1),
+    ("result: sample", 7, 1),
+    ("false and sample", False, 0),
+    ("true or sample", True, 0),
+])
+async def test_operator_lookahead_does_not_compute_cells(
+    expression, expected, reads
+):
+    result = await ScriptRunner().handle_script("""
+sample: cell {} [emit 'cell' 7; 7]
+""" + expression)
+
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert len(result.side_effects) == reads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["file", "http"])
+@pytest.mark.parametrize("expression, expected, reads", [
+    ("0 |core-add {locator}", 7, 1),
+    ("result: {locator}", 7, 1),
+    ("false and {locator}", False, 0),
+    ("true or {locator}", True, 0),
+])
+async def test_operator_lookahead_does_not_fetch_resources(
+    monkeypatch, scheme, expression, expected, reads
+):
+    calls = []
+
+    async def get(locator, config=None, **kwargs):
+        calls.append(locator)
+        return 7
+
+    target = (
+        "slip.slip_file.file_get" if scheme == "file"
+        else "slip.slip_http.http_get"
+    )
+    monkeypatch.setattr(target, get)
+    locator = f"{scheme}://example/value"
+    result = await ScriptRunner().handle_script(
+        expression.format(locator=locator)
+    )
+
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert calls == [locator] * reads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operator", [
+    "op", "(op)", "((op))", "[op]", "`|core-add`", "/op",
+    "operators.plus",
+])
+async def test_unary_chains_preserve_static_operator_aliases(operator):
+    result = await ScriptRunner().handle_script("""
+op: |core-add
+/op: |core-add
+operators: #{plus: |core-add}
+probe: fn {value} [emit 'probe' value; value]
+""" + f"2 |core-abs {operator} (probe 3)")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == 5
+    assert len(result.side_effects) == 1
+
+
+@pytest.mark.asyncio
+async def test_quoted_operator_name_remains_a_pipe_argument():
+    result = await ScriptRunner().handle_script("""
+keep-right: fn {left, right} [right]
+0 |keep-right `+`
+""")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == "`+`"
+
+
+@pytest.mark.asyncio
+async def test_computed_operator_runs_once_at_its_actual_position():
+    result = await ScriptRunner().handle_script("""
+choose-op: fn {} [emit 'probe' 'operator'; `|core-add`]
+probe: fn {value} [emit 'probe' value; value]
+1 (choose-op) (probe 3)
+""")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == 4
+    assert [effect["message"] for effect in result.side_effects] == [
+        "operator", 3,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pipe_operands_keep_left_to_right_effect_order():
+    result = await ScriptRunner().handle_script("""
+probe: fn {value} [emit 'probe' value; value]
+(probe 1) |core-add (probe 2) |core-mul (probe 3)
+""")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == 9
+    assert [effect["message"] for effect in result.side_effects] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_grouped_zero_arity_operand_runs_once():
+    result = await ScriptRunner().handle_script("""
+probe: fn {} [emit 'probe' 7; 7]
+0 |core-add (probe)
+""")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == 7
+    assert len(result.side_effects) == 1
+
+
+@pytest.mark.asyncio
+async def test_operand_failure_is_not_executed_and_swallowed_by_lookahead():
+    result = await ScriptRunner().handle_script("""
+probe: fn {} [emit 'probe' 7; fail 'boom']
+0 |core-add (probe)
+""")
+
+    assert result.status == "err"
+    assert "boom" in result.error_message
+    assert [effect for effect in result.side_effects
+            if effect["topics"] == ["probe"]] == [
+        {"topics": ["probe"], "message": 7},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", range(6))
+async def test_single_branch_pipe_recursion_has_linear_call_count(depth):
+    runner = ScriptRunner()
+    result = await runner.handle_script("""
+state: scope #{calls: 0}
+walk: fn {depth} [
+    state.calls: state.calls + 1
+    if [depth = 0] [0] [1 |core-add (walk (depth - 1))]
+]
+""" + f"walk {depth}")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == depth
+    assert runner.root_scope["state"]["calls"] == depth + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", range(6))
+async def test_recursive_dict_walk_visits_each_node_once(depth):
+    runner = ScriptRunner()
+    node = 0
+    for _ in range(depth):
+        node = {"child": node}
+    runner.root_scope["node"] = node
+
+    result = await runner.handle_script("""
+state: scope #{calls: 0}
+walk: fn {value} [
+    state.calls: state.calls + 1
+    if [(type-of value) = `dict`] [
+        size: 1
+        foreach {key} (keys value) [
+            size: size + (walk value[key])
+        ]
+        size
+    ] [1]
+]
+walk node
+""")
+
+    assert result.status == "ok", result.error_message
+    assert result.value == depth + 1
+    assert runner.root_scope["state"]["calls"] == depth + 1

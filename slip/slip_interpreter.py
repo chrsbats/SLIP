@@ -1471,6 +1471,79 @@ class Evaluator:
             return GetPath([Name("/")], getattr(term, "meta", None))
         return term
 
+    def _peek_piped_path(self, term, scope: Scope):
+        """Recognize static operator aliases without executing an operand."""
+        from slip.slip_runtime import SlipDict
+
+        seen = set()
+        while id(term) not in seen:
+            seen.add(id(term))
+            if isinstance(term, PipedPath):
+                return term
+            if isinstance(term, PathLiteral):
+                # A quoted get-path is an operand, not a binding to inspect.
+                return term.inner if isinstance(term.inner, PipedPath) else None
+            if isinstance(term, (Group, Code)):
+                if (
+                    len(term.nodes) != 1
+                    or not isinstance(term.nodes[0], list)
+                    or len(term.nodes[0]) != 1
+                ):
+                    return None
+                term = term.nodes[0][0]
+                continue
+            if not isinstance(term, GetPath):
+                return None
+
+            term = self._normalize_root_div(term)
+            value = scope
+            for segment in term.segments:
+                # Dynamic indices, resource reads, cells, and host properties must
+                # run only when the operand is consumed, never during lookahead.
+                if segment is Root:
+                    parents = set()
+                    while (
+                        type(value) is Scope
+                        and value.meta.get("parent") is not None
+                    ):
+                        if id(value) in parents:
+                            return None
+                        parents.add(id(value))
+                        value = value.meta["parent"]
+                    continue
+                if segment is Parent:
+                    if type(value) is not Scope:
+                        return None
+                    value = value.meta.get("parent")
+                    continue
+                if segment is Pwd:
+                    continue
+                if not isinstance(segment, Name):
+                    return None
+                key = segment.text
+                if type(value) is Scope:
+                    if key == "meta":
+                        value = value.meta
+                        continue
+                    owner = value
+                    owners = set()
+                    while type(owner) is Scope and key not in owner.bindings:
+                        if id(owner) in owners:
+                            return None
+                        owners.add(id(owner))
+                        owner = owner.meta.get("parent")
+                    if type(owner) is not Scope:
+                        return None
+                    value = owner.bindings[key]
+                elif type(value) is dict:
+                    value = value.get(key)
+                elif type(value) is SlipDict:
+                    value = value.data.get(key)
+                else:
+                    return None
+            term = value
+        return None
+
     async def _resolve_operator_to_func_path(self, raw_op_term, scope):
         """
         Resolve an operator term (which may be an alias/path-literal/group/etc.)
@@ -1746,10 +1819,14 @@ class Evaluator:
         if self.call_stack:
             self.call_stack.pop()
 
-    def _dbg(self, *parts):
-        import os, sys
+    def _debug_on(self) -> bool:
+        """Cheap predicate to guard expensive debug payload construction."""
+        return bool(os.environ.get("SLIP_DEBUG"))
 
-        if os.environ.get("SLIP_DEBUG"):
+    def _dbg(self, *parts):
+        import sys
+
+        if self._debug_on():
             try:
                 print("[DBG]", *parts, file=sys.stderr)
             except Exception:
@@ -2328,14 +2405,8 @@ class Evaluator:
                 # Determine if RHS starts with a pipe operator (literal or alias to a PipedPath)
                 update_style = False
                 first = value_expr[0] if value_expr else None
-                if isinstance(first, PipedPath):
-                    update_style = True
-                elif isinstance(first, GetPath):
-                    try:
-                        resolved = await self._eval(first, scope)
-                        update_style = isinstance(resolved, PipedPath)
-                    except Exception:
-                        update_style = False
+                if isinstance(first, (PipedPath, GetPath)):
+                    update_style = self._peek_piped_path(first, scope) is not None
 
                 # Vectorized write: LHS ending with a filter on a plucked field
                 is_vectorized_target = (
@@ -2745,12 +2816,13 @@ class Evaluator:
                         args_raw = list(args_raw)
                         args_raw[0] = await self._eval(args_raw[0].nodes, scope)
 
-                    self._dbg(
-                        "SPECIAL",
-                        func_name,
-                        "args_raw_types",
-                        [type(a).__name__ for a in args_raw],
-                    )
+                    if self._debug_on():
+                        self._dbg(
+                            "SPECIAL",
+                            func_name,
+                            "args_raw_types",
+                            [type(a).__name__ for a in args_raw],
+                        )
                     self._push_frame(func_name, func, args_raw, head_term)
                     _ok = False
                     try:
@@ -2815,20 +2887,20 @@ class Evaluator:
             arg_end = split_at if split_at is not None else len(remaining_terms)
             arg_terms = remaining_terms[1:arg_end]
 
-            # ADD: debug prep for prefix call
-            self._dbg(
-                "CALL prefix prepare",
-                "head_type",
-                getattr(head_val, "__class__", type(head_val)).__name__,
-                "split_at",
-                split_at,
-                "arg_end",
-                arg_end,
-                "argc_terms",
-                len(arg_terms),
-                "arg_term_types",
-                [type(t).__name__ for t in arg_terms],
-            )
+            if self._debug_on():
+                self._dbg(
+                    "CALL prefix prepare",
+                    "head_type",
+                    getattr(head_val, "__class__", type(head_val)).__name__,
+                    "split_at",
+                    split_at,
+                    "arg_end",
+                    arg_end,
+                    "argc_terms",
+                    len(arg_terms),
+                    "arg_term_types",
+                    [type(t).__name__ for t in arg_terms],
+                )
 
             # Zero‑arity handling:
             # - If a piped operator follows, do not invoke; let the pipe consume the head as LHS.
@@ -2847,20 +2919,21 @@ class Evaluator:
                         ):
                             name = remaining_terms[0].segments[0].text
                         evaluated_args = []
-                        self._dbg(
-                            "CALL prefix",
-                            getattr(head_val, "__class__", type(head_val)).__name__,
-                            "split_at",
-                            split_at,
-                            "argc_terms",
-                            0,
-                            "argc",
-                            0,
-                            "arg_term_types",
-                            [],
-                            "arg_types",
-                            [],
-                        )
+                        if self._debug_on():
+                            self._dbg(
+                                "CALL prefix",
+                                getattr(head_val, "__class__", type(head_val)).__name__,
+                                "split_at",
+                                split_at,
+                                "argc_terms",
+                                0,
+                                "argc",
+                                0,
+                                "arg_term_types",
+                                [],
+                                "arg_types",
+                                [],
+                            )
                         self._push_frame(
                             name or "<call>",
                             head_val,
@@ -2924,20 +2997,21 @@ class Evaluator:
                     evaluated_args = [
                         await _autocall_if_zero_arity(a) for a in evaluated_args
                     ]
-                self._dbg(
-                    "CALL prefix",
-                    getattr(head_val, "__class__", type(head_val)).__name__,
-                    "split_at",
-                    split_at,
-                    "argc_terms",
-                    len(arg_terms),
-                    "argc",
-                    len(evaluated_args),
-                    "arg_term_types",
-                    [type(t).__name__ for t in arg_terms],
-                    "arg_types",
-                    [type(a).__name__ for a in evaluated_args],
-                )
+                if self._debug_on():
+                    self._dbg(
+                        "CALL prefix",
+                        getattr(head_val, "__class__", type(head_val)).__name__,
+                        "split_at",
+                        split_at,
+                        "argc_terms",
+                        len(arg_terms),
+                        "argc",
+                        len(evaluated_args),
+                        "arg_term_types",
+                        [type(t).__name__ for t in arg_terms],
+                        "arg_types",
+                        [type(a).__name__ for a in evaluated_args],
+                    )
                 self._push_frame(
                     name or "<call>", head_val, evaluated_args, remaining_terms[0]
                 )
@@ -2950,7 +3024,7 @@ class Evaluator:
                         self._pop_frame()
                 k = arg_end
 
-        async def _rhs_span_for_logical(terms, op_index, scope):
+        def _rhs_span_for_logical(terms, op_index, scope):
             """
             Determine how many terms constitute the RHS operand for a logical op.
             Recognize simple infix patterns by resolving the middle term to any piped operator:
@@ -2960,30 +3034,9 @@ class Evaluator:
             Otherwise, treat RHS as a single term (span 1).
             """
             start = op_index + 1
-            # Try binary form: [term, op, term]
-            if start + 2 < len(terms):
-                mid = terms[start + 1]
-                try:
-                    # PipedPath literal counts as an operator
-                    if isinstance(mid, PipedPath):
-                        return 3
-                    # Resolve mid; if it resolves to a PipedPath, treat as operator
-                    resolved = await self._eval(mid, scope)
-                    if isinstance(resolved, PipedPath):
-                        return 3
-                except Exception:
-                    pass
-            # Try unary piped op form: [term, op]
             if start + 1 < len(terms):
-                mid = terms[start + 1]
-                try:
-                    if isinstance(mid, PipedPath):
-                        return 2
-                    resolved = await self._eval(mid, scope)
-                    if isinstance(resolved, PipedPath):
-                        return 2
-                except Exception:
-                    pass
+                if self._peek_piped_path(terms[start + 1], scope) is not None:
+                    return 3 if start + 2 < len(terms) else 2
             return 1
 
         while k < len(remaining_terms):
@@ -2999,43 +3052,10 @@ class Evaluator:
             )
 
             # Decide whether to treat current piped op as unary
-            unary_mode = False
-            if k + 1 >= len(remaining_terms):
-                unary_mode = True
-            else:
-                # Peek next term: if it resolves to a PipedPath (an operator), this op is unary
-                try:
-                    peek_raw = remaining_terms[k + 1]
-                    self.current_node = peek_raw
-                    peek_val = await self._eval(peek_raw, scope)
-                    pv = peek_val
-                    while True:
-                        if isinstance(pv, PipedPath):
-                            unary_mode = True
-                            break
-                        if isinstance(pv, PathLiteral):
-                            inner = pv.inner
-                            if isinstance(inner, PipedPath):
-                                unary_mode = True
-                            # Either way, stop unwrapping to avoid toggling PathLiteral <-> GetPath
-                            break
-                        if isinstance(pv, GetPath):
-                            pv = await self._eval(pv, scope)
-                            continue
-                        if (
-                            isinstance(pv, Group)
-                            and pv.nodes
-                            and isinstance(pv.nodes[0], list)
-                            and pv.nodes[0]
-                        ):
-                            pv = pv.nodes[0][0]
-                            continue
-                        if isinstance(pv, Code) and len(pv.nodes) == 1 and pv.nodes[0]:
-                            pv = pv.nodes[0][0]
-                            continue
-                        break
-                except Exception:
-                    unary_mode = False
+            unary_mode = (
+                k + 1 >= len(remaining_terms)
+                or self._peek_piped_path(remaining_terms[k + 1], scope) is not None
+            )
 
             if unary_mode:
                 # Support unary piped ops: treat "|fn" as a unary call with only the LHS.
@@ -3056,7 +3076,7 @@ class Evaluator:
 
             if func_name == "logical-and":
                 # Short-circuit: only evaluate RHS if LHS is truthy
-                span = await _rhs_span_for_logical(remaining_terms, k, scope)
+                span = _rhs_span_for_logical(remaining_terms, k, scope)
                 if not result:
                     # Skip operator and the entire RHS operand
                     k += 1 + span
@@ -3076,7 +3096,7 @@ class Evaluator:
 
             if func_name == "logical-or":
                 # Short-circuit: only evaluate RHS if LHS is falsey
-                span = await _rhs_span_for_logical(remaining_terms, k, scope)
+                span = _rhs_span_for_logical(remaining_terms, k, scope)
                 if result:
                     # Skip operator and the entire RHS operand
                     k += 1 + span
@@ -3116,13 +3136,11 @@ class Evaluator:
                     t = remaining_terms[j]
                     if isinstance(t, PipedPath):
                         break
-                    if isinstance(t, GetPath):
-                        try:
-                            resolved = await self._eval(t, scope)
-                            if isinstance(resolved, PipedPath):
-                                break
-                        except Exception:
-                            pass
+                    if (
+                        isinstance(t, GetPath)
+                        and self._peek_piped_path(t, scope) is not None
+                    ):
+                        break
                     arg_terms.append(t)
                     j += 1
 
@@ -3155,14 +3173,15 @@ class Evaluator:
 
             self.current_node = func_path
             func = await self.path_resolver.get(func_path, scope)
-            self._dbg(
-                "PIPE",
-                func_name,
-                "lhs_type",
-                type(result).__name__,
-                "rhs_type",
-                type(rhs_arg).__name__,
-            )
+            if self._debug_on():
+                self._dbg(
+                    "PIPE",
+                    func_name,
+                    "lhs_type",
+                    type(result).__name__,
+                    "rhs_type",
+                    type(rhs_arg).__name__,
+                )
             self._push_frame(func_name or "<pipe>", func, [result, rhs_arg], func_path)
             _ok = False
             try:
@@ -3735,6 +3754,8 @@ class Evaluator:
         except Exception:
             pass
         # Python callable fallback
+        if not callable(v):
+            return False
         try:
             # Fast, no-signature path with caching
             needs = getattr(v, "_slip_zero_arity", None)
@@ -3898,15 +3919,16 @@ class Evaluator:
                 break
 
             if segs:
-                self._dbg(
-                    "FOLD collect",
-                    "base_type",
-                    type(base_term).__name__,
-                    "segs",
-                    [getattr(s, "text", None) for s in segs],
-                    "term_counts",
-                    term_seg_counts,
-                )
+                if self._debug_on():
+                    self._dbg(
+                        "FOLD collect",
+                        "base_type",
+                        type(base_term).__name__,
+                        "segs",
+                        [getattr(s, "text", None) for s in segs],
+                        "term_counts",
+                        term_seg_counts,
+                    )
                 cur, applied = await _apply_chain(base_val, segs)
                 if applied > 0:
                     terms_used = 0
@@ -3917,9 +3939,10 @@ class Evaluator:
                             remaining -= c
                         else:
                             break
-                    self._dbg(
-                        "FOLD apply", "applied", applied, "terms_used", terms_used
-                    )
+                    if self._debug_on():
+                        self._dbg(
+                            "FOLD apply", "applied", applied, "terms_used", terms_used
+                        )
                     evaluated_args.append(cur)
                     i = i + 1 + terms_used
                     continue
@@ -3931,15 +3954,17 @@ class Evaluator:
 
     async def call(self, func: Any, args: List[Any], scope: Scope):
         """Calls a callable (SlipFunction or Python function)."""
-        self._dbg("Evaluator.call", type(func).__name__, "argc", len(args))
+        if self._debug_on():
+            self._dbg("Evaluator.call", type(func).__name__, "argc", len(args))
         # Normalize arguments: unwrap 'return' responses so nested calls receive values.
         if isinstance(args, list):
             args = [unwrap_return(a) for a in args]
 
         if isinstance(func, GenericFunction):
-            self._dbg(
-                "GF call", func.name, "argc", len(args), "methods", len(func.methods)
-            )
+            if self._debug_on():
+                self._dbg(
+                    "GF call", func.name, "argc", len(args), "methods", len(func.methods)
+                )
 
             # --- Refactor helpers (small, orthogonal) ---------------------------------
 
@@ -4438,14 +4463,15 @@ class Evaluator:
                 active_this_scope = None
                 active_this_is_resolver = False
 
-                self._dbg(
-                    "SlipFunction call",
-                    repr(func),
-                    "argc",
-                    len(args),
-                    "has_sig",
-                    bool(sig_obj),
-                )
+                if self._debug_on():
+                    self._dbg(
+                        "SlipFunction call",
+                        repr(func),
+                        "argc",
+                        len(args),
+                        "has_sig",
+                        bool(sig_obj),
+                    )
                 if isinstance(sig_obj, Sig):
                     sig = sig_obj
 
@@ -4485,43 +4511,46 @@ class Evaluator:
                         call_scope[nm] = v
                         call_scope._set_allow_this_token(False)
 
-                    self._dbg(
-                        "Bind sig params",
-                        [
-                            (
-                                n,
-                                type(call_scope.get(n)).__name__
-                                if n in getattr(call_scope, "bindings", {})
-                                else None,
-                            )
-                            for n, _ in self._sig_param_order(sig)
-                        ],
-                    )
+                    if self._debug_on():
+                        self._dbg(
+                            "Bind sig params",
+                            [
+                                (
+                                    n,
+                                    type(call_scope.get(n)).__name__
+                                    if n in getattr(call_scope, "bindings", {})
+                                    else None,
+                                )
+                                for n, _ in self._sig_param_order(sig)
+                            ],
+                        )
 
                     # Handle rest parameter from the first unbound call argument.
                     if sig.rest is not None:
                         call_scope[_pname(sig.rest)] = (
                             args[args_i:] if len(args) > args_i else []
                         )
-                        self._dbg(
-                            "Bind rest",
-                            (
-                                sig.rest
-                                if isinstance(sig.rest, str)
-                                else getattr(sig.rest, "text", str(sig.rest))
-                            ),
-                            "count",
-                            max(0, len(args) - args_i),
-                        )
+                        if self._debug_on():
+                            self._dbg(
+                                "Bind rest",
+                                (
+                                    sig.rest
+                                    if isinstance(sig.rest, str)
+                                    else getattr(sig.rest, "text", str(sig.rest))
+                                ),
+                                "count",
+                                max(0, len(args) - args_i),
+                            )
 
                 elif isinstance(func.args, Code):
-                    self._dbg(
-                        "Legacy arg binding",
-                        "param_count",
-                        len(func.args.nodes),
-                        "argc",
-                        len(args),
-                    )
+                    if self._debug_on():
+                        self._dbg(
+                            "Legacy arg binding",
+                            "param_count",
+                            len(func.args.nodes),
+                            "argc",
+                            len(args),
+                        )
                     # The AST for parameters like `[x]` from parser is `[[GetPath('x')]]`.
                     # Manually constructed test ASTs may incorrectly be `[GetPath('x')]`.
                     params = func.args.nodes
@@ -4561,7 +4590,8 @@ class Evaluator:
                 self.current_local_scope = call_scope
                 try:
                     try:
-                        self._dbg("Call-scope bindings", list(call_scope.keys()))
+                        if self._debug_on():
+                            self._dbg("Call-scope bindings", list(call_scope.keys()))
                     except Exception:
                         pass
                     result = await self._eval(func.body.nodes, call_scope)

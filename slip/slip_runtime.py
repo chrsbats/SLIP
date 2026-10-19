@@ -256,12 +256,13 @@ class StdLib:
 
     def _eq(self, a, b):
         res = a == b
-        try:
-            self.evaluator._dbg(
-                "EQ", type(a).__name__, id(a), "==", type(b).__name__, id(b), "->", res
-            )
-        except Exception:
-            pass
+        if self.evaluator._debug_on():
+            try:
+                self.evaluator._dbg(
+                    "EQ", type(a).__name__, id(a), "==", type(b).__name__, id(b), "->", res
+                )
+            except Exception:
+                pass
         return res
 
     def _neq(self, a, b):
@@ -906,7 +907,8 @@ class StdLib:
 
     # --- Object Model ---
     def _scope(self, config: dict):
-        self.evaluator._dbg("scope()", "config_type", type(config).__name__)
+        if self.evaluator._debug_on():
+            self.evaluator._dbg("scope()", "config_type", type(config).__name__)
         # Accept any mapping-like object (dict, SlipObject, etc.)
         is_mapping = isinstance(config, collections.abc.Mapping)
         if is_mapping and "meta" in config:
@@ -918,7 +920,8 @@ class StdLib:
         return s
 
     def _resolver(self, config: dict):
-        self.evaluator._dbg("resolver()", "config_type", type(config).__name__)
+        if self.evaluator._debug_on():
+            self.evaluator._dbg("resolver()", "config_type", type(config).__name__)
         # Accept any mapping-like object (dict, SlipObject, etc.)
         is_mapping = isinstance(config, collections.abc.Mapping)
         if is_mapping and "meta" in config:
@@ -931,13 +934,14 @@ class StdLib:
         return s
 
     def _inherit(self, obj: Scope, proto: Scope):
-        self.evaluator._dbg(
-            "inherit()",
-            "target_is_scope",
-            isinstance(obj, Scope),
-            "proto_is_scope",
-            isinstance(proto, Scope),
-        )
+        if self.evaluator._debug_on():
+            self.evaluator._dbg(
+                "inherit()",
+                "target_is_scope",
+                isinstance(obj, Scope),
+                "proto_is_scope",
+                isinstance(proto, Scope),
+            )
         if not isinstance(obj, Scope) or not isinstance(proto, Scope):
             raise TypeError("inherit expects (scope, scope)")
         obj.inherit(proto)
@@ -1124,9 +1128,10 @@ class StdLib:
 
     # --- Language Primitives ---
     async def _if(self, args: list, *, scope: Scope):
-        self.evaluator._dbg(
-            "if()", "argc", len(args), "arg_types", [type(a).__name__ for a in args]
-        )
+        if self.evaluator._debug_on():
+            self.evaluator._dbg(
+                "if()", "argc", len(args), "arg_types", [type(a).__name__ for a in args]
+            )
         if len(args) < 2 or len(args) > 3:
             raise TypeError(f"if expects 2 or 3 arguments, got {len(args)}")
 
@@ -1233,9 +1238,10 @@ class StdLib:
 
     async def _foreach(self, args: list, *, scope: Scope):
         # Assumes root.slip is loaded and provides operator aliases.
-        self.evaluator._dbg(
-            "foreach()", "argc", len(args), "types", [type(a).__name__ for a in args]
-        )
+        if self.evaluator._debug_on():
+            self.evaluator._dbg(
+                "foreach()", "argc", len(args), "types", [type(a).__name__ for a in args]
+            )
         if len(args) != 3:
             raise TypeError(
                 f"foreach expects 3 arguments (vars-sig, collection, body), got {len(args)}"

@@ -1,5 +1,5 @@
 import pytest
-from slip.slip_runtime import StdLib
+from slip.slip_runtime import ScriptRunner, StdLib
 from slip.slip_interpreter import Evaluator, View
 from slip.slip_datatypes import Scope, GetPath, SetPath, DelPath, Name, Index, Slice, FilterQuery, Group, Parent, Root, Pwd, Code, SlipFunction, PipedPath, Sig
 from slip.slip_datatypes import PathLiteral, IString
@@ -960,3 +960,47 @@ async def test_dispatch_exact_arity_truncation_fallback(evaluator, root_scope):
     await evaluator.eval([[SetPath([Name('g')]), GetPath([Name('fn')]), sig, body]], root_scope)
     with pytest.raises(TypeError):
         await evaluator.eval([[GetPath([Name('g')]), 10, 20]], root_scope)
+
+
+@pytest.mark.asyncio
+async def test_debug_payloads_are_not_built_when_disabled(monkeypatch):
+    from slip.slip_printer import Printer
+
+    calls = 0
+    original = Printer.pformat
+
+    def counted(self, obj, level=0):
+        nonlocal calls
+        calls += 1
+        return original(self, obj, level)
+
+    monkeypatch.delenv("SLIP_DEBUG", raising=False)
+    monkeypatch.setattr(Printer, "pformat", counted)
+
+    result = await ScriptRunner().handle_script(
+        "f: fn {x} [\n"
+        "    a: x + 1\n"
+        "    count: a + 1\n"
+        "    count\n"
+        "]\n"
+        "f 1\n"
+    )
+
+    assert result.status == "ok", result.error_message
+    assert result.value == 3
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_debug_flag_still_reports_function_calls(monkeypatch, capsys):
+    monkeypatch.setenv("SLIP_DEBUG", "1")
+
+    result = await ScriptRunner().handle_script(
+        "f: fn {x} [x + 1]\n"
+        "f 1\n"
+    )
+
+    assert result.status == "ok", result.error_message
+    assert result.value == 2
+    captured = capsys.readouterr()
+    assert "SlipFunction call" in captured.err

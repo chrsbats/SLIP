@@ -1,393 +1,322 @@
 # Appendix C - Design Philosophy
 
-This appendix explains why SLIP is shaped the way it is.
+This is the reasoning behind SLIP: its influences, the choices those influences led to, and how its parts compose. You can start here or try the language through [SLIP Scripting](<01 SLIP Scripting.md>).
 
-It comes last on purpose. The earlier guides teach how to use the language. This appendix explains the design bets behind it.
+Adapted from the [SLIP design article on Seerware](https://seerware.com/slip/), with additional examples and notes for the repository documentation.
 
-Use the practical guides first:
+## Why SLIP?
 
-- [SLIP Scripting](<01 SLIP Scripting.md>)
-- [SLIP Programs](<02 SLIP Programs.md>)
-- [SLIP Advanced](<03 SLIP Advanced.md>)
-- [StdLib Reference](<Appendix A - StdLib Reference.md>)
-- [SLIP Style Guide](<Appendix B - SLIP Style Guide.md>)
+There is an old programmer's conceit that, sooner or later, every serious programmer tries to design a language.
 
-## Remove Accidental Complexity
+**SLIP is mine.**
 
-Most languages ask you to carry around a lot of extra machinery:
+I wanted Lisp's structural power: a small language in which code remains available to the program instead of disappearing into compiler machinery. I also wanted the readability of Rebol, whose command-like programs can feel closer to instructions than notation written for a parser.
 
-- precedence tables
-- separate rules for expressions and statements
-- different syntaxes for locals, properties, keys, and queries
-- one system for results, another for errors, another for side effects
-- one mental model for plain functions and another for “special” language forms
+But Rebol's greedy evaluation can make it difficult to see where one call ends and another begins without already knowing the functions involved. SLIP keeps the readable, left-to-right flow while making evaluation boundaries and program structure more explicit.
 
-Much of that complexity is historical rather than essential.
+I began with the syntax I wanted to write, then built an interpreter in Python. In the spirit of [Peter Norvig's small Lisp interpreter](https://norvig.com/lispy.html), that was the shortest path from an idea about language design to something I could run, break, and change. Python makes that experimentation practical; the language has its own programming model.
 
-SLIP tries to cut that down by using a small number of ideas repeatedly:
+Forth's visible execution order and Logo's approachability also influenced the design. The common thread is that a reader should be able to follow a program without carrying a large hidden machine in their head.
 
-- everything is expression-oriented
-- paths are the main access/update abstraction
-- functions do most of the work that other languages reserve for keywords
-- effects and outcomes are represented explicitly
-- local rebinding is preferred over mutation at a distance
+The question behind SLIP is:
 
-The point is not minimalism for its own sake. It is to make more of the language predictable while letting programmers say more with fewer moving parts.
+> **How much of a language can emerge from a few visible, composable structures?**
 
-Succinct code still has to read clearly. The target is code that is:
+SLIP is a general-purpose scripting language. The current implementation is a working research prototype in which code blocks, signatures, scopes, paths, generic functions, and resolvers are implemented and tested together.
 
-- compact because the abstractions are better
-- readable on first encounter
-- close to pseudocode when possible
-- understandable without mentally decoding a lot of syntax trivia
+## A Small, Visible Grammar
 
-The language therefore favors:
+SLIP uses different forms for different kinds of structure:
 
-- direct path-based access
-- a small number of evaluation rules
-- ordinary function calls in places where other languages introduce special syntax
-- explicit structure instead of hidden precedence and hidden control flow
+| Form | Meaning |
+| --- | --- |
+| `(...)` | Evaluate a grouped expression now |
+| `[...]` | Preserve code for later execution |
+| `{...}` | Describe names, types, and bindings with a signature |
+| `#[...]` | Ordinary list data |
+| `#{...}` | Ordinary dictionary data |
+| `scope #{...}` | A first-class environment, object, or prototype |
 
-The goal is not the shortest possible code. It is the shortest code that still reads clearly the first time.
+Executable structure, binding structure, and ordinary data have distinct forms, and all remain available to the program.
 
-## Language Lineage
-
-SLIP borrows ideas from many languages, but its main philosophical lineage is narrower than that.
-
-It is mainly shaped by:
-
-- Rebol
-- Lisp / Scheme
-- Forth
-- Logo
-
-Everything else is more selective: useful ideas taken where they fit.
-
-### Rebol
-
-Rebol is one of the clearest influences on the feel of the language.
-
-What SLIP keeps:
-
-- readable command-like code
-- a language that can feel close to pseudocode
-- direct data-shaping and scripting workflows
-
-What SLIP changes:
-
-- it rejects greedy evaluation
-- it prefers structured evaluation groups and explicit code values
-- it puts more emphasis on predictable execution structure
-
-So SLIP keeps some of Rebol's readability goals without adopting its evaluation model whole.
-
-### Lisp / Scheme
-
-Lisp and Scheme matter because they show what happens when a language is built from a small set of strong ideas.
-
-What SLIP keeps:
-
-- code as data
-- metaprogramming as an ordinary activity
-- a preference for uniformity over lots of special syntax
-
-What SLIP changes:
-
-- it does not require all-paren surface syntax
-- it aims for a more line-oriented, pseudocode-like reading experience
-
-You can think of SLIP as wanting some of Lisp's conceptual power without demanding Lisp's visual style.
-
-### Forth
-
-Forth matters less as a surface influence and more as an execution influence.
-
-It emphasizes that the order in which operations happen is itself a design choice, not just an implementation detail.
-
-SLIP is not stack-based and does not look like Forth, but it shares a related instinct:
-
-- execution order should be simple
-- the reader should not have to simulate a large hidden machine
-
-The shared idea is that operational flow should remain visible, while SLIP's surface syntax favors readability rather than stack notation.
-
-### Logo
-
-Logo matters because approachability matters.
-
-SLIP is not only for children, and it is not an educational language in the narrow sense. But one of its values is that code should be readable by someone who is new, curious, or not yet carrying the full burden of conventional language habits.
-
-That is part of why the language wants to feel like a domain-shaped instruction language rather than a pile of syntax rules.
-
-## Left-To-Right Evaluation
-
-SLIP's most visible philosophical choice is that infix evaluation is left-to-right.
+Expressions read in the order they appear:
 
 ```slip
 10 + 5 * 2
 -- => 30
-```
 
-This is deliberate.
-
-In many languages, readers must mentally re-parse an expression before they can understand it. They look at one order on the page and a different order in their heads.
-
-SLIP prefers a simpler rule:
-
-- read the expression in order
-- evaluate it in order
-- use parentheses only when you want a different order
-
-```slip
 10 + (5 * 2)
 -- => 20
 ```
 
-The tradeoff is obvious: this differs from mainstream operator precedence. But the payoff is that control becomes explicit rather than implicit.
+There is no operator-precedence table rearranging the first expression. The written order is the execution order; parentheses explicitly request a different grouping. Pipes use the same left-to-right model:
 
-## Structural Parsing, Runtime Meaning
+```slip
+10 |add 5 |mul 2
+-- => 30
+```
 
-SLIP also makes a strong architectural choice: parsing stays structural, not semantic.
+That differs from familiar arithmetic notation, so readers must learn the rule. In return, the evaluator follows one order for infix expressions, and grouping is visible on the page.
 
-The parser's job is to preserve what you wrote as directly as possible. The evaluator decides what it means.
+The parser preserves these structures. Evaluation gives them meaning. That separation keeps code inspection and metaprogramming close to the source the programmer wrote.
 
-That supports several other goals at once:
+## Control Flow From Code And Signatures
 
-- simpler parsing rules
-- fewer hidden rewrites
-- a clearer relationship between source text and runtime behavior
-- easier code-as-data workflows
+Square brackets contain code without immediately executing it. Curly braces contain a signature: structured information about names to bind, along with optional types and guards.
 
-This is why SLIP can treat `[...]` as first-class code and why features like `run`, `run-with`, `inject`, and `splice` fit naturally into the language rather than feeling bolted on.
+That makes this possible:
 
-## Paths Unify Access And Update
+```slip
+for {i} 0 3 [
+    print i
+]
+```
 
-In many languages, these feel like separate systems:
+`for` is an ordinary SLIP function. `{i}` arrives as a signature value and `[...]` arrives as a code value. The function binds the requested name and decides when and where to execute the block.
 
-- variable names
-- object property access
-- dictionary access
-- filtering/query syntax
-- sometimes even URL/resource access
+This is its implementation in SLIP's standard library, followed by a call using it:
 
-SLIP tries to unify them under the idea of a path.
+```slip
+for: fn {vars, start, end, body-block} [
+    var-name: extract-simple-param vars
+    for-scope: current-scope
+    for-scope: for-scope["meta"]["parent"]
+    step: if [start <= end] [1] [-1]
+    i: start
+
+    while [if [step > 0] [i < end] [i > end]] [
+        for-scope[var-name]: i
+        run-with body-block for-scope
+        i: i + step
+    ]
+
+    none
+]
+
+seen: #[]
+for {i} 0 3 [
+    seen: add seen i
+]
+seen
+-- => #[0, 1, 2]
+```
+
+This provides macro-like extensibility through ordinary runtime values and calls. A binding form can receive a signature, inspect it, and execute code against a chosen scope.
+
+The evaluator still has special handling where evaluation order requires it: `if` receives unevaluated branches, for example, and `and`/`or` short-circuit. The useful result is that user-defined forms such as `for` can compose with those primitives using the same code and signature values.
+
+A block can also be stored, returned, inspected, edited, combined with other code, or executed later. `inject` and `splice` support building code from other values. Those tools are available when ordinary functions and closures are insufficient; they do not have to appear in everyday scripts.
+
+## Scopes Are Values Too
+
+The other side of evaluation is the environment in which code runs. In SLIP, a scope is a first-class value:
+
+```slip
+workspace: scope #{}
+
+result: run-with [
+    answer: 10 * 2
+    answer
+] workspace
+
+#[result, workspace.answer]
+-- => #[20, 20]
+```
+
+Both sides of evaluation are explicit: the code to execute and the scope in which its bindings should live. Scopes can be stored, passed, returned, extended, and used as module-like namespaces.
+
+They are also the foundation of SLIP's prototype system.
+
+## Scopes And Dispatch Compose Into An Object System
+
+A scope can act as a prototype and inherit from another scope. Behaviour can be expressed as free generic functions whose implementations are selected by the types of their arguments:
+
+```slip
+Character: scope #{
+    hp: 100
+}
+
+Player: scope #{} |inherit Character
+player: create Player
+
+heal: fn {character: Character, amount} [
+    character.hp: character.hp + amount
+]
+
+heal: fn {player: Player, amount} [
+    player.hp: player.hp + (amount * 2)
+]
+
+player |heal 10
+-- => 120
+```
+
+Defining another implementation under the same local name adds another dispatch rule. Here the more specific `Player` implementation applies. The pipe gives the call a familiar receiver-oriented reading, while `heal` remains a free generic function.
+
+Scopes provide state, prototypes, and inheritance; generic functions provide behaviour. Types on several arguments can participate in dispatch, and a signature can include a value guard:
+
+```slip
+Player: scope #{}
+LockedDoor: scope #{
+    locked?: true
+}
+
+interact: fn {actor: Player, target: LockedDoor, action |where action = `open`} [
+    target.locked?: false
+]
+
+player: create Player
+door: create LockedDoor
+player |interact door `open`
+door.locked?
+-- => false
+```
+
+A new combination of arguments or actions can be expressed as another implementation. This is useful whenever behaviour is clearer as separate cases. The object system emerges from scopes, prototype inheritance, signatures, generic functions, and the ordinary call model.
+
+## Paths Are The Language's Connective Tissue
+
+SLIP uses one broad path model for names, navigation, queries, updates, and resources:
 
 ```slip
 player.hp
 players[.hp > 100].name
 file://players.json
-http://api.example.com/players
+http://api.example.com/players.json[.hp > 100].name
 ```
 
-This does not mean every path use is identical. Read, write, delete, and pipe are still distinct forms. But the language is built around the idea that identity, navigation, and update should feel related instead of fragmented.
+A variable name is a path with one segment. Property access, selection, and resource addressing extend that same idea. Read, write, delete, and pipe remain distinct operations, with related syntax and first-class path values.
 
-That is why path syntax ends up doing so much work in SLIP.
+Paths also connect to code-as-data. Reading a `.slip` file through `file://` returns code without executing it. A program can inspect or modify that code, then deliberately execute it with `run` or `run-with`. `import` combines loading and module execution when that is what the caller wants.
 
-## Functions Instead Of Keywords
-
-Another core bet is that many things usually treated as syntax should instead be ordinary callable behavior.
-
-That is why SLIP favors constructs like:
-
-- `if [cond] [then] [else]`
-- `while [cond] [body]`
-- `foreach {x} xs [body]`
-- `for {i} start end [body]`
-
-The goal is not to eliminate all special cases at any cost. The goal is to keep the language surface conceptually smaller.
-
-This has two important consequences:
-
-1. The language becomes easier to extend from inside the language.
-2. Metaprogramming becomes normal runtime programming instead of a separate macro world.
-
-The language still has a few unavoidable special cases. Assignment syntax is one. Short-circuiting logical operators are another. But the general direction is clear: special syntax should be rare.
-
-## Metaprogramming Without A Second Language
-
-SLIP keeps metaprogramming in the normal runtime model instead of introducing a separate macro language. Code is already data, evaluation is explicit, and the language provides tools such as:
-
-- `run`
-- `run-with`
-- `call`
-- `inject`
-- `splice`
-
-These make metaprogramming a direct form of programming with code values.
-
-```slip
-x: 10
-c: [ x + 1 ]
-run c
--- => 11
-```
-
-This does not make advanced metaprogramming trivial. But it does mean ordinary users do not have to learn a separate macro system just to understand the language.
-
-Advanced machinery remains optional. You can ignore metaprogramming for a long time and still write useful, idiomatic SLIP. When choosing an implementation, prefer:
-
-1. plain function
-2. closure
-3. scope/prototype composition
-4. only then dynamic code tools like `run`, `call`, `inject`, and `splice`
-
-Power users can assemble and evaluate code dynamically without introducing a compile-time sub-language. Ordinary code does not need to.
+This makes code addressable in the same general way as other values. A future `slip://module` scheme could extend that model to language-level resources.
 
 ## Shadow, Don't Patch
 
-One of SLIP's strongest design principles is locality.
+First-class environments make local adaptation possible. The guiding idea is:
 
-The guiding idea is:
+> If you want different behaviour in a local context, change it in that local context.
 
-> If you want different behavior in a local context, change it in that local context.
-
-That is why local rebinding matters so much.
-
-In practice:
-
-- local names should be easy to shadow
-- imports should compose through local adaptation
-- behavior changes should stay near the code that needs them
-- code should not silently change far-away behavior as a side effect
-
-This leads to the guidance:
-
-> Shadow, don't patch.
-
-It is not just a style preference. It is a way of preserving locality of reasoning.
-
-## Behavior Belongs In Dispatch Rules
-
-SLIP uses dispatch to make behavior more declarative.
-
-Instead of writing one function full of branching logic, you can define separate implementations for separate cases.
+For example, a scope can define its own implementation while the original remains available:
 
 ```slip
-Character: scope #{}
-describe: fn {x: Character} [ "character" ]
-describe: fn {x} [ "other" ]
+scale: fn {value} [value * 2]
+workspace: scope #{}
 
-#[describe (create Character), describe 10]
--- => #["character", "other"]
+run-with [
+    scale: fn {value} [value * 3]
+] workspace
+
+#[scale 4, workspace.scale 4]
+-- => #[8, 12]
 ```
 
-The goal is not to make dispatch maximally clever. It is to:
+The same principle guides module composition: use imported definitions through local wrappers or shadowing bindings. Customisation stays near the code using it, and other callers continue to see the original behaviour.
 
-- let programmers express separate cases separately
-- let the runtime choose among them predictably
-- keep fallback behavior explicit
+This requires deliberate treatment of shared mutable values. Local rebinding establishes a new binding; editing an object reached through a shared binding still changes that object. Scopes make adaptation visible, but they do not make every reachable value immutable.
 
-This matches the broader SLIP preference for decomposing behavior into small rules rather than building large monolithic handlers.
+## Resolvers Make Ownership Explicit
 
-## Effects And Outcomes
+First-class scopes are useful for objects and environments, but persistent multi-user systems introduce a harder question:
 
-Many languages treat output, logging, and error handling as separate concerns with different conventions and escape hatches.
+> **Who owns the truth, and who is allowed to change it?**
 
-SLIP tries to make them more uniform.
-
-- ordinary values are ordinary function results
-- `fail` signals domain failures with structured details
-- `do` captures a direct `Outcome`, including its value or error and emitted effects
-- `emit` represents intended side effects explicitly
-
-This supports a style where the core logic of a program can stay inspectable and testable.
-
-It also helps embedded use cases, because the host can decide what to do with effects rather than having every script directly own that policy.
-
-## Keep The Host Boundary Explicit
-
-SLIP is meant to be embedded.
-
-That means the boundary between host-managed data and live SLIP runtime values matters.
-
-SLIP keeps this boundary explicit:
-
-- host objects are exposed deliberately
-- task lifecycle is host-aware
-- rehydration of typed values is explicit with `as-slip` outside the host-object boundary
-
-Instead of automatically turning every dict with special structure into a live runtime object everywhere, SLIP localizes that behavior to clear boundaries.
-
-For persisted host objects there is a useful split:
-
-- `host-object` returns live SLIP objects
-- `host-data` returns raw storage-shaped data
-
-Outside that host boundary, explicit conversion is preferred:
+A resolver is a specialised scope that acts as the authority root for a domain. Transactions dispatch on the resolver through the reserved `this` parameter, and committed writes are rooted in that receiver:
 
 ```slip
-obj: as-slip (host-data 'id:player-1')
+Combat: resolver #{
+    hp: #{ 'p1': 100 }
+}
+
+apply-damage: fn {this: Combat, target-id, amount} [
+    next: this.hp[target-id] - amount
+    if [next < 0] [next: 0]
+    this.hp[target-id]: next
+    return next
+]
+
+Combat |apply-damage 'p1' 10
+-- => 90
 ```
 
-This keeps powerful conversion behavior available without making it invisible.
+Different resolvers can own different parts of the same application. Cross-domain reads use an explicitly read-only authority path, written `::`. Changes can be requested through transactions owned by the other resolver:
 
-## Practical Background Work
+```slip
+Combat: resolver #{ hp: #{ 'p1': 100 } }
+Spatial: resolver #{
+    room: #{ 'p1': 'room.square' }
+    on-fire: #{}
+}
 
-SLIP centers background work on `task`.
+apply-ignite: fn {this: Spatial, target-id} [
+    this.on-fire[target-id]: true
+]
 
-That is a philosophy choice too.
+apply-fire: fn {this: Combat, spatial: Spatial, target-id, amount} [
+    room-id: spatial::room[target-id]
+    this.hp[target-id]: this.hp[target-id] - amount
+    spatial |apply-ignite target-id
+    return room-id
+]
 
-The language is aiming at practical embedded/background work:
+room-id: Combat |apply-fire Spatial 'p1' 10
+#[room-id, Combat.hp['p1'], Spatial.on-fire['p1']]
+-- => #['room.square', 90, true]
+```
 
-- maintenance jobs
-- polling
-- timers
-- host-managed side work
+The transaction reads the room through `spatial::room`; writes across that `::` boundary are rejected. It asks `Spatial` to record ignition by calling `apply-ignite` on that resolver. Ownership is expressed at the call and write sites.
 
-Rather than collecting concurrency mechanisms for their own sake, the language stays focused on practical product use cases.
+Workflows, records, ledgers, policy systems, and operational applications all contain state with an authoritative owner. Resolver transactions let those ownership boundaries participate in dispatch and path access.
 
-## World Modeling Beyond Games
+## Effects And Outcomes At The Host Boundary
 
-Historically, SLIP was shaped by the needs of world modeling and MUD-like systems.
+An embedded language also needs a clear way to report what happened. Ordinary successful calls return values. `fail` signals a domain failure, `emit` records an effect, and `do` captures a value or error together with the effects produced by the block:
 
-That pressure explains a lot of its design:
+```slip
+require-positive: fn {value} [
+    if [value <= 0] [fail `invalid` 'Expected a positive value.']
+    emit 'audit' value
+    value
+]
 
-- large graphs of state
-- many interacting entities
-- lots of rule-like behavior
-- long-lived background processes
-- clear separation between simulation and presentation
+accepted: do [require-positive 3]
+rejected: do [require-positive 0]
 
-Even if you are not building a game, that background still matters. Many business systems have the same structural needs under different names:
+#[accepted.status, accepted.value, len accepted.effects, rejected.status, rejected.error.code]
+-- => #[`ok`, 3, 1, `err`, `invalid`]
+```
 
-- records instead of entities
-- workflows instead of rules engines
-- jobs instead of NPC brains
-- events instead of world effects
+The host can inspect and route effects such as messages or audit events. `do` captures failures and effects; it does not roll back arbitrary state changes. Keeping those responsibilities distinct makes it easier to test domain behaviour without putting presentation or logging policy into every function.
 
-SLIP is not only for games. A language shaped by dynamic, stateful worlds can also serve other complex domains.
+The data boundary is explicit too:
 
-## Borrow Ideas Selectively
+- `host-data` retrieves raw host-managed data.
+- `host-object` exposes live, dispatchable objects at the host boundary.
+- `as-slip` explicitly rehydrates typed values from ordinary data outside that boundary.
 
-Outside its main lineage, SLIP borrows useful ideas when they fit.
+This keeps storage-shaped data useful on its own. Turning it into runtime objects is a visible operation with a defined place in the program.
 
-Examples:
+Background work follows the same approach. `task` schedules code through the host's event loop, and host-aware task tracking provides a place to manage its lifetime. This supports practical jobs such as polling, timers, and maintenance alongside the application's other work.
 
-- prototype-oriented object ideas
-- structured outcomes similar to `Result`-style programming
-- background task ideas from async systems
-- host embedding patterns from practical scripting runtimes
+## What Exists Today
 
-But these are borrowed pieces, not the identity of the language.
+SLIP is an actively used research prototype. The current implementation includes:
 
-The rule is:
+- a Python interpreter and standard library
+- left-to-right expressions, pipes, and explicit grouping
+- first-class code blocks and signature literals
+- runtime code execution, inspection, injection, and splicing
+- first-class scopes, prototypes, and inheritance
+- generic functions, multidispatch, and guarded value dispatch
+- paths, collection queries, and file/HTTP resource schemes
+- modules loaded from files, HTTP resources, or code
+- resolvers, transactions, references, and derived cells
+- asynchronous tasks, structured failures, and executable documentation tests
 
-- borrow the useful part
-- remove as much surrounding complexity as possible
-- make it fit the existing mental model
+I am testing the language by building an interactive-fiction application. Its interacting actors, rules, paths, and long-lived state exercise the features together in a substantial domain. That application is a test of a general-purpose language, rather than a boundary around what the language is for.
 
-## The Tradeoff And Payoff
+The interpreter remains in Python because fast iteration still matters. Future directions include direct `slip://` addressing and Koine-based transpilers for embedding small domain-specific languages where their notation earns its place.
 
-SLIP asks users to accept nonstandard choices: left-to-right evaluation, heavy use of paths, code as ordinary data, and function-oriented control flow. In return, it offers fewer implicit conventions and a smaller set of ideas that compose across the language.
+The design asks readers to learn some unfamiliar choices: left-to-right infix evaluation, explicit code values, and first-class scopes and paths. The intended payoff is that those same structures keep working as programs grow from small scripts into their own commands, objects, and stateful domains.
 
-The claim is not that unusual syntax is automatically better. It is that power can come from coherent abstractions rather than unrelated features.
-
-When that works, the benefits are practical:
-
-- shorter explanations
-- smaller APIs
-- simpler extension points
-- less ceremony around common tasks
-- clearer adaptation of behavior to local context
-
-The goal is a tool that lets you focus more directly on the world, system, or workflow you are trying to model.
+For practical use, continue with [SLIP Scripting](<01 SLIP Scripting.md>), [SLIP Programs](<02 SLIP Programs.md>), or [SLIP Advanced](<03 SLIP Advanced.md>). The [StdLib Reference](<Appendix A - StdLib Reference.md>) gives the current contracts in detail.
