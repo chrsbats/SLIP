@@ -9,7 +9,7 @@ import os
 import re
 import collections.abc
 from contextvars import ContextVar
-from weakref import WeakSet
+from weakref import WeakKeyDictionary, WeakSet
 from typing import Any, List, Optional, Union, Tuple, Dict
 from textwrap import dedent
 
@@ -77,6 +77,84 @@ def _is_implicit_callable(value) -> bool:
     ) and not isinstance(
         value, (Scope, collections.abc.Mapping, collections.abc.Sequence)
     )
+
+
+# Signature introspection is cached by the underlying callable. Bound methods
+# do not allow attribute assignment, so the cache keys on __func__.
+_PY_CALLABLE_SCOPE_CACHE = WeakKeyDictionary()
+_PY_CALLABLE_ZERO_ARITY_CACHE = WeakKeyDictionary()
+
+# Marks "not yet classified" for per-path locator caches.
+_LOCATOR_UNSET = object()
+
+
+def _callable_cache_key(func):
+    return getattr(func, "__func__", func)
+
+
+def _python_accepts_scope(func) -> bool:
+    key = _callable_cache_key(func)
+    try:
+        return _PY_CALLABLE_SCOPE_CACHE[key]
+    except (KeyError, TypeError):
+        pass
+
+    needs = False
+    try:
+        needs = "scope" in inspect.signature(func).parameters
+    except Exception:
+        code = getattr(func, "__code__", None)
+        if code is not None:
+            kwonly = int(getattr(code, "co_kwonlyargcount", 0))
+            if kwonly:
+                pos = int(getattr(code, "co_argcount", 0))
+                flags = int(getattr(code, "co_flags", 0))
+                has_varargs = bool(flags & 0x04)  # CO_VARARGS
+                start = pos + (1 if has_varargs else 0)
+                names = tuple(code.co_varnames[start : start + kwonly])
+                needs = "scope" in names
+    try:
+        _PY_CALLABLE_SCOPE_CACHE[key] = needs
+    except TypeError:
+        pass
+    return needs
+
+
+def _python_zero_arity(func) -> bool:
+    key = _callable_cache_key(func)
+    try:
+        return _PY_CALLABLE_ZERO_ARITY_CACHE[key]
+    except (KeyError, TypeError):
+        pass
+
+    bound = inspect.ismethod(func)
+    try:
+        code = getattr(func, "__code__", None)
+        if code is not None:
+            pos = int(getattr(code, "co_argcount", 0))
+            defaults = getattr(func, "__defaults__", None) or ()
+            req_pos = pos - len(defaults)
+            if bound and req_pos > 0:
+                req_pos -= 1  # account for bound 'self'
+            zero = req_pos == 0
+        else:
+            sig = inspect.signature(func)
+            zero = not any(
+                p.kind
+                in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+                and p.default is inspect._empty
+                for p in sig.parameters.values()
+            )
+    except Exception:
+        return False
+    try:
+        _PY_CALLABLE_ZERO_ARITY_CACHE[key] = zero
+    except TypeError:
+        pass
+    return zero
 
 
 def _tmpl_normalize_value(v):
@@ -536,6 +614,17 @@ class PathResolver:
         return "[" in u
 
     def _extract_http_url(self, path: GetPath | SetPath) -> str | None:
+        cached = getattr(path, "_slip_http_url", _LOCATOR_UNSET)
+        if cached is not _LOCATOR_UNSET:
+            return cached
+        url = self._compute_http_url(path)
+        try:
+            path._slip_http_url = url
+        except Exception:
+            pass
+        return url
+
+    def _compute_http_url(self, path: GetPath | SetPath) -> str | None:
         """
         Extract a full http(s) URL from a path.
         Priority:
@@ -566,6 +655,17 @@ class PathResolver:
         return None
 
     def _extract_file_locator(self, path: GetPath | SetPath) -> str | None:
+        cached = getattr(path, "_slip_file_loc", _LOCATOR_UNSET)
+        if cached is not _LOCATOR_UNSET:
+            return cached
+        locator = self._compute_file_locator(path)
+        try:
+            path._slip_file_loc = locator
+        except Exception:
+            pass
+        return locator
+
+    def _compute_file_locator(self, path: GetPath | SetPath) -> str | None:
         loc = getattr(path, "loc", None) or {}
         txt = loc.get("text") if isinstance(loc, dict) else None
 
@@ -1478,6 +1578,8 @@ class Evaluator:
         self.bind_locals_prefer_container: bool = True
         # Core library load flag
         self._core_loaded: bool = False
+        # Sample the debug flag once; the environment cannot change mid-run.
+        self._debug_enabled: bool = bool(os.environ.get("SLIP_DEBUG"))
 
     def _normalize_root_div(self, term):
         # Convert ambiguous '/' token parsed as Root into a Name('/')
@@ -1839,7 +1941,7 @@ class Evaluator:
 
     def _debug_on(self) -> bool:
         """Cheap predicate to guard expensive debug payload construction."""
-        return bool(os.environ.get("SLIP_DEBUG"))
+        return self._debug_enabled
 
     def _dbg(self, *parts):
         import sys
@@ -3747,47 +3849,7 @@ class Evaluator:
             needs = getattr(v, "_slip_zero_arity", None)
             if needs is not None:
                 return bool(needs)
-            import inspect as _inspect
-
-            bound = False
-            func = v
-            if _inspect.ismethod(v):
-                func = getattr(v, "__func__", v)
-                bound = True
-            code = getattr(func, "__code__", None)
-            if code is not None:
-                pos = int(getattr(code, "co_argcount", 0))
-                # keyword-only parameters do not affect zero-arity positional requirement
-                defaults = getattr(func, "__defaults__", None) or ()
-                req_pos = pos - len(defaults)
-                if bound and req_pos > 0:
-                    req_pos -= 1  # account for bound 'self'
-                zero = req_pos == 0
-                try:
-                    setattr(v, "_slip_zero_arity", zero)
-                except Exception:
-                    pass
-                return zero
-            # Fallback: use inspect.signature once and cache
-            import inspect
-
-            sig = inspect.signature(v)
-            req = [
-                p
-                for p in sig.parameters.values()
-                if p.kind
-                in (
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                )
-                and p.default is inspect._empty
-            ]
-            zero = len(req) == 0
-            try:
-                setattr(v, "_slip_zero_arity", zero)
-            except Exception:
-                pass
-            return zero
+            return _python_zero_arity(v)
         except Exception:
             return False
 
@@ -4520,36 +4582,8 @@ class Evaluator:
             case _ if callable(func):
                 # Prepare kwargs for Python functions that need `scope`
                 kwargs = {}
-                try:
-                    needs = getattr(func, "_slip_accepts_scope", None)
-                    if needs is None:
-                        try:
-                            sig = inspect.signature(func)
-                            needs = "scope" in sig.parameters
-                        except Exception:
-                            needs = False
-                            # Best-effort fallback to kw-only detection via code object
-                            code = getattr(func, "__code__", None)
-                            if code is not None:
-                                kwonly = getattr(code, "co_kwonlyargcount", 0)
-                                if kwonly:
-                                    pos = int(getattr(code, "co_argcount", 0))
-                                    flags = int(getattr(code, "co_flags", 0))
-                                    has_varargs = bool(flags & 0x04)  # CO_VARARGS
-                                    start = pos + (1 if has_varargs else 0)
-                                    names = tuple(
-                                        code.co_varnames[start : start + kwonly]
-                                    )
-                                    if "scope" in names:
-                                        needs = True
-                        try:
-                            setattr(func, "_slip_accepts_scope", needs)
-                        except Exception:
-                            pass
-                    if needs:
-                        kwargs["scope"] = scope
-                except Exception:
-                    pass
+                if _python_accepts_scope(func):
+                    kwargs["scope"] = scope
 
                 if inspect.iscoroutinefunction(func):
                     return await func(*args, **kwargs)
