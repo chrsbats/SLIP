@@ -85,8 +85,8 @@ GET_PATH_TEST_CASES = [
     ("variadic_name", "args...", {
         "tag": "get-path", "children": [{"tag": "name", "text": "args..."}]
     }),
-    ("predicate_name", "is-a?", {
-        "tag": "get-path", "children": [{"tag": "name", "text": "is-a?"}]
+    ("question_name", "ready?", {
+        "tag": "get-path", "children": [{"tag": "name", "text": "ready?"}]
     }),
 
     # --- Special Prefixes ---

@@ -203,7 +203,7 @@ Character: scope #{
 Player: scope #{} |inherit Character
 
 p: create Player
-#[ p.hp, p.stamina, is-a? p Character ]
+#[ p.hp, p.stamina, is-a p Character ]
 ```
 
 ### 2.3 Add behavior with free functions

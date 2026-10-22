@@ -154,7 +154,7 @@ To read the full argument for this design, see **[Appendix C - Design Philosophy
 This project is a **stable alpha**. The Python implementation is the active reference runtime.
 
 - **Current:** Refine the language through the Python prototype and an interactive-fiction application that exercises its features together.
-- **Next:** Begin work on a high-performance implementation in a systems language with a hybrid AOT/JIT compilation strategy.
+- **Next:** Build a standalone Nim interpreter using native values and JSON-compatible interchange. See the [Nim port specification](nim/SPEC.md) and [implementation plan](nim/PLAN.md). The initial implementation does not require a JIT.
 - **Known Focus Area:** The current work is on persistence boundaries, host integration, and keeping the practical documentation aligned with the real runtime.
 
 ### Getting Started

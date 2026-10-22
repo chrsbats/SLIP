@@ -50,6 +50,11 @@ It is not a tutorial. For a guided introduction, start with:
   - These short-circuit.
   - Example: `ready and has-target`
 
+- `in`
+  - Infix containment operator.
+  - Delegates to the container's native `__contains__`, the same as Python `in`.
+  - Example: `'id' in node`
+
 - `not`
   - Boolean negation.
   - Example: `not done`
@@ -202,23 +207,23 @@ emit "stdout" `json` #{ hp: 120, mana: 30 }
 
 ### Predicates from `root.slip`
 
-- `is-number? x`
-- `is-string? x`
-- `is-list? x`
-- `is-dict? x`
-- `is-scope? x`
-- `is-path? x`
-- `is-fn? x`
-- `is-code? x`
-- `is-boolean? x`
-- `is-none? x`
+- `is-number x`
+- `is-string x`
+- `is-list x`
+- `is-dict x`
+- `is-scope x`
+- `is-path x`
+- `is-fn x`
+- `is-code x`
+- `is-boolean x`
+- `is-none x`
 
 These return booleans based on `type-of`.
 
 Example:
 
 ```slip
-#[ is-list? #[], is-path? `a.b`, is-code? [1] ]
+#[ is-list #[], is-path `a.b`, is-code [1] ]
 ```
 
 ### Type unions used in stdlib signatures
@@ -282,7 +287,8 @@ replace 'foo bar foo' 'foo' 'baz'
 - Ordered-sequence variant.
 - Returns a modified copy with items equal to `old[0]` replaced by `new[0]`.
 
-### `find haystack needle start?`
+### `find haystack needle`
+### `find haystack needle start`
 
 - Finds a substring starting at an optional offset.
 
@@ -358,10 +364,33 @@ Example:
 
 - Returns key/value pairs.
 
-### `has-key? mapping key`
+### `has container key`
 
-- Returns true if the key exists.
-- Works for dicts and scopes.
+- Returns `key in container`, using the container's native `__contains__`.
+- Works for mappings, lists, strings, scopes, host containers, and Etcher `RD`/`RL` values.
+- Mapping keys retain their types. A present value of `none` or `false` still counts as present.
+- Scope lookup follows normal inherited bindings and key normalization. The reserved `meta` mapping is not a binding, so `has scope 'meta'` is false.
+- Etcher `RD` membership checks do not fetch member values or take snapshots. Etcher `RL.__contains__` materializes its own snapshot by contract.
+- Membership errors propagate. Values that do not support containment raise Python's `TypeError`.
+- `in` is the infix spelling: `has container key` is equivalent to `key in container`.
+
+```slip
+data: #{name: none}
+#[has data 'name', data |has 'missing', 'name' in data]
+-- => #[true, false, true]
+```
+
+### `contains key container`
+
+- Key-first form used by the `in` operator.
+- Equivalent to `has container key`.
+- Prefer `key in container` for direct checks and `has` when a function value is needed.
+
+```slip
+data: #{name: none}
+contains 'name' data
+-- => true
+```
 
 ### `update target patch`
 
@@ -393,7 +422,8 @@ deep: clone orig
 
 ## Control Flow Helpers
 
-### `if [condition] [then] [else?]`
+### `if [condition] [then]`
+### `if [condition] [then] [else]`
 
 - Evaluates the condition block.
 - Runs the then block if truthy, else the else block.
@@ -459,7 +489,8 @@ for {i} 1 4 [ print i ]
 - Returns a function that applies `functions` from right to left.
 - `compose f g h` produces a function equivalent to `f(g(h(value)))`.
 
-### `return value?`
+### `return`
+### `return value`
 
 - Exits the current function early.
 - Also works at top level.
@@ -469,10 +500,10 @@ Examples:
 
 ```slip
 sum: fn {} [ return (add 1 2) ]
-is-storm?: fn {weather} [ return (weather = `storm`) ]
-is-day?: fn {nighttime?} [ return (not nighttime?) ]
+storm?: fn {weather} [ return (weather = `storm`) ]
+daytime?: fn {nighttime?} [ return (not nighttime?) ]
 
-#[sum, is-storm? `storm`, is-day? false]
+#[sum, storm? `storm`, daytime? false]
 -- => #[3, true, true]
 ```
 
@@ -586,7 +617,7 @@ p.hp
 -- => 150
 ```
 
-### `is-a? obj proto`
+### `is-a obj proto`
 
 - Checks whether `obj` is the same as or inherits from `proto`.
 
@@ -609,7 +640,7 @@ p.hp
 
 - Constructs a schema scope.
 
-### `is-schema? obj`
+### `is-schema obj`
 
 - True if `obj` is a schema.
 
@@ -664,13 +695,14 @@ take: take-method |command |public
 
 - Attaches an example to a function implementation.
 
-### `test function?`
+### `test function`
 
 - Runs examples for one function.
 - Returns the number of passing examples.
 - Signals a structured `test-failed` failure when an example fails.
 
-### `test-all scope?`
+### `test-all`
+### `test-all scope`
 
 - Runs examples across the current scope or a provided scope.
 - Returns a summary mapping when all examples pass.

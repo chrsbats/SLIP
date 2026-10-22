@@ -124,3 +124,36 @@ async def test_for_counts_up_and_down_and_binds_var():
     """
     res = await run_slip(src)
     assert_ok(res, [[1, 2, 3], [3, 2, 1], 3, 1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body, expected", [
+    ("when [local-value > 0] [local-value]", 7),
+    ("cond #[#[[local-value > 0], [local-value]]]", 7),
+    ("seen: #[]; for {i} 0 3 [seen: add seen #[local-value + i]]; seen",
+     [7, 8, 9]),
+    ("seen: #[]; do [loop [seen: add seen #[local-value]; "
+     "if [(len seen) = 2] [fail 'done']]]; seen", [7, 7]),
+])
+async def test_library_control_helpers_use_function_local_bindings(body, expected):
+    res = await run_slip(f"probe: fn {{local-value}} [{body}]; probe 7")
+    assert_ok(res, expected)
+
+
+@pytest.mark.asyncio
+async def test_nested_control_helpers_share_the_callers_loop_binding():
+    runner = ScriptRunner()
+    res = await runner.handle_script("""
+collect: fn {offset} [
+    seen: #[]
+    for {i} 0 3 [
+        when [i > 0] [seen: add seen #[offset + i]]
+    ]
+    #[seen, i]
+]
+result: collect 10
+i-probe: do [i]
+offset-probe: do [offset]
+#[result, i-probe.status, offset-probe.status]
+""")
+    assert_ok(res, [[[11, 12], 2], '`err`', '`err`'])

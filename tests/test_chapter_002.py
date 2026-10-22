@@ -63,7 +63,7 @@ async def test_list_and_dict_literals_evaluate_contents():
 async def test_scope_constructor_and_is_scope_predicate():
     src = """
     s: scope #{ a: 1 }
-    #[ is-scope? s, s.a ]
+    #[ is-scope s, s.a ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, 1])
@@ -73,11 +73,11 @@ async def test_scope_constructor_and_is_scope_predicate():
 @pytest.mark.asyncio
 async def test_is_path_predicate_for_path_literals():
     src = """
-    #[ is-path? `a`,
-       is-path? `a:`,
-       is-path? `~a`,
-       is-path? `|map`,
-       is-path? `[a,b]:`
+    #[ is-path `a`,
+       is-path `a:`,
+       is-path `~a`,
+       is-path `|map`,
+       is-path `[a,b]:`
      ]
     """
     res = await run_slip(src)

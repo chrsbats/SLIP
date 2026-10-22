@@ -426,11 +426,11 @@ TEST_CASES = [
             ]}
         ]
     }),
-    ("predicate_name_integrated", "is-a?", {
+    ("question_name_integrated", "ready?", {
         'tag': 'code', 'children': [
             {'tag': 'expr', 'children': [
                 {'tag': 'get-path', 'children': [
-                    {'tag': 'name', 'text': 'is-a?'}
+                    {'tag': 'name', 'text': 'ready?'}
                 ]}
             ]}
         ]

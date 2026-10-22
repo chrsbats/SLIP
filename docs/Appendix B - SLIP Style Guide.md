@@ -23,6 +23,34 @@ SLIP uses distinct naming conventions to signal the intended role of a value.
     addNumbers: none
     ```
 
+*   **Predicate Names:** Name predicates by how they read.
+
+    - Use `is-` for structural, type, category, and shape checks: `is-number`, `is-a`, `is-schema`.
+    - Use a trailing `?` for state and ability questions: `poisoned?`, `can-see?`, `wounded?`.
+    - Do not combine both markers. Prefer `poisoned?` over `is-poisoned?`.
+    - Relations and comparisons keep their conventional names without a suffix: `has`, `in`, `eq`, `gt`.
+
+    ```slip
+    -- Structural and type checks
+    is-number hp
+    is-a player Character
+    is-schema UserSchema
+
+    -- State and ability questions
+    poisoned? actor
+    can-see? actor target
+    wounded? actor
+
+    -- Relations and comparisons
+    'inventory' in actor
+    has actor 'inventory'
+    hp > 0
+    ```
+
+    Prefer `key in container` for direct membership checks. Keep `has container key` when the relation is passed as a function or used in a pipe chain.
+
+    Existing domain code may keep established spellings. Prefer these forms for new code.
+
 *   **`PascalCase` for Prototypes, Types, and Schemas:** Use `PascalCase` for names intended to be prototypes, type aliases, or validation schemas.
     ```slip
     -- Correct: A prototype is a `scope`.
@@ -139,8 +167,8 @@ Code blocks and statements should be formatted for maximum readability.
 *   **Clarity with `return`:** An explicit `return` often makes the result of a multi-line function easier to spot. `return` accepts at most one value; when returning a call, comparison, or logical expression, group it explicitly:
     ```slip
     sum: fn {} [ return (add 1 2) ]
-    is-storm?: fn {weather} [ return (weather = `storm`) ]
-    is-day?: fn {nighttime?} [ return (not nighttime?) ]
+    storm?: fn {weather} [ return (weather = `storm`) ]
+    daytime?: fn {nighttime?} [ return (not nighttime?) ]
     ```
 
 *   **Refinement with `|where` (default style):** Put a `|where` clause inside the function signature when it makes a dispatch rule clearer.

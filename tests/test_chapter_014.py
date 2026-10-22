@@ -186,7 +186,7 @@ async def test_import_and_current_scope_missing_errors_cleanly():
     assert_error(res, "PathNotFound: import")
 
     # current-scope present: returns a scope
-    res = await runner.handle_script("is-scope? current-scope")
+    res = await runner.handle_script("is-scope current-scope")
     assert_ok(res, True)
 
 

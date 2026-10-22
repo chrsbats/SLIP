@@ -46,7 +46,7 @@ async def test_del_path_meta_prune_false_preserves_parent_scope():
     s.a: scope #{}
     s.a.b: 1
     ~s.a.b#(prune: false)
-    has-a: (has-key? s 'a')
+    has-a: (has s 'a')
     has-a
     """
     res = await run_slip(src)

@@ -94,7 +94,7 @@ async def test_as_slip_auto_creates_missing_prototype_and_dispatches():
     describe: fn {x} [ "fallback" ]
 
     obj: as-slip data
-    #[ describe obj, obj.hp, is-a? obj MissingType ]
+    #[ describe obj, obj.hp, is-a obj MissingType ]
     """)
 
     assert_ok(res, ["typed", 10, True])
@@ -115,7 +115,7 @@ async def test_as_slip_reuses_generated_prototype_within_runner():
     res = await runner.handle_script("""
     a1: as-slip a
     b1: as-slip b
-    #[ is-a? a1 Ghost, is-a? b1 Ghost, eq a1.meta.parent b1.meta.parent ]
+    #[ is-a a1 Ghost, is-a b1 Ghost, eq a1.meta.parent b1.meta.parent ]
     """)
 
     assert_ok(res, [True, True, True])
@@ -132,7 +132,7 @@ async def test_as_slip_prefers_existing_local_prototype():
     res = await runner.handle_script("""
     Character: scope #{ kind: "local" }
     obj: as-slip data
-    #[ is-a? obj Character, obj.kind, obj.hp ]
+    #[ is-a obj Character, obj.kind, obj.hp ]
     """)
 
     assert_ok(res, [True, "local", 10])

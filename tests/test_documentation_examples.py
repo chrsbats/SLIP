@@ -538,7 +538,7 @@ EXECUTION_CASES = [
     ),
     ExecutionCase(
         "docs/Appendix A - StdLib Reference.md",
-        "#[ is-list? #[]",
+        "#[ is-list #[]",
         [True, True, True],
     ),
     ExecutionCase(

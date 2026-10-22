@@ -77,8 +77,8 @@ async def test_file_slip_returns_code_block_not_executed(tmp_path):
 
     src = f"""
     c: file://{mod_path.as_posix()}
-    is-code: is-code? c
-    is-code
+    code-value: is-code c
+    code-value
     """
 
     runner = ScriptRunner()

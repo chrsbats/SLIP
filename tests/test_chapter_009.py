@@ -27,7 +27,7 @@ async def test_schema_creation_and_is_schema_predicate():
     src = """
     -- Create a basic schema and verify predicates and shape
     UserSchema: schema #{ name: `string`, age: `number` }
-    #[ is-schema? UserSchema, is-a? UserSchema Schema, is-scope? UserSchema ]
+    #[ is-schema UserSchema, is-a UserSchema Schema, is-scope UserSchema ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, True, True])
@@ -82,10 +82,57 @@ async def test_schema_composition_and_inheritance_relationships():
         members: `list`
     }
 
-    #[ is-schema? ContactInfoSchema,
-       is-schema? UserSchema,
-       is-a? UserSchema ContactInfoSchema,
-       is-schema? TeamSchema ]
+    #[ is-schema ContactInfoSchema,
+       is-schema UserSchema,
+       is-a UserSchema ContactInfoSchema,
+       is-schema TeamSchema ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, True, True, True])
+
+
+@pytest.mark.asyncio
+async def test_schema_child_defaults_override_parent_defaults():
+    res = await run_slip("""
+Base: schema #{port: (default 80), host: (default 'localhost')}
+Child: scope #{port: (default 8080)} |inherit Base
+validate #{} Child
+""")
+    assert_ok(res, {'port': 8080, 'host': 'localhost'})
+
+
+@pytest.mark.asyncio
+async def test_validate_normalizes_nested_optional_and_default_fields():
+    res = await run_slip("""
+Address: schema #{zip: `int`, country: (default 'GB')}
+Profile: schema #{
+    name: `string`,
+    address: (optional Address),
+    nickname: (optional `string`),
+    active: (default true)
+}
+#[
+    validate #{name: 'Ada', address: #{zip: 123}} Profile,
+    validate #{name: 'Grace', active: false} Profile
+]
+""")
+    assert_ok(res, [
+        {'name': 'Ada', 'address': {'zip': 123, 'country': 'GB'}, 'active': True},
+        {'name': 'Grace', 'active': False},
+    ])
+
+
+@pytest.mark.asyncio
+async def test_validate_collects_nested_type_and_required_field_errors():
+    res = await run_slip("""
+Address: schema #{zip: `int`}
+Profile: schema #{name: `string`, address: Address, age: `int`}
+do [validate #{name: 7, address: #{zip: 'wrong'}} Profile]
+""")
+    assert_ok(res)
+    assert res.value['status'] == 'err'
+    assert res.value['error']['code'] == 'invalid'
+    errors = res.value['error']['data']
+    assert [error['field'] for error in errors] == ['name', 'zip', 'age']
+    assert 'expected type' in errors[0]['error']
+    assert errors[2]['error'] == 'field is required'

@@ -80,7 +80,7 @@ This is its implementation in SLIP's standard library, followed by a call using 
 for: fn {vars, start, end, body-block} [
     var-name: extract-simple-param vars
     for-scope: current-scope
-    for-scope: for-scope["meta"]["parent"]
+    for-scope: for-scope.meta.caller
     step: if [start <= end] [1] [-1]
     i: start
 
@@ -158,17 +158,17 @@ Scopes provide state, prototypes, and inheritance; generic functions provide beh
 ```slip
 Player: scope #{}
 LockedDoor: scope #{
-    locked?: true
+    locked: true
 }
 
 interact: fn {actor: Player, target: LockedDoor, action |where action = `open`} [
-    target.locked?: false
+    target.locked: false
 ]
 
 player: create Player
 door: create LockedDoor
 player |interact door `open`
-door.locked?
+door.locked
 -- => false
 ```
 

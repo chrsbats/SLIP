@@ -197,11 +197,6 @@ class StdLib:
                         core[slip_name] = member
                         # Also provide stable core- aliases
                         core[f"core-{slip_name}"] = member
-                        # Expose predicate '-q' aliases as '?'
-                        if slip_name.endswith("-q"):
-                            q_alias = slip_name[:-2] + "?"
-                            core[q_alias] = member
-                            core[f"core-{q_alias}"] = member
                 evaluator.core_scope = core
         except Exception:
             # Best-effort only; ScriptRunner will bind full root scope separately.
@@ -235,6 +230,7 @@ class StdLib:
         # List-friendly addition with in-place mutation to support idioms like:
         # foreach {k} dict [ seen + k ]  -- mutates 'seen' list without assignment
         if isinstance(a, list):
+            self.evaluator.path_resolver._check_write_target(a)
             if isinstance(b, list):
                 a.extend(b)
                 return a
@@ -652,6 +648,9 @@ class StdLib:
                 host_data=getattr(ev, "host_data_loader", None),
             )
             runner.evaluator.random_generator = ev.random_generator
+            runner.evaluator._transaction_receiver = ev._transaction_receiver
+            runner.evaluator._update_target = ev._update_target
+            runner.evaluator.path_resolver._resolvers = ev.path_resolver._resolvers
             runner.evaluator.side_effects = ev.side_effects
             runner.evaluator.module_cache = cache
             runner.evaluator.module_loading = loading
@@ -810,6 +809,9 @@ class StdLib:
             host_data=getattr(ev, "host_data_loader", None),
         )
         runner.evaluator.random_generator = ev.random_generator
+        runner.evaluator._transaction_receiver = ev._transaction_receiver
+        runner.evaluator._update_target = ev._update_target
+        runner.evaluator.path_resolver._resolvers = ev.path_resolver._resolvers
         runner.evaluator.side_effects = ev.side_effects
         runner.evaluator.module_cache = cache
         runner.evaluator.module_loading = loading
@@ -875,35 +877,13 @@ class StdLib:
         # Scope-like fallback: iterate .bindings
         return [[k, v] for k, v in getattr(d, "bindings", {}).items()]
 
-    def _has_key_q(self, obj, key):
-        """
-        Predicate: does obj have the given key?
-        - For dict/mapping: `key in obj`
-        - For Scope: lookup via find_owner(key)
-        Accepts key as string or IString; other types are coerced to str.
-        """
-        from slip.slip_datatypes import Scope as _Scope, IString as _IStr
+    def _has(self, container, key):
+        """Check containment through the container's native protocol."""
+        return key in container
 
-        k = key
-        if isinstance(k, _IStr) or isinstance(k, str):
-            k = str(k)
-        else:
-            try:
-                k = str(k)
-            except Exception:
-                return False
-        if isinstance(obj, collections.abc.Mapping):
-            return k in obj
-        if isinstance(obj, _Scope):
-            try:
-                return obj.find_owner(k) is not None
-            except Exception:
-                return False
-        # For other objects, try attribute presence as a last resort
-        try:
-            return hasattr(obj, k)
-        except Exception:
-            return False
+    def _contains(self, key, container):
+        """Check containment through the container's native protocol."""
+        return key in container
 
     # --- Object Model ---
     def _scope(self, config: dict):
@@ -931,6 +911,7 @@ class StdLib:
             for k, v in config.items():
                 s[k] = v
         s.meta["resolver"] = True
+        self.evaluator.path_resolver._remember_resolver(s)
         return s
 
     def _inherit(self, obj: Scope, proto: Scope):
@@ -975,6 +956,8 @@ class StdLib:
 
         async def _runner():
             child = Scope(parent=parent_scope)
+            receiver_token = evaluator._transaction_receiver.set(None)
+            update_token = evaluator._update_target.set(None)
             prev_flag = getattr(evaluator, "is_in_task_context", False)
             # Increment task-context counter and ensure the flag is on during this task
             evaluator.task_context_count = (
@@ -986,6 +969,8 @@ class StdLib:
                 if isinstance(res, ReturnSignal):
                     return res.value
             finally:
+                evaluator._transaction_receiver.reset(receiver_token)
+                evaluator._update_target.reset(update_token)
                 # Decrement; only restore the flag when the last task-context exits
                 try:
                     evaluator.task_context_count -= 1
@@ -3223,11 +3208,6 @@ class ScriptRunner:
                 # Provide stable core- aliases for operators to avoid shadowing by user-defined functions
                 core_name = f"core-{slip_name}"
                 self.root_scope[core_name] = member
-                # Also expose predicate aliases ending with '-q' as '?' (e.g., has-key?).
-                if slip_name.endswith("-q"):
-                    q_alias = slip_name[:-2] + "?"
-                    self.root_scope[q_alias] = member
-                    self.root_scope[f"core-{q_alias}"] = member
 
         # Track which host API names we have bound into the root scope
         self._host_api_names: set[str] = set()

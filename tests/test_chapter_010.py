@@ -94,7 +94,7 @@ async def test_code_is_first_class_and_can_be_run_later():
       y + 7
     ]
     -- Code value is unevaluated until run
-    t1: is-code? c
+    t1: is-code c
     v: run c
     probe: do [ y ]
     status-is-err: eq probe.status err
@@ -166,7 +166,7 @@ async def test_call_normalizes_runtime_path_value_to_literal():
 
 @pytest.mark.asyncio
 async def test_current_scope_returns_scope():
-    res = await run_slip("is-scope? current-scope")
+    res = await run_slip("is-scope current-scope")
     assert_ok(res, True)
 
 

@@ -27,17 +27,17 @@ async def test_core_type_predicates():
     runner = ScriptRunner()
 
     for src, expected in [
-        ("is-number? 3", True),
-        ("is-number? -2.5", True),
-        ("is-string? 'raw'", True),
-        ('is-string? "interp"', True),
-        ("is-boolean? true", True),
-        ("is-boolean? false", True),
-        ("is-none? none", True),
-        ("is-path? `a.b`", True),
-        ("is-list? #[1,2,3]", True),
-        ("is-dict? #{a:1}", True),
-        ("is-scope? (scope #{})", True),
+        ("is-number 3", True),
+        ("is-number -2.5", True),
+        ("is-string 'raw'", True),
+        ('is-string "interp"', True),
+        ("is-boolean true", True),
+        ("is-boolean false", True),
+        ("is-none none", True),
+        ("is-path `a.b`", True),
+        ("is-list #[1,2,3]", True),
+        ("is-dict #{a:1}", True),
+        ("is-scope (scope #{})", True),
     ]:
         res = await runner.handle_script(src)
         assert res.status == 'ok', f"{src}: {res.error_message}"
@@ -107,7 +107,7 @@ async def test_core_object_model_create_and_is_a():
     script = """
 Character: scope #{ hp: 100 }
 Player: create Character
-is-a? Player Character
+is-a Player Character
 """
     res = await runner.handle_script(script)
     assert res.status == 'ok', res.error_message
@@ -119,7 +119,7 @@ async def test_core_schema_and_is_schema():
 
     script = """
 SchemaObj: schema #{}
-is-schema? SchemaObj
+is-schema SchemaObj
 """
     res = await runner.handle_script(script)
     assert res.status == 'ok', res.error_message

@@ -1,3 +1,5 @@
+from collections import UserDict, UserList
+
 import pytest
 
 from slip.slip_interpreter import _tmpl_normalize_value, _scope_to_dict, Evaluator
@@ -154,3 +156,41 @@ async def test_unary_piped_operator_custom_and_error_cases():
     res_err = await ScriptRunner().handle_script("5 |add")
     assert res_err.status == 'err'
     assert "TypeError: invalid-args in (add)" in (res_err.error_message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('container_type', [UserDict, UserList, Scope])
+@pytest.mark.parametrize('expression, expected', [
+    ('data', None),
+    ('same data', True),
+    ('same (data)', True),
+    ('data != none', True),
+    ('data = none', False),
+    ('(data) != none', True),
+    ('data = data', True),
+    ('data |same', True),
+    ('data |eq none', False),
+])
+async def test_callable_containers_remain_data(
+    container_type, expression, expected
+):
+    calls = []
+
+    class CallableData(container_type):
+        def __call__(self):
+            calls.append(self)
+            return None
+
+    data = CallableData()
+    runner = ScriptRunner()
+    runner.root_scope['data'] = data
+    runner.root_scope['same'] = lambda value: value is data
+
+    result = await runner.handle_script(expression)
+
+    assert result.status == 'ok', result.error_message
+    assert calls == []
+    if expression == 'data':
+        assert result.slip_result is data
+    else:
+        assert result.value is expected

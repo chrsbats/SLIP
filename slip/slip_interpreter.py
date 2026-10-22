@@ -8,6 +8,8 @@ import sys
 import os
 import re
 import collections.abc
+from contextvars import ContextVar
+from weakref import WeakSet
 from typing import Any, List, Optional, Union, Tuple, Dict
 from textwrap import dedent
 
@@ -65,6 +67,15 @@ _next_type_id = 1
 def _is_list_like(value) -> bool:
     return isinstance(value, collections.abc.Sequence) and not isinstance(
         value, (str, bytes, bytearray, collections.abc.Mapping)
+    )
+
+
+def _is_implicit_callable(value) -> bool:
+    # Callable containers expose explicit operations such as detached snapshots.
+    return (
+        isinstance(value, SlipCallable) or callable(value)
+    ) and not isinstance(
+        value, (Scope, collections.abc.Mapping, collections.abc.Sequence)
     )
 
 
@@ -162,6 +173,57 @@ class PathResolver:
 
     def __init__(self, evaluator: "Evaluator"):
         self.evaluator = evaluator
+        self._resolvers = WeakSet()
+
+    def _remember_resolver(self, value):
+        if isinstance(value, Scope) and value.meta.get("resolver"):
+            self._resolvers.add(value)
+
+    def _check_write_target(self, target, path=None):
+        """Check live ownership without copying values or retaining detached state."""
+        if (
+            not isinstance(target, (Scope, collections.abc.Mapping))
+            and not _is_list_like(target)
+        ):
+            return
+        self._remember_resolver(target)
+        if isinstance(target, Scope):
+            target = target.bindings
+        receiver = self.evaluator._transaction_receiver.get()
+        rooted_at_this = self._rooted_at_this(path)
+        # In-place primitives may mutate the already-checked update seed.
+        updating_target = path is None and self.evaluator._update_target.get() is target
+        for resolver in self._resolvers:
+            pending = [resolver]
+            seen = set()
+            while pending:
+                node = pending.pop()
+                if node is target:
+                    if receiver is resolver and (rooted_at_this or updating_target):
+                        break
+                    err = PermissionError(
+                        "Resolver-owned writes require the owner's transaction "
+                        "and a path rooted at `this`"
+                    )
+                    err.slip_obj = path
+                    raise err
+                if id(node) in seen:
+                    continue
+                seen.add(id(node))
+                if isinstance(node, Scope):
+                    pending.append(node.bindings)
+                elif isinstance(node, collections.abc.Mapping):
+                    pending.extend(node.values())
+                elif _is_list_like(node):
+                    pending.extend(node)
+
+    def _rooted_at_this(self, path):
+        target = path.path if isinstance(path, DelPath) else path
+        segments = getattr(target, "segments", ())
+        return bool(
+            segments and isinstance(segments[0], Name)
+            and segments[0].text == "this"
+        )
 
     def _build_item_overlay_scope(self, item, parent: Scope) -> Scope:
         s = Scope(parent=parent)
@@ -601,6 +663,15 @@ class PathResolver:
             except Exception:
                 pass
             raise err
+        if (
+            self._rooted_at_this(path)
+            and self.evaluator._transaction_receiver.get() is None
+        ):
+            err = PermissionError(
+                "Committed writes require a resolver transaction (`fn {this: ResolverType, ...}`)"
+            )
+            err.slip_obj = path
+            raise err
 
     async def _resolve(
         self, path: Union[GetPath, SetPath], scope: Scope
@@ -627,6 +698,7 @@ class PathResolver:
             )
 
         for segment in segments[:-1]:
+            self._remember_resolver(container)
             if segment is Parent:
                 if not isinstance(container, Scope) or not container.parent:
                     raise KeyError(
@@ -735,35 +807,6 @@ class PathResolver:
         """Resolves a SetPath to set a value."""
         self._check_write_path(path)
 
-        # Commit gating: writes rooted at `this` are only allowed inside resolver transactions.
-        try:
-            segs = getattr(path, "segments", None) or []
-            if segs and isinstance(segs[0], Name) and segs[0].text == "this":
-                ev = getattr(self, "evaluator", None)
-                recv = (
-                    getattr(ev, "_active_this_receiver", None)
-                    if ev is not None
-                    else None
-                )
-                is_resolver = (
-                    bool(getattr(ev, "_active_this_is_resolver", False))
-                    if ev is not None
-                    else False
-                )
-                if recv is None or not is_resolver:
-                    err = PermissionError(
-                        "Committed writes require a resolver transaction (`fn {this: ResolverType, ...}`)"
-                    )
-                    try:
-                        err.slip_obj = path
-                    except Exception:
-                        pass
-                    raise err
-        except Exception as e:
-            # Only propagate our explicit PermissionError; otherwise do not block normal writes.
-            if isinstance(e, PermissionError):
-                raise
-
         # TODO: Handle path.meta for generic function dispatch
         url = self._extract_http_url(path)
         if url:
@@ -813,6 +856,18 @@ class PathResolver:
             )
             return
         container, key = await self._resolve(path, scope)
+        defining_method = (
+            isinstance(container, Scope) and container in self._resolvers
+            and (isinstance(value, SlipCallable) or callable(value))
+            and (
+                key not in container.bindings
+                or isinstance(container.bindings[key], SlipCallable)
+                or callable(container.bindings[key])
+            )
+        )
+        if not defining_method:
+            self._check_write_target(container, path)
+        self._remember_resolver(value)
 
         # Scope christening: assign meta.name and meta.type_id on first assignment
         if isinstance(value, Scope) and "type_id" not in value.meta:
@@ -835,40 +890,13 @@ class PathResolver:
                     if hasattr(container, "find_owner")
                     else None
                 )
+                self._check_write_target(owner or container, path)
                 (owner or container)[key] = value
         else:
             container[key] = value
 
     async def post(self, path: PostPath, value: Any, scope: Scope):
         self._check_write_path(path)
-
-        # Commit gating: writes rooted at `this` are only allowed inside resolver transactions.
-        try:
-            segs = getattr(path, "segments", None) or []
-            if segs and isinstance(segs[0], Name) and segs[0].text == "this":
-                ev = getattr(self, "evaluator", None)
-                recv = (
-                    getattr(ev, "_active_this_receiver", None)
-                    if ev is not None
-                    else None
-                )
-                is_resolver = (
-                    bool(getattr(ev, "_active_this_is_resolver", False))
-                    if ev is not None
-                    else False
-                )
-                if recv is None or not is_resolver:
-                    err = PermissionError(
-                        "Committed writes require a resolver transaction (`fn {this: ResolverType, ...}`)"
-                    )
-                    try:
-                        err.slip_obj = path
-                    except Exception:
-                        pass
-                    raise err
-        except Exception as e:
-            if isinstance(e, PermissionError):
-                raise
 
         url = self._extract_http_url(
             GetPath(path.segments, getattr(path, "meta", None))
@@ -923,35 +951,6 @@ class PathResolver:
         """Resolves a DelPath to delete a value."""
         self._check_write_path(path)
 
-        # Commit gating: deletes rooted at `this` are only allowed inside resolver transactions.
-        try:
-            target = getattr(path, "path", None)
-            segs = getattr(target, "segments", None) or []
-            if segs and isinstance(segs[0], Name) and segs[0].text == "this":
-                ev = getattr(self, "evaluator", None)
-                recv = (
-                    getattr(ev, "_active_this_receiver", None)
-                    if ev is not None
-                    else None
-                )
-                is_resolver = (
-                    bool(getattr(ev, "_active_this_is_resolver", False))
-                    if ev is not None
-                    else False
-                )
-                if recv is None or not is_resolver:
-                    err = PermissionError(
-                        "Committed writes require a resolver transaction (`fn {this: ResolverType, ...}`)"
-                    )
-                    try:
-                        err.slip_obj = path
-                    except Exception:
-                        pass
-                    raise err
-        except Exception as e:
-            if isinstance(e, PermissionError):
-                raise
-
         # TODO: Handle path.path.meta for things like soft-delete
         url = self._extract_http_url(path.path)
         if url:
@@ -1000,6 +999,7 @@ class PathResolver:
         # Walk to the leaf, tracking (owner, key, child) steps for pruning
         chain = []
         for seg in segments[:-1]:
+            self._remember_resolver(container)
             if seg is Parent:
                 if not isinstance(container, Scope) or not container.parent:
                     raise KeyError(
@@ -1018,6 +1018,7 @@ class PathResolver:
 
         # Perform the deletion at the leaf
         final_key = await self._get_segment_key(segments[-1], scope)
+        self._check_write_target(container, path)
         del container[final_key]
 
         # Determine pruning behavior: default True; allow #(prune: false) to disable
@@ -1129,6 +1130,7 @@ class PathResolver:
         from slip.slip_datatypes import IdentityBoundary as _IB
 
         for segment in segments:
+            self._remember_resolver(container)
             match segment:
                 case _ if segment is Parent:
                     if not isinstance(container, Scope) or not container.parent:
@@ -1194,6 +1196,8 @@ class PathResolver:
                 raise PathNotFound(str(key))
             except Exception:
                 raise
+
+        self._remember_resolver(container)
 
         # Ref/Cell values dereference/compute on read.
         try:
@@ -1357,6 +1361,7 @@ class PathResolver:
           - ... FilterQuery, Name
         Returns list of new values written.
         """
+        self._check_write_path(set_path)
         parsed = self._parse_vectorized_target(set_path)
         if not parsed:
             raise NotImplementedError(
@@ -1373,13 +1378,17 @@ class PathResolver:
         matches = await self._collect_vector_targets(
             base_container, field_name, filt, scope, include_old=True
         )
+        self._check_write_target(base_container, set_path)
+        for owner, _old_val in matches:
+            self._check_write_target(owner, set_path)
 
         # Apply update expression per match: new = f(old)
         out_vals = []
         for owner, old_val in matches:
-            new_val = await self.evaluator._eval_expr(
-                [old_val] + update_expr_terms, scope
+            new_val = await self.evaluator._eval_update(
+                set_path, old_val, update_expr_terms, scope
             )
+            self._check_write_target(owner, set_path)
             self._write_field(owner, field_name, new_val)
             out_vals.append(new_val)
 
@@ -1397,6 +1406,7 @@ class PathResolver:
           - ... FilterQuery, Name
         Returns list of new values written.
         """
+        self._check_write_path(set_path)
         parsed = self._parse_vectorized_target(set_path)
         if not parsed:
             raise NotImplementedError(
@@ -1412,6 +1422,9 @@ class PathResolver:
         owners = await self._collect_vector_targets(
             base_container, field_name, filt, scope, include_old=False
         )
+        self._check_write_target(base_container, set_path)
+        for owner in owners:
+            self._check_write_target(owner, set_path)
 
         # Evaluate RHS once
         rhs_val = await self.evaluator._eval_expr(value_expr_terms, scope)
@@ -1427,6 +1440,7 @@ class PathResolver:
             pairs = ((o, rhs_val) for o in owners)
 
         for owner, new_val in pairs:
+            self._check_write_target(owner, set_path)
             self._write_field(owner, field_name, new_val)
             new_values.append(new_val)
 
@@ -1452,6 +1466,10 @@ class Evaluator:
         self.call_stack = []
         self.current_source = None
         self.current_local_scope = None
+        self._transaction_receiver = ContextVar(
+            "slip_transaction_receiver", default=None
+        )
+        self._update_target = ContextVar("slip_update_target", default=None)
         # Cache of loaded modules keyed by PathLiteral string
         self.module_cache: Dict[str, Any] = {}
         self.module_loading: set[str] = set()
@@ -1676,7 +1694,7 @@ class Evaluator:
 
     async def _try_core_fallback(self, func, args, scope):
         """
-        Try resolving a core- prefixed builtin (e.g., has-key? -> core-has-key?).
+        Try resolving a core- prefixed builtin (e.g., has -> core-has).
         Returns result or None if unavailable.
         """
         try:
@@ -1718,7 +1736,7 @@ class Evaluator:
             return "i-string"
         if isinstance(val, str):
             return "string"
-        if isinstance(val, list):
+        if _is_list_like(val) and not isinstance(val, Code):
             return "list"
         if isinstance(val, collections.abc.Mapping):
             return "dict"
@@ -2362,7 +2380,20 @@ class Evaluator:
             return None
         return segments
 
-    async def _eval_expr(self, terms: List[Any], scope: Scope) -> Any:
+    async def _eval_update(self, path, current, terms, scope):
+        self.path_resolver._check_write_path(path)
+        self.path_resolver._check_write_target(current, path)
+        token = self._update_target.set(current)
+        try:
+            return unwrap_return(await self._eval_expr(
+                [current] + terms, scope, head_is_value=True
+            ))
+        finally:
+            self._update_target.reset(token)
+
+    async def _eval_expr(
+        self, terms: List[Any], scope: Scope, *, head_is_value=False
+    ) -> Any:
         """Evaluates a single expression (a list of terms)."""
         if not terms:
             return None
@@ -2393,9 +2424,6 @@ class Evaluator:
                     except Exception:
                         pass
                     raise err
-
-                # IR: the transformer may annotate writes as 'commit' vs 'value'.
-                write_kind = getattr(head_uneval, "write_kind", None)
 
                 value_expr = terms[1:]
                 if not value_expr:
@@ -2438,33 +2466,9 @@ class Evaluator:
 
                 if update_style:
                     # Seed the RHS chain with the current value, evaluate, set, and return the new value.
-                    new_value = unwrap_return(
-                        await self._eval_expr([cur_val] + value_expr, scope)
+                    new_value = await self._eval_update(
+                        head_uneval, cur_val, value_expr, scope
                     )
-
-                    # Commit writes are rooted at the active transaction receiver, not lexical scope.
-                    if write_kind == "commit":
-                        recv = getattr(self, "_active_this_receiver", None)
-                        is_resolver = bool(
-                            getattr(self, "_active_this_is_resolver", False)
-                        )
-                        if recv is None or not is_resolver:
-                            err = PermissionError(
-                                "Committed writes require a resolver transaction (`fn {this: ResolverType, ...}`)"
-                            )
-                            try:
-                                err.slip_obj = head_uneval
-                            except Exception:
-                                pass
-                            raise err
-                        # Strip leading `this` and write into receiver namespace.
-                        tail = SetPath(
-                            list(head_uneval.segments[1:]),
-                            getattr(head_uneval, "meta", None),
-                        )
-                        self.current_node = head_uneval
-                        await self.path_resolver.set(tail, new_value, recv)
-                        return new_value
 
                     self.current_node = head_uneval
                     await self.path_resolver.set(head_uneval, new_value, scope)
@@ -2473,26 +2477,6 @@ class Evaluator:
                 # Normal assignment: evaluate RHS as a value, set, return the assigned value (or merged GF)
                 self.current_node = head_uneval
                 value = unwrap_return(await self._eval_expr(value_expr, scope))
-
-                # Commit writes are rooted at the active transaction receiver, not lexical scope.
-                if write_kind == "commit":
-                    recv = getattr(self, "_active_this_receiver", None)
-                    is_resolver = bool(getattr(self, "_active_this_is_resolver", False))
-                    if recv is None or not is_resolver:
-                        err = PermissionError(
-                            "Committed writes require a resolver transaction (`fn {this: ResolverType, ...}`)"
-                        )
-                        try:
-                            err.slip_obj = head_uneval
-                        except Exception:
-                            pass
-                        raise err
-                    tail = SetPath(
-                        list(head_uneval.segments[1:]),
-                        getattr(head_uneval, "meta", None),
-                    )
-                    await self.path_resolver.set(tail, value, recv)
-                    return value
 
                 # Alias write: if LHS is a simple name bound to a path, write to that path instead of rebinding
                 if len(head_uneval.segments) == 1 and isinstance(
@@ -2844,7 +2828,10 @@ class Evaluator:
 
         # Evaluate the rest of the expression as a call chain
         self.current_node = remaining_terms[0]
-        head_val = await self._eval(remaining_terms[0], scope)
+        head_val = (
+            remaining_terms[0] if head_is_value
+            else await self._eval(remaining_terms[0], scope)
+        )
 
         # Dynamic assignment: if the head evaluates to a SetPath or MultiSetPath, treat it as an assignment target
         from slip.slip_datatypes import SetPath as _SP, MultiSetPath as _MSP
@@ -2876,7 +2863,7 @@ class Evaluator:
         result = head_val
         k = 1
 
-        if isinstance(head_val, SlipCallable) or callable(head_val):
+        if _is_implicit_callable(head_val):
             # Find first piped operator position (if any)
             split_at = None
             for idx in range(1, len(remaining_terms)):
@@ -3254,7 +3241,7 @@ class Evaluator:
                 return "i-string"
             if isinstance(val, str):
                 return "string"
-            if isinstance(val, list):
+            if _is_list_like(val) and not isinstance(val, Code):
                 return "list"
             if isinstance(val, collections.abc.Mapping):
                 return "dict"
@@ -3382,7 +3369,7 @@ class Evaluator:
             return False
 
         for arg_i, (param_name, type_spec) in enumerate(self._sig_param_order(sig)):
-            if param_name == "this" or type_spec is None:
+            if type_spec is None:
                 continue
             if arg_i >= len(args):
                 return False
@@ -3427,7 +3414,7 @@ class Evaluator:
             return "i-string"
         if isinstance(val, str):
             return "string"
-        if isinstance(val, list):
+        if _is_list_like(val) and not isinstance(val, Code):
             return "list"
         if isinstance(val, collections.abc.Mapping):
             return "dict"
@@ -3720,10 +3707,9 @@ class Evaluator:
         return self._annotation_applicability_and_coverage(compiled_ann, arg_val)
 
     def _should_autocall_zero_arity(self, v):
-        """
-        True if v is a SLIP function or Python callable that can be called with zero required args.
-        Mirrors the prior nested predicate used in _eval_expr.
-        """
+        """Whether a non-data callable accepts an implicit zero-argument call."""
+        if not _is_implicit_callable(v):
+            return False
         try:
             from slip.slip_datatypes import (
                 GenericFunction as _GF,
@@ -3977,74 +3963,14 @@ class Evaluator:
                     return len(call_args) == base
                 return len(call_args) >= base
 
-            def _strip_this_from_dispatch(
-                sig: Sig, call_args: list
-            ) -> tuple[Sig, list]:
-                """
-                `this: ...` is a transaction marker, not a dispatch constraint.
-
-                For dispatch type-checking/specificity:
-                  - remove the leading `this` type constraint if present
-                  - remove the corresponding receiver argument from the call args
-                """
-                try:
-                    ordered = self._sig_param_order(sig)
-                    for i, (name, _type_spec) in enumerate(ordered):
-                        if name == "this":
-                            stripped_sig = Sig(
-                                list(sig.positional or []),
-                                {
-                                    k: v
-                                    for k, v in (sig.keywords or {}).items()
-                                    if k != "this"
-                                },
-                                sig.rest,
-                                sig.return_annotation,
-                            )
-                            stripped_sig.param_order = [
-                                p for p in ordered if p[0] != "this"
-                            ]
-                            stripped_args = list(call_args[:i]) + list(
-                                call_args[i + 1 :]
-                            )
-                            return stripped_sig, stripped_args
-
-                    kws = getattr(sig, "keywords", None) or {}
-                    first_kw = next(iter(kws.keys()), None)
-                    if first_kw == "this":
-                        rest_kws = dict(kws)
-                        rest_kws.pop("this", None)
-                        stripped_sig = Sig(
-                            list(sig.positional or []),
-                            rest_kws,
-                            sig.rest,
-                            sig.return_annotation,
-                        )
-                        stripped_sig.param_order = self._sig_param_order(stripped_sig)
-                        # receiver arg is the first typed kwarg argument, at index len(positional)
-                        recv_i = len(sig.positional)
-                        stripped_args = list(call_args[:recv_i]) + list(
-                            call_args[recv_i + 1 :]
-                        )
-                        return stripped_sig, stripped_args
-                except Exception:
-                    pass
-                return sig, call_args
-
             async def _matches_sig(
                 method: SlipFunction, sig: Sig, call_args: list
             ) -> bool:
                 if not _sig_accepts_arity(sig, call_args):
                     return False
 
-                # Type constraints participate here.
-                # `this: ...` is a transaction marker, not a dispatch constraint.
-                sig_for_dispatch, args_for_dispatch = _strip_this_from_dispatch(
-                    sig, call_args
-                )
-
                 if not await self._sig_types_match(
-                    sig_for_dispatch, method, args_for_dispatch, scope
+                    sig, method, call_args, scope
                 ):
                     return False
                 return True
@@ -4148,10 +4074,6 @@ class Evaluator:
 
                 Returns None when there are no scope-typed constraints.
                 """
-                sig_for_dispatch, args_for_dispatch = _strip_this_from_dispatch(
-                    sig, call_args
-                )
-
                 vec: list[int] = []
                 any_specific_constraints = False
 
@@ -4168,13 +4090,13 @@ class Evaluator:
                     return None
 
                 for arg_i, (param_name, type_spec) in enumerate(
-                    self._sig_param_order(sig_for_dispatch)
+                    self._sig_param_order(sig)
                 ):
-                    if param_name == "this" or type_spec is None:
+                    if type_spec is None:
                         continue
-                    if arg_i >= len(args_for_dispatch):
+                    if arg_i >= len(call_args):
                         return None
-                    arg_val = args_for_dispatch[arg_i]
+                    arg_val = call_args[arg_i]
 
                     spec = type_spec
                     if isinstance(spec, PathLiteral):
@@ -4264,8 +4186,7 @@ class Evaluator:
                     if sig.rest is not None and len(call_args) < base:
                         return f"arity mismatch: expected at least {base}, got {len(call_args)}"
 
-                    sig_d, args_d = _strip_this_from_dispatch(sig, call_args)
-                    if not await self._sig_types_match(sig_d, method, args_d, scope):
+                    if not await self._sig_types_match(sig, method, call_args, scope):
                         return "type constraints did not match"
                     if _has_guards(method):
                         try:
@@ -4331,18 +4252,10 @@ class Evaluator:
                     return vec if vec is not None else (10**9,)
 
                 def _has_type_constraints(sig: Sig) -> bool:
-                    """
-                    True if the method has any declared type constraints (excluding `this:`),
-                    i.e. any keywords remain after stripping `this`.
-                    """
-                    try:
-                        sig_d, _ = _strip_this_from_dispatch(sig, [])
-                        return any(
-                            name != "this" and type_spec is not None
-                            for name, type_spec in self._sig_param_order(sig_d)
-                        )
-                    except Exception:
-                        return False
+                    return any(
+                        type_spec is not None
+                        for _name, type_spec in self._sig_param_order(sig)
+                    )
 
                 for tier in (exact, variadic):
                     # 1) filter by arity/type match; compute:
@@ -4443,6 +4356,7 @@ class Evaluator:
                 except Exception:
                     pass
                 call_scope = Scope(parent=func.closure)
+                call_scope.meta["caller"] = scope
                 # Prefer signature-based binding when available. Fall back to legacy Code arg lists.
                 sig_obj = None
                 if hasattr(func, "meta"):
@@ -4453,15 +4367,9 @@ class Evaluator:
                 if sig_obj is None and isinstance(func.args, Sig):
                     sig_obj = func.args
 
-                # Transaction context (for resolver commits): set when binding `this: ...`
-                prev_active_this_receiver = getattr(self, "_active_this_receiver", None)
-                prev_active_this_scope = getattr(self, "_active_this_scope", None)
-                prev_active_this_is_resolver = getattr(
-                    self, "_active_this_is_resolver", False
-                )
-                active_this_receiver = None
-                active_this_scope = None
-                active_this_is_resolver = False
+                # Helpers remain inside an enclosing transaction; a typed `this`
+                # establishes a different owner for this call's duration.
+                active_this_receiver = self._transaction_receiver.get()
 
                 if self._debug_on():
                     self._dbg(
@@ -4474,6 +4382,10 @@ class Evaluator:
                     )
                 if isinstance(sig_obj, Sig):
                     sig = sig_obj
+                    if "this" in sig.keywords and not await self._sig_types_match(
+                        sig, func, args, scope
+                    ):
+                        raise TypeError("No matching method")
 
                     # Normalize parameter name to a plain string
                     def _pname(n):
@@ -4506,7 +4418,7 @@ class Evaluator:
                                     pass
                                 raise err
                             active_this_receiver = v
-                            active_this_is_resolver = True
+                            self.path_resolver._remember_resolver(v)
                         call_scope._set_allow_this_token(True)
                         call_scope[nm] = v
                         call_scope._set_allow_this_token(False)
@@ -4577,13 +4489,7 @@ class Evaluator:
                     # No parameters to bind or unsupported type
                     pass
 
-                # Install transaction context (if any) for duration of this call
-                try:
-                    self._active_this_receiver = active_this_receiver
-                    self._active_this_scope = active_this_scope
-                    self._active_this_is_resolver = active_this_is_resolver
-                except Exception:
-                    pass
+                token = self._transaction_receiver.set(active_this_receiver)
 
                 # Evaluate the function body in the new call scope, and mark it as active
                 prev_local = self.current_local_scope
@@ -4597,13 +4503,7 @@ class Evaluator:
                     result = await self._eval(func.body.nodes, call_scope)
                 finally:
                     self.current_local_scope = prev_local
-                    # Restore prior transaction context
-                    try:
-                        self._active_this_receiver = prev_active_this_receiver
-                        self._active_this_scope = prev_active_this_scope
-                        self._active_this_is_resolver = prev_active_this_is_resolver
-                    except Exception:
-                        pass
+                    self._transaction_receiver.reset(token)
 
                 from slip.slip_datatypes import ReturnSignal as _RS
 

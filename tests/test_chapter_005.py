@@ -29,8 +29,8 @@ async def test_inherit_and_is_a_relationships():
     }
     Player: scope #{} |inherit Character
 
-    -- Verify property lookup via prototype and is-a? checks
-    #[ Player.stamina, is-a? Player Character, is-a? Character Player ]
+    -- Verify property lookup via prototype and is-a checks
+    #[ Player.stamina, is-a Player Character, is-a Character Player ]
     """
     res = await run_slip(src)
     assert_ok(res, [100, True, False])
@@ -44,7 +44,7 @@ async def test_create_overloads_and_configuration_block():
     obj2: create Character
     obj3: create Character [ name: "Kael" ]
 
-    #[ is-scope? obj1, is-a? obj2 Character, obj3.name, is-a? obj3 Character ]
+    #[ is-scope obj1, is-a obj2 Character, obj3.name, is-a obj3 Character ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, True, "Kael", True])
@@ -56,7 +56,7 @@ async def test_schema_and_is_schema_predicate():
     -- Define a schema. Use an empty dict to avoid resolving field type names.
     UserSchema: schema #{}
 
-    #[ is-schema? UserSchema, is-a? UserSchema Schema, is-scope? UserSchema ]
+    #[ is-schema UserSchema, is-a UserSchema Schema, is-scope UserSchema ]
     """
     res = await run_slip(src)
     assert_ok(res, [True, True, True])
@@ -80,7 +80,7 @@ async def test_with_runs_block_and_returns_same_object():
 async def test_is_a_false_for_non_scope_values():
     src = """
     -- Non-scope LHS yields false
-    is-a? 5 Schema
+    is-a 5 Schema
     """
     res = await run_slip(src)
     assert_ok(res, False)

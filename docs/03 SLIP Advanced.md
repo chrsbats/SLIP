@@ -421,7 +421,7 @@ c: [
   y + 7
 ]
 
-#[ is-code? c, run c ]
+#[ is-code c, run c ]
 -- => #[true, 12]
 ```
 
@@ -477,6 +477,11 @@ Use `run-with` when you want controlled writes into an object, module scope, or 
 `current-scope` returns the current lexical scope, not the `run-with` target.
 
 That distinction matters when you mix caller values with target-scope writes.
+
+A function's current scope has `meta.parent` pointing to its definition scope and
+`meta.caller` pointing to the scope from which it was invoked. Library control
+helpers use the caller link to execute supplied blocks against caller-local
+bindings; ordinary function lookup remains lexical.
 
 ### Constructor functions help here too
 

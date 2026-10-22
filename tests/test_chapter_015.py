@@ -184,8 +184,8 @@ async def test_emit_structured_message_interpolates_host_object_display_name():
     src = """
 Item: scope #{}
 display-name: fn {obj} [
-    if [(has-key? obj "name") and obj.name != ''] [ return obj.name ]
-    if [(has-key? obj "description") and obj.description != ''] [ return obj.description ]
+    if [(has obj "name") and obj.name != ''] [ return obj.name ]
+    if [(has obj "description") and obj.description != ''] [ return obj.description ]
     return obj.id
 ]
 obj: host-object "item-1"

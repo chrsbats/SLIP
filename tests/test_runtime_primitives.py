@@ -166,7 +166,7 @@ async def test_get_body_returns_code_for_typed_method():
     res = await runner.handle_script("""
     add: fn {a: int, b: int} [ a + b ]
     body: get-body add {a: int, b: int}
-    is-code? body
+    is-code body
     """)
     assert res.status == "ok"
     assert res.value is True

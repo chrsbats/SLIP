@@ -68,10 +68,10 @@ async def test_ref_can_read_code_loaded_from_file_locator(tmp_path):
     code: {url}
     r: ref `{url}`
     -- Both should be Code values (file_get returns Code for .slip)
-    is-code?: is-code? r
+    code-value: is-code r
     -- run the dereferenced code
     v: run r
-    #[ is-code?, v ]
+    #[ code-value, v ]
     """
     res = await runner.handle_script(src)
     assert_ok(res, [True, 42])

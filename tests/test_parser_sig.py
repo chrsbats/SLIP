@@ -84,12 +84,12 @@ def test_complex_value_placeholder(parser):
             break
     assert expr_val == "a + b * 2"
 
-def test_predicate_and_variadic_name(parser):
-    ast = parse_sig(parser, "is-a?, args...")
+def test_question_name_and_variadic_name(parser):
+    ast = parse_sig(parser, "ready?, args...")
     children = ast["children"]
     first = children[0]
     first_name = first.get("text") or (first.get("children") or [{}])[0].get("text")
-    assert first_name == "is-a?"
+    assert first_name == "ready?"
     rest = children[1]
     assert rest["tag"] == "sig-rest-arg"
     rest_name = rest.get("text") or (rest.get("children") or [{}])[0].get("text")

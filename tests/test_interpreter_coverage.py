@@ -31,7 +31,7 @@ async def test_alias_assignment_writes_to_inner_path():
 @pytest.mark.asyncio
 async def test_zero_arity_autocall_for_argument_current_scope():
     src = """
-    needs-scope: fn {s} [ is-scope? s ]
+    needs-scope: fn {s} [ is-scope s ]
     needs-scope current-scope
     """
     res = await run_slip(src)
@@ -44,7 +44,7 @@ async def test_delete_prunes_empty_scopes_upward():
     s.a: scope #{}
     s.a.b: 1
     ~s.a.b
-    has-a: (has-key? s 'a')
+    has-a: (has s 'a')
     has-a
     """
     res = await run_slip(src)

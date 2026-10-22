@@ -165,11 +165,7 @@ class Scope:
     def _normalize_key(self, key):
         """Allow a single-name PathLiteral(GetPath(...)) or GetPath to be used as a key."""
         try:
-            from slip.slip_datatypes import (
-                PathLiteral as _PL,
-            )  # local import to avoid cycle during edits
-
-            if isinstance(key, _PL):
+            if isinstance(key, PathLiteral):
                 inner = getattr(key, "inner", None)
                 if isinstance(inner, GetPath):
                     segs = getattr(inner, "segments", [])
@@ -280,6 +276,9 @@ class HostDictPath(_HostPathAdapter, collections.abc.MutableMapping):
         node = self._resolve_node()
         del node[key]
 
+    def __contains__(self, key: Any) -> bool:
+        return key in self._resolve_node()
+
     def __iter__(self):
         node = self._resolve_node()
         return iter(node)
@@ -364,6 +363,10 @@ class _HostBindingsMap(collections.abc.MutableMapping):
             raise KeyError(f"'{key}'")
         del node[key]
         self._owner._refresh_meta()
+
+    def __contains__(self, key: Any) -> bool:
+        key = self._owner._normalize_key(key)
+        return key not in ("meta", "__slip__") and key in self._node()
 
     def __iter__(self):
         node = self._node()
