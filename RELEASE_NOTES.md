@@ -13,12 +13,14 @@ further callable-reference/accessor work.
 - Installable wheels and source distributions containing `root.slip` and all
   three grammar files. Runner parsing, bare-evaluator bootstrapping, interpolation,
   imports, and compiled-code cache fingerprints use the packaged grammars.
-- Koine `>=0.11.0`.
+- Koine `>=0.11.1`, including the upstream native-parser fixes.
 
 The benchmark reports identify their measured source checkpoints. They are
 historical measurements, not new release-performance or application-latency claims.
 
 ## Verification
+
+Release checks use published Koine **0.11.1**, including its Linux native wheel.
 
 - Full SLIP suite: **1,378 passed** on Python 3.12.
 - Installed-wheel resource/runtime checks outside the checkout: **4 passed** on

@@ -297,17 +297,17 @@ wheels = [
 
 [[package]]
 name = "koine"
-version = "0.11.0"
+version = "0.11.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parsimonious" },
     { name = "safer-yaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/e1/7a1f37e734246d3fdfad8c2095a4db1c5f91c38f395b4927fef59abcd03d/koine-0.11.0.tar.gz", hash = "sha256:b1ffcb088267b185f2654ec14fad9b055d89eae6eaa84a13b44bda5b489b1bba", size = 144932, upload-time = "2026-10-23T00:19:56.259Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/27/cc2db2a8ab90e4144025dce19443b65154cafb9f9ea15f060cc287ede360/koine-0.11.1.tar.gz", hash = "sha256:709552786ab60a1e7c56e52489a87242f0d080f698995a67de0de296cdb7a6d0", size = 146784, upload-time = "2026-10-23T11:44:25.905Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/5a/01658a9a0fe3319540330ddd08d69fa8dbee69d556886208d8b94ee4a0b8/koine-0.11.0-py3-none-any.whl", hash = "sha256:d2ad24ad73f3aad26c17f84540a85481a6b58ff2ba71cbee5257582fe397320a", size = 28255, upload-time = "2026-10-23T00:19:50.799Z" },
-    { url = "https://files.pythonhosted.org/packages/41/e4/26935899844d5065feec0a205cd3cc8895d7f031eb28599a482015e4ef8c/koine-0.11.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:01cb0ac6e8fbe32621e0b5bb4be78b3583d42e4f473fd48bad81c4fdadc17c4e", size = 799160, upload-time = "2026-10-23T00:19:53.287Z" },
-    { url = "https://files.pythonhosted.org/packages/64/5b/0e24476e0c1dc03c37705379cbffedf6ceac7d6b9cfd17927765693e7748/koine-0.11.0-py3-none-win_amd64.whl", hash = "sha256:c857d59b8a290a8eec2b9c3513689d0ee09c5d88a071d4d5c7560a56aa452345", size = 583707, upload-time = "2026-10-23T00:19:54.958Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/90/1590ed00560a0e8bac30367f27dbb06270b526821d2d2c04009d7c598f62/koine-0.11.1-py3-none-any.whl", hash = "sha256:9952bcd56dd3e1db983e6b534407b229e84d9829fa737bd11d3a14ccb901faa2", size = 28363, upload-time = "2026-10-23T11:44:16.022Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/bd/dbf1bc0d1d70ebf14dca3b832db02ebe8bf2406ad16f0b741b78e848c21f/koine-0.11.1-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6626df3aaa683c7aa855a39df68fa37fdd15f9161e6eed872c5534e9de01cf3c", size = 799885, upload-time = "2026-10-23T11:44:20.971Z" },
+    { url = "https://files.pythonhosted.org/packages/56/2f/e3ca16135993ec1c434811afe3a6b7969c661bd1f5d4f7c374f3dae26039/koine-0.11.1-py3-none-win_amd64.whl", hash = "sha256:4bd8ebeb574795b8205d1d389c55ec828791854111a2acdf0e1567988d69296c", size = 584069, upload-time = "2026-10-23T11:44:24.188Z" },
 ]
 
 [[package]]
@@ -971,7 +971,7 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = ">=4.0.0" },
-    { name = "koine", specifier = ">=0.11.0" },
+    { name = "koine", specifier = ">=0.11.1" },
     { name = "pystache", specifier = "==0.6.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },

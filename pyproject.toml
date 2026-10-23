@@ -26,7 +26,7 @@ classifiers = [
 # These are the libraries your project depends on.
 # uv/setuptools will automatically install these from the project metadata.
 dependencies = [
-    "koine>=0.11.0",
+    "koine>=0.11.1",
     "pystache==0.6.8",
     "httpx==0.28.1",
     "xmltodict==0.14.2",
