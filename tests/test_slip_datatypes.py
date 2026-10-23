@@ -72,6 +72,18 @@ def test_scope_contains():
     assert "c" not in child
     assert 123 not in child  # test non-key type
 
+def test_scope_path_literal_single_name_key_normalizes():
+    scope = Scope()
+    key = PathLiteral(GetPath([Name("a")]))
+
+    scope[key] = 1
+
+    assert scope["a"] == 1
+    assert scope[key] == 1
+    assert key in scope
+    assert scope.get(key) == 1
+
+
 def test_scope_get_method():
     parent = Scope()
     parent["a"] = 1

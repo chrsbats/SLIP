@@ -1,0 +1,131 @@
+{
+  "python_version": "3.12.11 (main, Jun 12 2025, 12:40:51) [Clang 20.1.4 ]",
+  "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "koine_version": "0.11.0",
+  "gc_enabled": true,
+  "preparation_ns": 242501840,
+  "preparation_scope": "runner construction and SLIP loading; imports excluded",
+  "timing_scope": "warm Evaluator.call versus direct Python call",
+  "batch_target_ns": 100000000,
+  "warmup_calls": 3,
+  "source_sha256": {
+    "slip": "31991627a04d768fffce2f4946919cb69eb8a67f0b23e276f6bb68d82f6aa36e",
+    "python": "545ac8698557d3ad1373e5e010dc39e840dfab5c051f0ad875f5518637d4376c"
+  },
+  "cases": [
+    {
+      "name": "loop-sum",
+      "input_size": 1000,
+      "result": 499500,
+      "python": {
+        "calls_per_batch": 4096,
+        "samples_ns_per_call": [
+          36839.07763671875,
+          37279.090576171875,
+          37245.084228515625,
+          39032.915771484375,
+          37268.626708984375,
+          37864.495361328125,
+          36503.025634765625
+        ],
+        "median_ns": 37268.626708984375,
+        "min_ns": 36503.025634765625,
+        "max_ns": 39032.915771484375
+      },
+      "slip": {
+        "calls_per_batch": 2,
+        "samples_ns_per_call": [
+          85226928.5,
+          85094343.0,
+          86916539.0,
+          82092505.0,
+          84450661.5,
+          84950434.0,
+          85515003.5
+        ],
+        "median_ns": 85094343.0,
+        "min_ns": 82092505.0,
+        "max_ns": 86916539.0
+      },
+      "slip_to_python_ratio": 2283.270152787418,
+      "extra_ns_per_call": 85057074.37329102
+    },
+    {
+      "name": "function-calls",
+      "input_size": 1000,
+      "result": 1000,
+      "python": {
+        "calls_per_batch": 2048,
+        "samples_ns_per_call": [
+          60458.083984375,
+          60243.52197265625,
+          59966.87158203125,
+          58890.54248046875,
+          58274.1279296875,
+          59975.1298828125,
+          59050.40234375
+        ],
+        "median_ns": 59966.87158203125,
+        "min_ns": 58274.1279296875,
+        "max_ns": 60458.083984375
+      },
+      "slip": {
+        "calls_per_batch": 1,
+        "samples_ns_per_call": [
+          134519535.0,
+          133497621.0,
+          134715561.0,
+          136658002.0,
+          131968301.0,
+          137103814.0,
+          138879256.0
+        ],
+        "median_ns": 134715561.0,
+        "min_ns": 131968301.0,
+        "max_ns": 138879256.0
+      },
+      "slip_to_python_ratio": 2246.499733035378,
+      "extra_ns_per_call": 134655594.12841797
+    },
+    {
+      "name": "traverse-objects",
+      "input_size": 40,
+      "result": [
+        26,
+        533
+      ],
+      "python": {
+        "calls_per_batch": 65536,
+        "samples_ns_per_call": [
+          1516.0420989990234,
+          1509.9407653808594,
+          1500.2134857177734,
+          1553.1680450439453,
+          1559.2553253173828,
+          1513.45703125,
+          1518.547592163086
+        ],
+        "median_ns": 1516.0420989990234,
+        "min_ns": 1500.2134857177734,
+        "max_ns": 1559.2553253173828
+      },
+      "slip": {
+        "calls_per_batch": 32,
+        "samples_ns_per_call": [
+          3629400.125,
+          3604543.65625,
+          3645847.375,
+          3773167.8125,
+          3678078.40625,
+          3594807.28125,
+          3673807.375
+        ],
+        "median_ns": 3645847.375,
+        "min_ns": 3594807.28125,
+        "max_ns": 3773167.8125
+      },
+      "slip_to_python_ratio": 2404.845734433888,
+      "extra_ns_per_call": 3644331.332901001
+    }
+  ]
+}

@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from koine import Parser
+from slip.grammar import GRAMMAR_PATH
 from slip.slip_transformer import SlipTransformer
 from slip.slip_interpreter import Evaluator
 from slip.slip_datatypes import (
@@ -965,7 +966,7 @@ class StdLib:
             )
             evaluator.is_in_task_context = True
             try:
-                res = await evaluator._eval(code.ast, child)
+                res = await evaluator._eval_block(code.ast, child)
                 if isinstance(res, ReturnSignal):
                     return res.value
             finally:
@@ -1125,7 +1126,7 @@ class StdLib:
 
         # Evaluate condition and propagate an early return.
         if isinstance(cond, Code):
-            cond_val = await self.evaluator._eval(cond.ast, scope)
+            cond_val = await self.evaluator._eval_block(cond.ast, scope)
             if self._is_control_exit(cond_val):
                 return cond_val
         else:  # It's already an evaluated value
@@ -1148,12 +1149,12 @@ class StdLib:
             then_code = await _resolve_code_arg(then_arg)
             if self._is_control_exit(then_code):
                 return then_code
-            return await self.evaluator._eval(then_code.ast, scope)
+            return await self.evaluator._eval_block(then_code.ast, scope)
         elif else_arg is not None:
             else_code = await _resolve_code_arg(else_arg)
             if self._is_control_exit(else_code):
                 return else_code
-            return await self.evaluator._eval(else_code.ast, scope)
+            return await self.evaluator._eval_block(else_code.ast, scope)
         return None
 
     async def _while(self, args: list, *, scope: Scope):
@@ -1199,13 +1200,13 @@ class StdLib:
             ):
                 await asyncio.sleep(0)
 
-            cond_val = await self.evaluator._eval(cond_block.ast, scope)
+            cond_val = await self.evaluator._eval_block(cond_block.ast, scope)
             if self._is_control_exit(cond_val):
                 return cond_val
             if not cond_val:
                 break
 
-            body_res = await self.evaluator._eval(body_code.ast, scope)
+            body_res = await self.evaluator._eval_block(body_code.ast, scope)
             if self._is_control_exit(body_res):
                 return body_res
             last = body_res
@@ -1319,7 +1320,7 @@ class StdLib:
             except Exception:
                 # Fallback to plain evaluation
                 pass
-            res = await self.evaluator._eval(body_code.ast, scope)
+            res = await self.evaluator._eval_block(body_code.ast, scope)
             if self._is_control_exit(res):
                 return res
             iter_count += 1
@@ -1652,7 +1653,7 @@ class StdLib:
 
         start = len(ev.side_effects)
         try:
-            result = await ev._eval(code.ast, scope)
+            result = await ev._eval_block(code.ast, scope)
         except ProtocolFailure as e:
             outcome = Outcome(
                 status=_ERR_STATUS,
@@ -1857,8 +1858,6 @@ class StdLib:
 
     async def _host_data(self, object_id, *, scope: Scope):
         loader = self._resolve_host_data_loader()
-        if inspect.iscoroutinefunction(loader):
-            return await loader(object_id)
         value = loader(object_id)
         if inspect.isawaitable(value):
             return await value
@@ -3215,10 +3214,7 @@ class ScriptRunner:
     @property
     def parser(self):
         if ScriptRunner._parser is None:
-            grammar_path = (
-                Path(__file__).parent.parent / "grammar" / "slip_grammar.yaml"
-            )
-            ScriptRunner._parser = Parser.from_file(str(grammar_path))
+            ScriptRunner._parser = Parser.from_file(str(GRAMMAR_PATH))
         return ScriptRunner._parser
 
     @property

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from slip.slip_runtime import ScriptRunner, StdLib
 from slip.slip_interpreter import Evaluator, View
@@ -211,6 +213,59 @@ async def test_eval_assignment(evaluator, root_scope):
     ast = [[SetPath([Name('x')]), 10]]
     await evaluator.eval(ast, root_scope)
     assert root_scope['x'] == 10
+
+@pytest.mark.asyncio
+async def test_core_load_runs_once_across_evaluations():
+    class CountingEvaluator(Evaluator):
+        def __init__(self):
+            super().__init__()
+            self.loads = 0
+
+        async def _ensure_core_loaded(self):
+            self.loads += 1
+            self._core_loaded = True
+
+    evaluator = CountingEvaluator()
+    scope = Scope()
+
+    for _ in range(3):
+        assert await evaluator.eval(42, scope) == 42
+
+    assert evaluator.loads == 1
+
+
+@pytest.mark.asyncio
+async def test_call_invokes_callable_once_and_preserves_tasks(evaluator):
+    scope = Scope()
+    calls = []
+
+    async def async_fn(value):
+        calls.append(("async", value))
+        return value + 1
+
+    def returns_coroutine(value):
+        calls.append(("coroutine", value))
+        return async_fn(value)
+
+    def returns_task(value):
+        calls.append(("task", value))
+        return asyncio.create_task(async_fn(value))
+
+    assert await evaluator.call(async_fn, [1], scope) == 2
+    assert await evaluator.call(returns_coroutine, [2], scope) == 3
+
+    handle = await evaluator.call(returns_task, [3], scope)
+    assert isinstance(handle, asyncio.Task)
+    assert await handle == 4
+
+    assert calls == [
+        ("async", 1),
+        ("coroutine", 2),
+        ("async", 2),
+        ("task", 3),
+        ("async", 3),
+    ]
+
 
 @pytest.mark.asyncio
 async def test_eval_prefix_call(evaluator, root_scope):

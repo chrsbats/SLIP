@@ -1,0 +1,33 @@
+loop-sum: fn {count} [
+    total: 0
+    i: 0
+    while [i < count] [
+        total: total + i
+        i: i + 1
+    ]
+    total
+]
+
+increment: fn {value} [value + 1]
+
+function-calls: fn {count} [
+    total: 0
+    i: 0
+    while [i < count] [
+        total: increment total
+        i: i + 1
+    ]
+    total
+]
+
+traverse-objects: fn {objects} [
+    count: 0
+    total: 0
+    foreach {obj} objects [
+        if [obj.visible] [
+            count: count + 1
+            total: total + obj.stats.weight
+        ]
+    ]
+    #[count, total]
+]

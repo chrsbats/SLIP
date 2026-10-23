@@ -1,3 +1,5 @@
+import functools
+
 import pytest
 
 from slip import ScriptRunner, SLIPHost
@@ -92,3 +94,57 @@ async def test_host_object_gateway_returns_handle_and_allows_data_access():
     """)
     assert_ok(res2, 80)
     assert host["hp"] == 80
+
+
+@pytest.mark.asyncio
+async def test_host_data_async_non_weakref_loader_is_called_once():
+    class AsyncLoader:
+        __slots__ = ("calls",)
+
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, object_id):
+            self.calls.append(object_id)
+            return {"id": object_id, "value": 11}
+
+    loader = AsyncLoader()
+    runner = ScriptRunner(host_data=loader)
+
+    res = await runner.handle_script("data: host-data 'item-1'\ndata.value")
+
+    assert_ok(res, 11)
+    assert loader.calls == ["item-1"]
+
+
+@pytest.mark.asyncio
+async def test_equal_host_loaders_keep_their_own_call_behavior():
+    class EqualPartial(functools.partial):
+        def __hash__(self):
+            return 1
+
+        def __eq__(self, other):
+            return isinstance(other, EqualPartial)
+
+    async def async_loader(object_id):
+        return {"id": object_id, "value": 1}
+
+    def sync_loader(object_id):
+        return {"id": object_id, "value": 2}
+
+    async_callback = EqualPartial(async_loader)
+    sync_callback = EqualPartial(sync_loader)
+    assert async_callback == sync_callback
+
+    async_runner = ScriptRunner(host_data=async_callback)
+    sync_runner = ScriptRunner(host_data=sync_callback)
+
+    async_result = await async_runner.handle_script(
+        "data: host-data 'item-1'\ndata.value"
+    )
+    sync_result = await sync_runner.handle_script(
+        "data: host-data 'item-1'\ndata.value"
+    )
+
+    assert_ok(async_result, 1)
+    assert_ok(sync_result, 2)

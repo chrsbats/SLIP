@@ -191,7 +191,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -297,15 +297,17 @@ wheels = [
 
 [[package]]
 name = "koine"
-version = "0.10.3"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parsimonious" },
-    { name = "pyyaml" },
+    { name = "safer-yaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/43/a7/37f9d539fbc0fbe1fdeb2f5db000b7852c8871a98852c84ff0e7a896341c/koine-0.10.3.tar.gz", hash = "sha256:33851b2520aac3c68f8173c78b245144d0270b99785ceb93566eb5b89f5ca5cb", size = 57382, upload-time = "2025-09-08T07:41:55.224Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/e1/7a1f37e734246d3fdfad8c2095a4db1c5f91c38f395b4927fef59abcd03d/koine-0.11.0.tar.gz", hash = "sha256:b1ffcb088267b185f2654ec14fad9b055d89eae6eaa84a13b44bda5b489b1bba", size = 144932, upload-time = "2026-10-23T00:19:56.259Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/a2/171b839a3a711926769b5e22a5539343474a5b196c3c2a01ffa4c5dca648/koine-0.10.3-py3-none-any.whl", hash = "sha256:86cb5d78621ddffe42aeaa09a94bcc082bbeda69cc3a5e330d631aaad91021b3", size = 26706, upload-time = "2025-09-08T07:41:53.923Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/5a/01658a9a0fe3319540330ddd08d69fa8dbee69d556886208d8b94ee4a0b8/koine-0.11.0-py3-none-any.whl", hash = "sha256:d2ad24ad73f3aad26c17f84540a85481a6b58ff2ba71cbee5257582fe397320a", size = 28255, upload-time = "2026-10-23T00:19:50.799Z" },
+    { url = "https://files.pythonhosted.org/packages/41/e4/26935899844d5065feec0a205cd3cc8895d7f031eb28599a482015e4ef8c/koine-0.11.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:01cb0ac6e8fbe32621e0b5bb4be78b3583d42e4f473fd48bad81c4fdadc17c4e", size = 799160, upload-time = "2026-10-23T00:19:53.287Z" },
+    { url = "https://files.pythonhosted.org/packages/64/5b/0e24476e0c1dc03c37705379cbffedf6ceac7d6b9cfd17927765693e7748/koine-0.11.0-py3-none-win_amd64.whl", hash = "sha256:c857d59b8a290a8eec2b9c3513689d0ee09c5d88a071d4d5c7560a56aa452345", size = 583707, upload-time = "2026-10-23T00:19:54.958Z" },
 ]
 
 [[package]]
@@ -938,7 +940,7 @@ wheels = [
 
 [[package]]
 name = "slip"
-version = "0.2"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -969,7 +971,7 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = ">=4.0.0" },
-    { name = "koine", specifier = ">=0.10.1" },
+    { name = "koine", specifier = ">=0.11.0" },
     { name = "pystache", specifier = "==0.6.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },

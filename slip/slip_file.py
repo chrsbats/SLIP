@@ -10,6 +10,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Dict, Any
+from slip.grammar import GRAMMAR_PATH
 from slip.slip_serialize import deserialize, serialize
 # NOTE: ScriptRunner, Scope, and Printer are imported lazily in functions
 # to avoid circular import during module load.
@@ -46,11 +47,11 @@ def _compile_fingerprint() -> str:
         return _pipeline_fingerprint
 
     digest = hashlib.sha256(f"slip-code-cache:{_CACHE_FORMAT}".encode())
-    root = Path(__file__).resolve().parent.parent
+    grammar_dir = GRAMMAR_PATH.parent
     for path in (
-        root / "grammar" / "slip_grammar.yaml",
-        root / "grammar" / "slip_path.yaml",
-        root / "grammar" / "slip_sig.yaml",
+        GRAMMAR_PATH,
+        grammar_dir / "slip_path.yaml",
+        grammar_dir / "slip_sig.yaml",
         Path(__file__).with_name("slip_transformer.py"),
         Path(__file__).with_name("slip_datatypes.py"),
     ):

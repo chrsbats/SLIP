@@ -1,0 +1,182 @@
+{
+  "python_version": "3.12.11 (main, Jun 12 2025, 12:40:51) [Clang 20.1.4 ]",
+  "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "gc_enabled": true,
+  "preparation_ns": {
+    "resolved": 2344,
+    "symbolic": 1773
+  },
+  "preparation_scope": "expression lists and accessors; imports, function definitions, shared operator registry and fixtures excluded",
+  "timing_scope": "complete warm workload calls; shared reducer drivers",
+  "batch_target_ns": 100000000,
+  "warmup_calls": 3,
+  "sample_order": "rotate python, resolved, symbolic by sample index",
+  "source_sha256": "aec8d21d62a51846ef131dda200f0cc023fe1f55a09af6bdc33534ba5d3ea21f",
+  "cases": [
+    {
+      "name": "chain",
+      "result": 29,
+      "timings": {
+        "python": {
+          "calls_per_batch": 1048576,
+          "samples_ns_per_call": [
+            110.14091873168945,
+            106.15196800231934,
+            110.67161846160889,
+            110.17264938354492,
+            102.57517337799072,
+            103.48805046081543,
+            105.51068305969238
+          ],
+          "median_ns": 106.15196800231934,
+          "min_ns": 102.57517337799072,
+          "max_ns": 110.67161846160889
+        },
+        "resolved": {
+          "calls_per_batch": 262144,
+          "samples_ns_per_call": [
+            676.9493370056152,
+            677.238597869873,
+            700.5810737609863,
+            674.1800308227539,
+            663.8710136413574,
+            617.8918800354004,
+            661.4581146240234
+          ],
+          "median_ns": 674.1800308227539,
+          "min_ns": 617.8918800354004,
+          "max_ns": 700.5810737609863
+        },
+        "symbolic": {
+          "calls_per_batch": 262144,
+          "samples_ns_per_call": [
+            698.0193862915039,
+            687.2386932373047,
+            785.5593528747559,
+            662.7570571899414,
+            683.2862930297852,
+            691.2719497680664,
+            718.8191299438477
+          ],
+          "median_ns": 691.2719497680664,
+          "min_ns": 662.7570571899414,
+          "max_ns": 785.5593528747559
+        }
+      },
+      "resolved_to_python_ratio": 6.351083672871931,
+      "symbolic_to_python_ratio": 6.512097352288021,
+      "symbolic_to_resolved_ratio": 1.0253521584204355
+    },
+    {
+      "name": "loop-sum",
+      "result": 499500,
+      "timings": {
+        "python": {
+          "calls_per_batch": 4096,
+          "samples_ns_per_call": [
+            39708.756591796875,
+            39468.502197265625,
+            38430.5498046875,
+            40636.185546875,
+            41082.556396484375,
+            40772.09912109375,
+            46376.776611328125
+          ],
+          "median_ns": 40636.185546875,
+          "min_ns": 38430.5498046875,
+          "max_ns": 46376.776611328125
+        },
+        "resolved": {
+          "calls_per_batch": 128,
+          "samples_ns_per_call": [
+            1095213.828125,
+            1102583.7109375,
+            1160233.375,
+            1054739.703125,
+            1129170.2734375,
+            1212152.21875,
+            1151026.2109375
+          ],
+          "median_ns": 1129170.2734375,
+          "min_ns": 1054739.703125,
+          "max_ns": 1212152.21875
+        },
+        "symbolic": {
+          "calls_per_batch": 128,
+          "samples_ns_per_call": [
+            1101877.984375,
+            1038246.25,
+            1089932.8359375,
+            1082819.4453125,
+            1146476.5625,
+            1122332.3671875,
+            1293781.6953125
+          ],
+          "median_ns": 1101877.984375,
+          "min_ns": 1038246.25,
+          "max_ns": 1293781.6953125
+        }
+      },
+      "resolved_to_python_ratio": 27.78730971525292,
+      "symbolic_to_python_ratio": 27.115684445922028,
+      "symbolic_to_resolved_ratio": 0.9758297843075386
+    },
+    {
+      "name": "traverse-objects",
+      "result": [
+        26,
+        533
+      ],
+      "timings": {
+        "python": {
+          "calls_per_batch": 65536,
+          "samples_ns_per_call": [
+            1604.2074279785156,
+            1666.8968048095703,
+            1682.7828521728516,
+            1619.529067993164,
+            1776.6033172607422,
+            1668.2079010009766,
+            1654.0984802246094
+          ],
+          "median_ns": 1666.8968048095703,
+          "min_ns": 1604.2074279785156,
+          "max_ns": 1776.6033172607422
+        },
+        "resolved": {
+          "calls_per_batch": 4096,
+          "samples_ns_per_call": [
+            29043.178466796875,
+            31751.649169921875,
+            28680.541748046875,
+            30024.75439453125,
+            30925.943115234375,
+            28637.029052734375,
+            29267.996337890625
+          ],
+          "median_ns": 29267.996337890625,
+          "min_ns": 28637.029052734375,
+          "max_ns": 31751.649169921875
+        },
+        "symbolic": {
+          "calls_per_batch": 4096,
+          "samples_ns_per_call": [
+            33377.02490234375,
+            31667.621337890625,
+            34947.10693359375,
+            33447.8486328125,
+            33104.97021484375,
+            34410.66845703125,
+            32292.2431640625
+          ],
+          "median_ns": 33377.02490234375,
+          "min_ns": 31667.621337890625,
+          "max_ns": 34947.10693359375
+        }
+      },
+      "resolved_to_python_ratio": 17.558373291881292,
+      "symbolic_to_python_ratio": 20.023450045641432,
+      "symbolic_to_resolved_ratio": 1.1403932307840814
+    }
+  ]
+}

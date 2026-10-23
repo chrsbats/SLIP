@@ -8,11 +8,13 @@ import sys
 import os
 import re
 import collections.abc
+from types import FunctionType, MethodType, BuiltinFunctionType, CoroutineType
 from contextvars import ContextVar
-from weakref import WeakKeyDictionary, WeakSet
+from weakref import WeakKeyDictionary, WeakSet, ref
 from typing import Any, List, Optional, Union, Tuple, Dict
 from textwrap import dedent
 
+from slip.grammar import GRAMMAR_PATH
 from slip.slip_datatypes import (
     Scope,
     Code,
@@ -42,16 +44,14 @@ from slip.slip_datatypes import (
     MultiSetPath,
     Ref,
     Cell,
+    _Bindings,
+    _PLAIN_VALUES,
+    ReturnSignal,
 )
 
 
 # Helper: identify and unwrap control‑flow ReturnSignal
 def is_return(x) -> bool:
-    # Use a dedicated ReturnSignal type for control flow.
-    try:
-        from slip.slip_datatypes import ReturnSignal
-    except Exception:
-        return False
     return isinstance(x, ReturnSignal)
 
 
@@ -72,6 +72,8 @@ def _is_list_like(value) -> bool:
 
 def _is_implicit_callable(value) -> bool:
     # Callable containers expose explicit operations such as detached snapshots.
+    if type(value) in _PLAIN_VALUES:
+        return False
     return (
         isinstance(value, SlipCallable) or callable(value)
     ) and not isinstance(
@@ -86,6 +88,86 @@ _PY_CALLABLE_ZERO_ARITY_CACHE = WeakKeyDictionary()
 
 # Marks "not yet classified" for per-path locator caches.
 _LOCATOR_UNSET = object()
+_OPERATOR_UNCACHED = object()
+_UNHANDLED = object()
+_HOST_FUNCTIONS = frozenset((FunctionType, MethodType, BuiltinFunctionType))
+
+
+class _Pending:
+    """Deferred interpreter work, distinct from an awaitable stored as data."""
+
+    __slots__ = ("work",)
+
+    def __init__(self, work):
+        self.work = work
+
+
+def _rhs_mentions_name(terms, target):
+    for term in terms:
+        if (
+            isinstance(term, GetPath) and len(term.segments) == 1
+            and isinstance(term.segments[0], Name) and term.segments[0].text == target
+        ):
+            return True
+        if isinstance(term, (Group, SlipList)):
+            if any(_rhs_mentions_name(expr, target) for expr in term.nodes):
+                return True
+        elif isinstance(term, list) and _rhs_mentions_name(term, target):
+            return True
+    return False
+
+
+def _plain_name(path):
+    segments = path.segments
+    if len(segments) != 1 or type(segments[0]) is not Name:
+        return None
+    segment = segments[0]
+    if segment.is_resource:
+        return None
+    loc = getattr(path, "loc", None)
+    text = loc.get("text") if loc else None
+    if text and text.startswith(("http://", "https://", "file://")):
+        return None
+    return segment.key
+
+
+class _OperatorLookup:
+    def __init__(self, bindings, paths, literals, target):
+        self.bindings = bindings
+        self.paths = [
+            (ref(path), ref(segment), text, loc_text)
+            for path, segment, text, loc_text in paths
+        ]
+        self.literals = [(ref(literal), ref(inner)) for literal, inner in literals]
+        self._target = ref(target)
+        self.peekable = not any(isinstance(inner, GetPath) for _, inner in literals)
+
+    @property
+    def target(self):
+        return self._target()
+
+    def valid(self):
+        if self.target is None:
+            return False
+        for binding in self.bindings:
+            if not binding.valid():
+                return False
+        # Syntax is editable independently of bindings.
+        for path_ref, segment_ref, text, loc_text in self.paths:
+            path = path_ref()
+            segment = segment_ref()
+            if (
+                path is None or segment is None
+                or len(path.segments) != 1 or path.segments[0] is not segment
+                or segment.text != text
+                or (getattr(path, "loc", None) or {}).get("text") != loc_text
+            ):
+                return False
+        for literal_ref, inner_ref in self.literals:
+            literal = literal_ref()
+            if literal is None or literal.inner is not inner_ref():
+                return False
+        return True
 
 
 def _callable_cache_key(func):
@@ -259,12 +341,14 @@ class PathResolver:
 
     def _check_write_target(self, target, path=None):
         """Check live ownership without copying values or retaining detached state."""
+        self._remember_resolver(target)
+        if not self._resolvers:
+            return
         if (
             not isinstance(target, (Scope, collections.abc.Mapping))
             and not _is_list_like(target)
         ):
             return
-        self._remember_resolver(target)
         if isinstance(target, Scope):
             target = target.bindings
         receiver = self.evaluator._transaction_receiver.get()
@@ -756,6 +840,11 @@ class PathResolver:
 
         target = path.path if isinstance(path, _DP) else path
         segments = getattr(target, "segments", [])
+        if (
+            len(segments) == 1 and type(segments[0]) is Name
+            and segments[0].text != "this"
+        ):
+            return
         if any(s is _IB for s in segments):
             err = PermissionError("Cannot write across an identity boundary (::)")
             try:
@@ -827,8 +916,35 @@ class PathResolver:
         final_key = await self._get_segment_key(segments[-1], scope)
         return container, final_key
 
-    async def get(self, path: GetPath, scope: Scope) -> Any:
+    async def get(self, path: GetPath | PipedPath, scope: Scope) -> Any:
         """Resolves a GetPath to get a value."""
+        result = self.read(path, scope)
+        return await self.evaluator._complete(result) if type(result) is _Pending else result
+
+    def read(self, path, scope):
+        """Read ordinary bindings directly; defer only special/path operations."""
+        name = _plain_name(path)
+        if name is not None and isinstance(scope, Scope):
+            if scope.meta.get("resolver"):
+                self._resolvers.add(scope)
+            try:
+                val = scope._get_name(name) if type(scope) is Scope else scope[name]
+            except KeyError:
+                raise PathNotFound(name)
+            if type(val) in _PLAIN_VALUES:
+                return val
+            self._remember_resolver(val)
+            if isinstance(val, (Ref, Cell, GetPath)):
+                return _Pending(self._finish_read(val, path, scope))
+            return val
+        return _Pending(self._get_path(path, scope))
+
+    async def _finish_read(self, val, path, scope):
+        if isinstance(val, (Ref, Cell)):
+            val = await self._dereference(val, scope)
+        return await self._read_alias(val, path, scope) if isinstance(val, GetPath) else val
+
+    async def _get_path(self, path, scope):
         # TODO: Handle path.meta for things like API timeouts
         url = self._extract_http_url(path)
         if url:
@@ -871,6 +987,9 @@ class PathResolver:
         # Resolve the path normally
         val = await self._resolve_value(path, scope)
 
+        return await self._read_alias(val, path, scope) if isinstance(val, GetPath) else val
+
+    async def _read_alias(self, val, path, scope):
         # Internal: keep filtered selections lazy until boundaries.
         # (Do NOT realize here; query chains like:
         #   data[filter].name
@@ -880,9 +999,6 @@ class PathResolver:
         try:
             from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL
 
-            # Literal alias: return as-is. Callers that need a path object can use call.
-            if isinstance(val, _PL):
-                return val
             # Runtime path alias
             if isinstance(val, _GP):
                 # Avoid immediate recursion when alias points to the same path.
@@ -908,7 +1024,8 @@ class PathResolver:
         self._check_write_path(path)
 
         # TODO: Handle path.meta for generic function dispatch
-        url = self._extract_http_url(path)
+        name = _plain_name(path)
+        url = self._extract_http_url(path) if name is None else None
         if url:
             if self._has_http_trailing_segments(path):
                 raise TypeError("http write does not support trailing path segments")
@@ -941,7 +1058,7 @@ class PathResolver:
                 )
             await http_put(url, payload, cfg)
             return  # assignment expression will still return the RHS value upstream
-        file_loc = self._extract_file_locator(path)
+        file_loc = self._extract_file_locator(path) if name is None else None
         if file_loc:
             if len(getattr(path, "segments", []) or []) > 1:
                 raise TypeError("file write does not support trailing path segments")
@@ -955,22 +1072,33 @@ class PathResolver:
                 base_dir=getattr(self.evaluator, "source_dir", None),
             )
             return
-        container, key = await self._resolve(path, scope)
-        defining_method = (
-            isinstance(container, Scope) and container in self._resolvers
-            and (isinstance(value, SlipCallable) or callable(value))
-            and (
-                key not in container.bindings
-                or isinstance(container.bindings[key], SlipCallable)
-                or callable(container.bindings[key])
-            )
+        container, key = (
+            (scope, name) if name is not None
+            else await self._resolve(path, scope)
         )
-        if not defining_method:
-            self._check_write_target(container, path)
-        self._remember_resolver(value)
+        self._store_key(container, key, value, path)
+
+    def _store_key(self, container, key, value, path):
+        """Apply ownership and binding rules once at the actual mutation."""
+        scope_target = isinstance(container, Scope)
+        if self._resolvers or (scope_target and container.meta.get("resolver")):
+            defining_method = (
+                scope_target and container in self._resolvers
+                and (isinstance(value, SlipCallable) or callable(value))
+                and (
+                    key not in container.bindings
+                    or isinstance(container.bindings[key], SlipCallable)
+                    or callable(container.bindings[key])
+                )
+            )
+            if not defining_method:
+                self._check_write_target(container, path)
+        value_scope = type(value) not in _PLAIN_VALUES and isinstance(value, Scope)
+        if value_scope:
+            self._remember_resolver(value)
 
         # Scope christening: assign meta.name and meta.type_id on first assignment
-        if isinstance(value, Scope) and "type_id" not in value.meta:
+        if value_scope and "type_id" not in value.meta:
             global _next_type_id
             name_str = str(key)
             value.meta["name"] = name_str
@@ -981,9 +1109,12 @@ class PathResolver:
             TYPE_REGISTRY[name_str] = _next_type_id
             _next_type_id += 1
 
-        if isinstance(container, Scope):
+        if scope_target:
             if getattr(self.evaluator, "bind_locals_prefer_container", False):
-                container[key] = value
+                if type(container) is Scope and type(key) is str:
+                    container._set_name(key, value)
+                else:
+                    container[key] = value
             else:
                 owner = (
                     container.find_owner(key)
@@ -1299,6 +1430,11 @@ class PathResolver:
 
         self._remember_resolver(container)
 
+        if isinstance(container, (Ref, Cell)):
+            return await self._dereference(container, scope)
+        return container
+
+    async def _dereference(self, container, scope):
         # Ref/Cell values dereference/compute on read.
         try:
             from slip.slip_datatypes import (
@@ -1593,7 +1729,16 @@ class Evaluator:
 
     def _peek_piped_path(self, term, scope: Scope):
         """Recognize static operator aliases without executing an operand."""
+        if type(term) in _PLAIN_VALUES:
+            return None
         from slip.slip_runtime import SlipDict
+
+        if type(term) is GetPath and type(scope) is Scope:
+            name = _plain_name(term)
+            if name is not None and name == term.segments[0].text:
+                target = self._piped_name(name, scope)
+                if target is not _OPERATOR_UNCACHED:
+                    return target
 
         seen = set()
         while id(term) not in seen:
@@ -1647,7 +1792,11 @@ class Evaluator:
                         continue
                     owner = value
                     owners = set()
-                    while type(owner) is Scope and key not in owner.bindings:
+                    while type(owner) is Scope:
+                        if type(owner.bindings) not in (_Bindings, dict):
+                            return None
+                        if key in owner.bindings:
+                            break
                         if id(owner) in owners:
                             return None
                         owners.add(id(owner))
@@ -1664,12 +1813,76 @@ class Evaluator:
             term = value
         return None
 
+    def _piped_name(self, name, scope, *, follow_literals=False):
+        if type(scope.bindings) is not _Bindings:
+            return _OPERATOR_UNCACHED
+        # Most lookahead operands are ordinary values, not operator aliases.
+        if name in scope.bindings:
+            value = scope.bindings[name]
+        else:
+            parent = scope.meta.get("parent")
+            if type(parent) is Scope and type(parent.bindings) is _Bindings and name in parent.bindings:
+                value = parent.bindings[name]
+            else:
+                binding = scope._binding_lookup(name)
+                if binding is None:
+                    return _OPERATOR_UNCACHED
+                value = binding.owner().bindings[name]
+        if type(value) is PipedPath:
+            return value
+        if type(value) in _PLAIN_VALUES:
+            return None
+        if scope._operator_lookups is None:
+            scope._operator_lookups = {}
+        cached = scope._operator_lookups.get(name)
+        if cached is not None:
+            if cached.valid():
+                return cached.target if cached.peekable or follow_literals else None
+            del scope._operator_lookups[name]
+        if isinstance(value, (Group, Code)):
+            return _OPERATOR_UNCACHED
+        if not isinstance(value, (PipedPath, GetPath, PathLiteral)):
+            return None
+
+        bindings = []
+        paths = []
+        literals = []
+        seen = set()
+        key = name
+        while key not in seen:
+            seen.add(key)
+            binding = scope._binding_lookup(key)
+            if binding is None:
+                return _OPERATOR_UNCACHED
+            bindings.append(binding)
+            value = binding.owner().bindings[key]
+            if isinstance(value, PathLiteral):
+                literals.append((value, value.inner))
+                value = value.inner
+            if isinstance(value, PipedPath):
+                lookup = _OperatorLookup(bindings, paths, literals, value)
+                scope._operator_lookups[name] = lookup
+                return value if lookup.peekable or follow_literals else None
+            if not isinstance(value, GetPath):
+                return _OPERATOR_UNCACHED
+            key = _plain_name(value)
+            if key is None or key == "meta" or key != value.segments[0].text:
+                return _OPERATOR_UNCACHED
+            paths.append((value, value.segments[0], value.segments[0].text,
+                          (getattr(value, "loc", None) or {}).get("text")))
+        return _OPERATOR_UNCACHED
+
     async def _resolve_operator_to_func_path(self, raw_op_term, scope):
-        """
-        Resolve an operator term (which may be an alias/path-literal/group/etc.)
-        to a function GetPath (built from a PipedPath).
-        Preserves source location and raises consistent TypeErrors with slip_obj.
-        """
+        """Resolve operator aliases to an existing pipe path and target name."""
+        if type(raw_op_term) is GetPath and type(scope) is Scope:
+            name = _plain_name(raw_op_term)
+            target = (
+                self._piped_name(name, scope, follow_literals=True)
+                if name is not None else None
+            )
+            if isinstance(target, PipedPath):
+                return target, self._operator_name(target)
+
         op_term = self._normalize_root_div(raw_op_term)
         try:
             op_val = await self._eval(op_term, scope)
@@ -1783,16 +1996,13 @@ class Evaluator:
                 pass
             raise err
 
-        func_path = GetPath(op_val.segments, getattr(op_val, "meta", None))
-        if hasattr(raw_op_term, "loc"):
-            try:
-                func_path.loc = raw_op_term.loc
-            except Exception:
-                pass
+        return op_val, self._operator_name(op_val)
+
+    def _operator_name(self, func_path):
         func_name = None
         if func_path.segments and isinstance(func_path.segments[-1], Name):
             func_name = func_path.segments[-1].text
-        return func_path, func_name
+        return func_name
 
     async def _try_core_fallback(self, func, args, scope):
         """
@@ -2092,10 +2302,7 @@ class Evaluator:
                 # Build parser once
                 parser = getattr(cls, "_core_parser", None)
                 if parser is None:
-                    grammar_path = (
-                        _Path(__file__).parent.parent / "grammar" / "slip_grammar.yaml"
-                    )
-                    parser = _Parser.from_file(str(grammar_path))
+                    parser = _Parser.from_file(str(GRAMMAR_PATH))
                     cls._core_parser = parser
                 # Parse and transform root.slip once
                 core_src_path = _Path(__file__).parent / "root.slip"
@@ -2129,15 +2336,13 @@ class Evaluator:
             return
 
     async def _eval_istring_expr(self, expr_text: str, scope: Scope):
-        from pathlib import Path as _Path
         from koine import Parser as _Parser
         from slip.slip_transformer import SlipTransformer as _Transformer
 
         cls = type(self)
         parser = getattr(cls, "_core_parser", None)
         if parser is None:
-            grammar_path = _Path(__file__).parent.parent / "grammar" / "slip_grammar.yaml"
-            parser = _Parser.from_file(str(grammar_path))
+            parser = _Parser.from_file(str(GRAMMAR_PATH))
             cls._core_parser = parser
 
         parse_out = parser.parse(expr_text)
@@ -2189,12 +2394,13 @@ class Evaluator:
         return "".join(parts)
 
     async def _eval(self, node: Any, scope: Scope) -> Any:
-        """Recursive dispatcher for evaluating any AST node."""
+        """Compatibility entrypoint for a term, expression, or expression block."""
         # Load core library once before evaluating anything (needed for bare Evaluator usage)
-        try:
-            await self._ensure_core_loaded()
-        except Exception:
-            pass
+        if not self._core_loaded:
+            try:
+                await self._ensure_core_loaded()
+            except Exception:
+                pass
 
         self.current_node = node
         if isinstance(node, list):
@@ -2208,16 +2414,29 @@ class Evaluator:
             is_expression_list = isinstance(node[0], list)
 
             if is_expression_list:
-                result = None
-                for expr in node:
-                    result = await self._eval_expr(expr, scope)
-                    # Only propagate 'return' control-flow responses; other responses are data.
-                    if is_return(result):
-                        return result
-                return result
+                return await self._eval_block(node, scope)
             else:  # It's a single expression (list of terms)
                 return await self._eval_expr(node, scope)
 
+        return await self._eval_term(node, scope)
+
+    async def _eval_block(self, expressions, scope):
+        """Execute known expressions without guessing their container shape."""
+        result = None
+        for expression in expressions:
+            result = await self._eval_expr(expression, scope)
+            if isinstance(result, ReturnSignal):
+                break
+        return result
+
+    async def _complete(self, result):
+        while type(result) is _Pending:
+            result = await result.work
+        return result
+
+    async def _eval_term(self, node, scope):
+        """Evaluate one source term; produced values never re-enter this path."""
+        self.current_node = node
         match node:
             case GetPath():
                 self.current_node = node
@@ -2233,7 +2452,10 @@ class Evaluator:
 
             case Group():
                 self.current_node = node
-                return await self._eval(node.nodes, scope)
+                return await self._eval_block(node.nodes, scope)
+
+            case list():
+                return await self._eval(node, scope)
 
             case SlipList():
                 results = []
@@ -2441,10 +2663,38 @@ class Evaluator:
                 # It's a literal (int, str, bool, None, etc.)
                 return node
 
+    def _read_term(self, node, scope):
+        """Common terms produce values immediately, preserving async data values."""
+        self.current_node = node
+        kind = type(node)
+        if kind in (int, float, bool, str, bytes, type(None), Sig, PathLiteral, PipedPath):
+            return node
+        if kind is GetPath:
+            value = self.path_resolver.read(node, scope)
+            if type(value) is _Pending:
+                return _Pending(self._finish_term(value, scope))
+            return value
+        if kind is Group:
+            return _Pending(self._eval_block(node.nodes, scope))
+        return _Pending(self._eval_term(node, scope))
+
+    async def _finish_term(self, pending, scope):
+        value = await self._complete(pending)
+        if isinstance(value, (Ref, Cell)):
+            return await self._eval_term(value, scope)
+        return value
+
+    def _read_operand(self, node, scope):
+        if type(node) is list:
+            return _Pending(self._eval_term_value(node, scope))
+        return self._read_term(node, scope)
+
     def _scheme_query_segments(self, terms: List[Any]):
         if len(terms) < 2 or not isinstance(terms[0], GetPath):
             return None
         head = terms[0]
+        if _plain_name(head) is not None:
+            return None
         if not (
             self.path_resolver._extract_http_url(head)
             or self.path_resolver._extract_file_locator(head)
@@ -2487,22 +2737,18 @@ class Evaluator:
         self.path_resolver._check_write_target(current, path)
         token = self._update_target.set(current)
         try:
-            return unwrap_return(await self._eval_expr(
-                [current] + terms, scope, head_is_value=True
-            ))
+            return unwrap_return(await self._reduce_tail(terms, scope, 0, current))
         finally:
             self._update_target.reset(token)
 
-    async def _eval_expr(
-        self, terms: List[Any], scope: Scope, *, head_is_value=False
-    ) -> Any:
-        """Evaluates a single expression (a list of terms)."""
+    async def _eval_head(self, terms, scope):
+        """Execute syntactic writes/deletes/resources before value reduction."""
         if not terms:
             return None
 
         head_uneval = terms[0]
 
-        scheme_query = self._scheme_query_segments(terms)
+        scheme_query = self._scheme_query_segments(terms) if isinstance(head_uneval, GetPath) else None
         if scheme_query is not None:
             value = await self.path_resolver.get(head_uneval, scope)
             return await self.path_resolver._apply_segments(
@@ -2535,7 +2781,7 @@ class Evaluator:
                 # Determine if RHS starts with a pipe operator (literal or alias to a PipedPath)
                 update_style = False
                 first = value_expr[0] if value_expr else None
-                if isinstance(first, (PipedPath, GetPath)):
+                if type(first) is GetPath or isinstance(first, (PipedPath, GetPath)):
                     update_style = self._peek_piped_path(first, scope) is not None
 
                 # Vectorized write: LHS ending with a filter on a plucked field
@@ -2586,7 +2832,7 @@ class Evaluator:
                 ):
                     tname = head_uneval.segments[0].text
                     try:
-                        existing = scope[tname]
+                        existing = scope._get_name(tname) if type(scope) is Scope else scope[tname]
                     except KeyError:
                         existing = None
                     from slip.slip_datatypes import GetPath as _GP, PathLiteral as _PL
@@ -2603,7 +2849,7 @@ class Evaluator:
                         )
                         return value
 
-                if isinstance(value, SlipFunction):
+                if type(value) not in _PLAIN_VALUES and isinstance(value, SlipFunction):
                     # Begin replacement: synthesize typed methods from examples when untyped
                     sig_obj = None
                     if hasattr(value, "meta"):
@@ -2711,28 +2957,6 @@ class Evaluator:
                     # End replacement
                 else:
 
-                    def _rhs_mentions_name(terms, target):
-                        for t in terms:
-                            if (
-                                isinstance(t, GetPath)
-                                and len(t.segments) == 1
-                                and isinstance(t.segments[0], Name)
-                                and t.segments[0].text == target
-                            ):
-                                return True
-                            if isinstance(t, Group):
-                                for expr in t.nodes:
-                                    if _rhs_mentions_name(expr, target):
-                                        return True
-                            if isinstance(t, SlipList):
-                                for expr in t.nodes:
-                                    if _rhs_mentions_name(expr, target):
-                                        return True
-                            if isinstance(t, list):
-                                if _rhs_mentions_name(t, target):
-                                    return True
-                        return False
-
                     prev_bind = getattr(self, "bind_locals_prefer_container", False)
                     try:
                         # Default local-by-default
@@ -2745,11 +2969,7 @@ class Evaluator:
                             has_local = isinstance(scope, Scope) and (
                                 tname in scope.bindings
                             )
-                            owner = (
-                                scope.find_owner(tname)
-                                if isinstance(scope, Scope)
-                                else None
-                            )
+                            owner = scope.find_owner(tname) if not has_local and isinstance(scope, Scope) else None
                             if (
                                 (not has_local)
                                 and (owner is not None)
@@ -2788,7 +3008,10 @@ class Evaluator:
             # Treat as a SetPath to the same URL and perform PUT.
             case GetPath():
                 try:
-                    url = self.path_resolver._extract_http_url(head_uneval)
+                    url = (
+                        self.path_resolver._extract_http_url(head_uneval)
+                        if _plain_name(head_uneval) is None else None
+                    )
                 except Exception:
                     url = None
                 if url is not None and len(terms) >= 2:
@@ -2806,7 +3029,10 @@ class Evaluator:
                 #   file://path/to/file "body"
                 # Treat as a SetPath to the same locator and perform PUT.
                 try:
-                    file_loc = self.path_resolver._extract_file_locator(head_uneval)
+                    file_loc = (
+                        self.path_resolver._extract_file_locator(head_uneval)
+                        if _plain_name(head_uneval) is None else None
+                    )
                 except Exception:
                     file_loc = None
                 if file_loc is not None and len(terms) >= 2:
@@ -2849,13 +3075,56 @@ class Evaluator:
                 result = await self.path_resolver.delete(head_uneval, scope)
                 return result
 
+        return _UNHANDLED
+
+    async def _eval_expr(self, terms, scope):
+        """Reduce one flat expression, preserving the current binding meanings."""
+        if not terms:
+            return None
+        head = terms[0]
+        head_kind = type(head)
+        if head_kind in (int, float, bool, str, bytes, type(None)) and len(terms) == 1:
+            return head
+        if head_kind is GetPath:
+            special_head = _plain_name(head) is None
+        elif head_kind in _PLAIN_VALUES:
+            special_head = head_kind is tuple
+        else:
+            special_head = isinstance(head, (SetPath, DelPath, PostPath, tuple, GetPath))
+        if special_head:
+            result = await self._eval_head(terms, scope)
+            if result is not _UNHANDLED:
+                return result
+        if (
+            head_kind is GetPath and len(head.segments) == 1
+            and isinstance(head.segments[0], Name)
+            and head.segments[0]._control_name is not None
+        ):
+            return await self._eval_prefix(terms, scope)
+        value = self._read_term(head, scope)
+        if type(value) is _Pending:
+            value = await self._complete(value)
+        kind = type(value)
+        if kind not in _PLAIN_VALUES:
+            if isinstance(value, (SetPath, MultiSetPath)) or _is_implicit_callable(value):
+                return await self._eval_prefix(terms, scope, value)
+        elif kind is tuple and value and value[0] == "multi-set":
+            return await self._eval_prefix(terms, scope, value)
+        return await self._reduce_tail(terms, scope, 1, value)
+
+    async def _eval_prefix(self, terms, scope, head_value=_UNHANDLED):
+        head_kind = type(terms[0])
+
         # If not assignment, it's a value/call expression.
         remaining_terms = terms
         # Check for special form (macro) call
         head_term = remaining_terms[0]
-        if isinstance(head_term, GetPath):
-            if len(head_term.segments) == 1 and isinstance(head_term.segments[0], Name):
-                func_name = head_term.segments[0].text
+        if head_kind is GetPath or (head_kind not in _PLAIN_VALUES and isinstance(head_term, GetPath)):
+            if (
+                len(head_term.segments) == 1 and isinstance(head_term.segments[0], Name)
+                and head_term.segments[0]._control_name is not None
+            ):
+                func_name = head_term.segments[0]._control_name
                 if func_name == "return" and len(remaining_terms) > 2:
                     err = TypeError("invalid-args")
                     err.slip_detail = (
@@ -2909,42 +3178,36 @@ class Evaluator:
                             "args_raw_types",
                             [type(a).__name__ for a in args_raw],
                         )
-                    self._push_frame(func_name, func, args_raw, head_term)
-                    _ok = False
-                    try:
-                        if inspect.iscoroutinefunction(func):
-                            result = await func(args_raw, scope=scope)
-                        else:
-                            result = func(args_raw, scope=scope)
-                        _ok = True
-                    finally:
-                        if _ok:
-                            self._pop_frame()
+                    result = self._invoke(
+                        func, args_raw, scope, head_term, func_name, raw=True,
+                    )
+                    if type(result) is _Pending:
+                        result = await self._complete(result)
 
                     # If there is a trailing pipe/infix chain, continue evaluation with the result as LHS.
                     if split_at is not None:
-                        return await self._eval_expr(
-                            [result] + remaining_terms[arg_end:], scope
+                        return await self._reduce_tail(
+                            remaining_terms, scope, arg_end, result,
                         )
                     return result
 
         # Evaluate the rest of the expression as a call chain
         self.current_node = remaining_terms[0]
-        head_val = (
-            remaining_terms[0] if head_is_value
-            else await self._eval(remaining_terms[0], scope)
-        )
+        head_val = self._read_term(remaining_terms[0], scope) if head_value is _UNHANDLED else head_value
+        if type(head_val) is _Pending:
+            head_val = await self._complete(head_val)
 
         # Dynamic assignment: if the head evaluates to a SetPath or MultiSetPath, treat it as an assignment target
         from slip.slip_datatypes import SetPath as _SP, MultiSetPath as _MSP
 
-        if isinstance(head_val, _SP):
+        value_kind = type(head_val)
+        if value_kind not in _PLAIN_VALUES and isinstance(head_val, _SP):
             value = unwrap_return(await self._eval_expr(remaining_terms[1:], scope))
             self.current_node = remaining_terms[0]
             await self.path_resolver.set(head_val, value, scope)
             return value
-        if isinstance(head_val, _MSP) or (
-            isinstance(head_val, tuple)
+        if (value_kind not in _PLAIN_VALUES and isinstance(head_val, _MSP)) or (
+            value_kind is tuple
             and len(head_val) > 0
             and head_val[0] == "multi-set"
         ):
@@ -3023,19 +3286,12 @@ class Evaluator:
                                 "arg_types",
                                 [],
                             )
-                        self._push_frame(
-                            name or "<call>",
-                            head_val,
-                            evaluated_args,
-                            remaining_terms[0],
+                        result = self._invoke(
+                            head_val, evaluated_args, scope,
+                            remaining_terms[0], name or "<call>",
                         )
-                        _ok = False
-                        try:
-                            result = await self.call(head_val, evaluated_args, scope)
-                            _ok = True
-                        finally:
-                            if _ok:
-                                self._pop_frame()
+                        if type(result) is _Pending:
+                            result = await self._complete(result)
                         k = 1
                     else:
                         k = 1  # leave result=head_val (function value)
@@ -3059,6 +3315,8 @@ class Evaluator:
                 evaluated_args = await self._fold_property_chain_for_args(
                     arg_terms, scope
                 )
+                if isinstance(evaluated_args, ReturnSignal):
+                    return evaluated_args
 
                 # Auto‑invoke zero‑arity callables when they appear as arguments (e.g., 'keys current-scope')
                 async def _autocall_if_zero_arity(v):
@@ -3101,189 +3359,118 @@ class Evaluator:
                         "arg_types",
                         [type(a).__name__ for a in evaluated_args],
                     )
-                self._push_frame(
-                    name or "<call>", head_val, evaluated_args, remaining_terms[0]
+                result = self._invoke(
+                    head_val, evaluated_args, scope, remaining_terms[0],
+                    name or "<call>",
                 )
-                _ok = False
-                try:
-                    result = await self.call(head_val, evaluated_args, scope)
-                    _ok = True
-                finally:
-                    if _ok:
-                        self._pop_frame()
+                if type(result) is _Pending:
+                    result = await self._complete(result)
                 k = arg_end
 
-        def _rhs_span_for_logical(terms, op_index, scope):
-            """
-            Determine how many terms constitute the RHS operand for a logical op.
-            Recognize simple infix patterns by resolving the middle term to any piped operator:
-              <term> <operator> <term>  -> span 3
-            Also recognize unary piped operator form when only two terms are present:
-              <term> <operator>         -> span 2
-            Otherwise, treat RHS as a single term (span 1).
-            """
-            start = op_index + 1
-            if start + 1 < len(terms):
-                if self._peek_piped_path(terms[start + 1], scope) is not None:
-                    return 3 if start + 2 < len(terms) else 2
-            return 1
+        return await self._reduce_tail(remaining_terms, scope, k, result)
 
-        while k < len(remaining_terms):
-            op_term = remaining_terms[k]
-            raw_op_term = op_term  # Preserve original term for error reporting
-            func_path = None
-
-            # Resolve operator term, potentially through multiple aliases, until we find a PipedPath.
-            self.current_node = raw_op_term
-            # Resolve operator to function path/name via helper
-            func_path, func_name = await self._resolve_operator_to_func_path(
-                raw_op_term, scope
+    async def _reduce_tail(self, terms, scope, cursor, result):
+        """Reduce the original flat source with one cursor and accumulator."""
+        while cursor < len(terms):
+            if isinstance(result, ReturnSignal):
+                return result
+            operator = terms[cursor]
+            self.current_node = operator
+            path = operator if type(operator) is PipedPath else None
+            if type(operator) is GetPath and type(scope) is Scope:
+                name = _plain_name(operator)
+                if name is not None:
+                    path = self._piped_name(name, scope, follow_literals=True)
+            if not isinstance(path, PipedPath):
+                path, _name = await self._resolve_operator_to_func_path(
+                    operator, scope,
+                )
+            name = self._operator_name(path)
+            unary = (
+                cursor + 1 == len(terms)
+                or self._peek_piped_path(terms[cursor + 1], scope) is not None
             )
+            if unary and name in ("logical-and", "logical-or"):
+                raise SyntaxError("Infix operator missing right-hand side")
 
-            # Decide whether to treat current piped op as unary
-            unary_mode = (
-                k + 1 >= len(remaining_terms)
-                or self._peek_piped_path(remaining_terms[k + 1], scope) is not None
-            )
-
-            if unary_mode:
-                # Support unary piped ops: treat "|fn" as a unary call with only the LHS.
-                if func_name in ("logical-and", "logical-or"):
-                    raise SyntaxError("Infix operator missing right-hand side")
-                self.current_node = func_path
-                func = await self.path_resolver.get(func_path, scope)
-                self._push_frame(func_name or "<pipe>", func, [result], func_path)
-                _ok = False
-                try:
-                    result = await self.call(func, [result], scope)
-                    _ok = True
-                finally:
-                    if _ok:
-                        self._pop_frame()
-                k += 1
-                continue
-
-            if func_name == "logical-and":
-                # Short-circuit: only evaluate RHS if LHS is truthy
-                span = _rhs_span_for_logical(remaining_terms, k, scope)
-                if not result:
-                    # Skip operator and the entire RHS operand
-                    k += 1 + span
-                    continue
-                rhs_start = k + 1
-                if span >= 2:
-                    # Evaluate the RHS slice (operator-inclusive) as a single sub-expression
-                    rhs_arg = await self._eval_expr(
-                        remaining_terms[rhs_start : rhs_start + span], scope
+            if name in ("logical-and", "logical-or"):
+                start = cursor + 1
+                span = 1
+                if (
+                    start + 1 < len(terms)
+                    and self._peek_piped_path(terms[start + 1], scope) is not None
+                ):
+                    span = 3 if start + 2 < len(terms) else 2
+                end = start + span
+                skip = (
+                    (name == "logical-and" and not result)
+                    or (name == "logical-or" and result)
+                )
+                if not skip:
+                    result = (
+                        await self._eval_expr(terms[start:end], scope) if span > 1
+                        else await self._complete(self._read_term(terms[start], scope))
                     )
-                else:
-                    self.current_node = remaining_terms[rhs_start]
-                    rhs_arg = await self._eval(remaining_terms[rhs_start], scope)
-                result = rhs_arg
-                k += 1 + span
+                cursor = end
                 continue
 
-            if func_name == "logical-or":
-                # Short-circuit: only evaluate RHS if LHS is falsey
-                span = _rhs_span_for_logical(remaining_terms, k, scope)
-                if result:
-                    # Skip operator and the entire RHS operand
-                    k += 1 + span
-                    continue
-                rhs_start = k + 1
-                if span >= 2:
-                    # Evaluate the RHS slice (operator-inclusive) as a single sub-expression
-                    rhs_arg = await self._eval_expr(
-                        remaining_terms[rhs_start : rhs_start + span], scope
-                    )
-                else:
-                    self.current_node = remaining_terms[rhs_start]
-                    rhs_arg = await self._eval(remaining_terms[rhs_start], scope)
-                result = rhs_arg
-                k += 1 + span
-                continue
-
-            # NOTE: logical-and/logical-or must short-circuit even when they originate from
-            # a piped-path operator token (e.g. `and: |logical-and`). Do not allow them to
-            # fall through into the generic pipe-call branch below.
-
-            # Pipe-call form for literal piped paths:
-            #   <lhs> |some.path arg1 arg2 ...
-            #
-            # This calls: some.path(lhs, arg1, arg2, ...)
-            #
-            # IMPORTANT: only triggers when the source token is a PipedPath (starts with `|`),
-            # not for infix aliases like `+` that resolve to a PipedPath.
-            if isinstance(raw_op_term, PipedPath):
-                self.current_node = func_path
-                func = await self.path_resolver.get(func_path, scope)
-
-                # Consume arguments until the next operator token in the chain.
-                arg_terms = []
-                j = k + 1
-                while j < len(remaining_terms):
-                    t = remaining_terms[j]
-                    if isinstance(t, PipedPath):
-                        break
-                    if (
-                        isinstance(t, GetPath)
-                        and self._peek_piped_path(t, scope) is not None
+            if unary:
+                args = [result]
+                cursor += 1
+            elif isinstance(operator, PipedPath):
+                # Explicit pipes capture the target before argument effects.
+                func = self.path_resolver.read(path, scope)
+                if type(func) is _Pending:
+                    func = await self._complete(func)
+                end = cursor + 1
+                while end < len(terms):
+                    term = terms[end]
+                    if isinstance(term, PipedPath) or (
+                        isinstance(term, GetPath)
+                        and self._peek_piped_path(term, scope) is not None
                     ):
                         break
-                    arg_terms.append(t)
-                    j += 1
-
-                evaluated_args = await self._fold_property_chain_for_args(
-                    arg_terms, scope
+                    end += 1
+                args = await self._fold_property_chain_for_args(
+                    terms[cursor + 1:end], scope,
                 )
-
-                self._push_frame(
-                    func_name or "<pipe>", func, [result, *evaluated_args], func_path
-                )
-                _ok = False
-                try:
-                    result = await self.call(func, [result, *evaluated_args], scope)
-                    _ok = True
-                finally:
-                    if _ok:
-                        self._pop_frame()
-
-                k = j
+                if isinstance(args, ReturnSignal):
+                    return args
+                args.insert(0, result)
+                result = self._invoke(func, args, scope, operator, name or "<pipe>")
+                if type(result) is _Pending:
+                    result = await self._complete(result)
+                cursor = end
                 continue
-
-            # Normal infix / pipe: evaluate RHS.
-            self.current_node = remaining_terms[k + 1]
-            rhs_term = remaining_terms[k + 1]
-
-            if isinstance(rhs_term, Sig):
-                rhs_arg = rhs_term
             else:
-                rhs_arg = await self._eval_term_value(rhs_term, scope)
+                # Infix targets are read after RHS effects, including rebinding.
+                rhs = self._read_operand(terms[cursor + 1], scope)
+                if type(rhs) is _Pending:
+                    rhs = await self._complete(rhs)
+                if isinstance(rhs, ReturnSignal):
+                    return rhs
+                args = [result, rhs]
+                cursor += 2
 
-            self.current_node = func_path
-            func = await self.path_resolver.get(func_path, scope)
-            if self._debug_on():
-                self._dbg(
-                    "PIPE",
-                    func_name,
-                    "lhs_type",
-                    type(result).__name__,
-                    "rhs_type",
-                    type(rhs_arg).__name__,
-                )
-            self._push_frame(func_name or "<pipe>", func, [result, rhs_arg], func_path)
-            _ok = False
-            try:
-                result = await self.call(func, [result, rhs_arg], scope)
-                _ok = True
-            finally:
-                if _ok:
-                    self._pop_frame()
-            k += 2
-
+            self.current_node = operator
+            func = self.path_resolver.read(path, scope)
+            if type(func) is _Pending:
+                func = await self._complete(func)
+            result = self._invoke(func, args, scope, operator, name or "<pipe>")
+            if type(result) is _Pending:
+                result = await self._complete(result)
         return result
 
-    def _sig_param_order(self, sig) -> list[tuple[str, object | None]]:
+    def _sig_param_order(self, sig):
+        if isinstance(sig, Sig):
+            return (
+                (
+                    parameter.name if type(parameter.name) is str
+                    else getattr(parameter.name, "text", str(parameter.name)),
+                    parameter.annotation,
+                )
+                for parameter in sig._parameters
+            )
         order = getattr(sig, "param_order", None)
         if order:
             return [
@@ -3876,9 +4063,10 @@ class Evaluator:
                 else:
                     out.append(await self._eval(expr, scope))
             return out
-        return await self._eval(term, scope)
+        result = self._read_term(term, scope)
+        return await self._complete(result) if type(result) is _Pending else result
 
-    async def _fold_property_chain_for_args(self, arg_terms, scope) -> list:
+    async def _fold_property_chain_for_args(self, arg_terms, scope) -> list | ReturnSignal:
         """
         Evaluate arg_terms, folding consecutive single-name get-paths into property chains
         applied to the previous base value. Mirrors legacy inline logic.
@@ -3906,7 +4094,11 @@ class Evaluator:
 
         while i < len(arg_terms):
             base_term = arg_terms[i]
-            base_val = await self._eval_term_value(base_term, scope)
+            base_val = self._read_operand(base_term, scope)
+            if type(base_val) is _Pending:
+                base_val = await self._complete(base_val)
+            if isinstance(base_val, ReturnSignal):
+                return base_val
 
             segs = []
             j = i + 1
@@ -4005,8 +4197,194 @@ class Evaluator:
         if self._debug_on():
             self._dbg("Evaluator.call", type(func).__name__, "argc", len(args))
         # Normalize arguments: unwrap 'return' responses so nested calls receive values.
-        if isinstance(args, list):
+        if isinstance(args, list) and any(isinstance(a, ReturnSignal) for a in args):
             args = [unwrap_return(a) for a in args]
+
+        if not self._core_loaded and getattr(self, "core_scope", None) is not None:
+            await self._ensure_core_loaded()
+        result = self._call_value(func, args, scope)
+        return await self._complete(result) if type(result) is _Pending else result
+
+    def _invoke(self, func, args, scope, site, name, *, raw=False):
+        """Own one source-call frame and one prepared argument list."""
+        self._push_frame(name, func, args, site)
+        if raw:
+            result = func(args, scope=scope)
+            if inspect.isawaitable(result) and not isinstance(result, asyncio.Task):
+                result = _Pending(result)
+        else:
+            for index, arg in enumerate(args):
+                if isinstance(arg, ReturnSignal):
+                    args[index] = arg.value
+            result = self._call_value(func, args, scope)
+        if type(result) is _Pending:
+            return _Pending(self._finish_invoke(result))
+        # Failed calls retain their frames for source diagnostics.
+        self._pop_frame()
+        return result
+
+    async def _finish_invoke(self, pending):
+        result = await self._complete(pending)
+        self._pop_frame()
+        return result
+
+    def _call_value(self, func, args, scope):
+        """Call native Python functions directly; SLIP bodies can suspend."""
+        if type(func) not in _HOST_FUNCTIONS and isinstance(func, (GenericFunction, SlipFunction)):
+            return _Pending(self._call_slip(func, args, scope))
+        if not callable(func):
+            raise TypeError(f"Object is not callable: {repr(func)}")
+        result = func(*args, scope=scope) if _python_accepts_scope(func) else func(*args)
+        kind = type(result)
+        if kind in _PLAIN_VALUES:
+            return result
+        if kind is CoroutineType:
+            return _Pending(result)
+        if isinstance(result, asyncio.Task):
+            return result
+        return _Pending(result) if inspect.isawaitable(result) else result
+
+    async def _call_slip(self, func, args, scope):
+        """Invoke values directly; dispatch never repeats argument preparation."""
+        if isinstance(func, GenericFunction):
+            generic = func
+            func = await self._select_method(generic.methods, args, scope)
+            if func is None:
+                return await self._dispatch_failure(generic, args, scope)
+        return await self._call_method(func, args, scope)
+
+    async def _select_method(self, methods, args, scope):
+        """Exact arity, typed specificity, guards, then last definition."""
+        if len(methods) == 1:
+            method = methods[0]
+            sig = method.meta.get("type")
+            if isinstance(sig, Sig):
+                base = len(sig._parameters)
+                if len(args) < base or (sig.rest is None and len(args) != base):
+                    return None
+                if sig.keywords and not await self._sig_types_match(sig, method, args, scope):
+                    return None
+            else:
+                sig = method.args
+                if isinstance(sig, Sig):
+                    base = len(sig._parameters)
+                    if len(args) < base or (sig.rest is None and len(args) != base):
+                        return None
+                elif isinstance(sig, Code) and len(args) != len(sig.nodes):
+                    return None
+            return method if await self._method_guards(method, args, scope) else None
+        for variadic in (False, True):
+            matched = []
+            for method in methods:
+                sig = method.meta.get("type")
+                if not isinstance(sig, Sig) or (sig.rest is not None) != variadic:
+                    continue
+                base = len(sig._parameters)
+                if len(args) < base or (not variadic and len(args) != base):
+                    continue
+                typed = any(p.is_typed and p.annotation is not None for p in sig._parameters)
+                if typed and not await self._sig_types_match(sig, method, args, scope):
+                    continue
+                vector = await self._method_specificity(sig, method, args, scope) if typed else None
+                matched.append((typed, vector if vector is not None else (10**9,), method))
+            if not matched:
+                continue
+            if any(typed for typed, _vector, _method in matched):
+                matched = [entry for entry in matched if entry[0]]
+            best = min(vector for _typed, vector, _method in matched)
+            peers = [method for _typed, vector, method in matched if vector == best]
+            for guarded in (True, False):
+                for method in reversed(peers):
+                    if bool(method.meta.get("guards")) != guarded:
+                        continue
+                    if await self._method_guards(method, args, scope):
+                        return method
+            return None
+        for guarded in (True, False):
+            for method in reversed(methods):
+                if isinstance(method.meta.get("type"), Sig):
+                    continue
+                if bool(method.meta.get("guards")) != guarded:
+                    continue
+                spec = method.args
+                if isinstance(spec, Sig):
+                    base = len(spec._parameters)
+                    if len(args) < base or (spec.rest is None and len(args) != base):
+                        continue
+                elif isinstance(spec, Code) and len(args) != len(spec.nodes):
+                    continue
+                if await self._method_guards(method, args, scope):
+                    return method
+        return None
+
+    async def _method_specificity(self, sig, method, args, scope):
+        vector = []
+        constrained = False
+        for index, (_name, spec) in enumerate(self._sig_param_order(sig)):
+            if spec is None:
+                continue
+            if index >= len(args):
+                return None
+            if isinstance(spec, PathLiteral):
+                spec = spec.inner
+            target = None
+            if isinstance(spec, GetPath):
+                try:
+                    target = await self.path_resolver.get(spec, method.closure)
+                except Exception:
+                    try:
+                        target = await self.path_resolver.get(spec, scope)
+                    except Exception:
+                        pass
+            elif isinstance(spec, Scope):
+                target = spec
+            if isinstance(target, Scope):
+                constrained = True
+                value = args[index]
+                if not isinstance(value, Scope):
+                    return None
+                distance = 0
+                while value is not target:
+                    value = value.parent
+                    distance += 1
+                    if not isinstance(value, Scope):
+                        return None
+                vector.append(distance)
+            elif isinstance(spec, GetPath) and len(spec.segments) == 1 and isinstance(spec.segments[0], Name):
+                name = spec.segments[0].text
+                if name in ("id", "string"):
+                    constrained = True
+                    vector.append(0 if name == "id" else 1)
+        return tuple(vector) if constrained else None
+
+    async def _method_guards(self, method, args, scope):
+        guards = method.meta.get("guards") or ()
+        if not guards:
+            return True
+        guard_scope = Scope(parent=method.closure)
+        sig = method.meta.get("type")
+        if isinstance(sig, Sig):
+            for index, (name, _spec) in enumerate(self._sig_param_order(sig)):
+                if index < len(args):
+                    guard_scope[name] = args[index]
+            if sig.rest is not None:
+                name = sig.rest if isinstance(sig.rest, str) else getattr(sig.rest, "text", str(sig.rest))
+                guard_scope[name] = args[len(sig._parameters):]
+        for guard in guards:
+            if hasattr(guard, "ast"):
+                expressions = guard.ast
+                if isinstance(expressions, list) and not expressions:
+                    continue
+                result = None
+                for expression in expressions:
+                    result = await self._eval_expr(expression, guard_scope)
+            else:
+                result = await self._eval(guard, guard_scope)
+            if not unwrap_return(result):
+                return False
+        return True
+
+    async def _dispatch_failure(self, func, args, scope):
 
         if isinstance(func, GenericFunction):
             if self._debug_on():
@@ -4015,199 +4393,6 @@ class Evaluator:
                 )
 
             # --- Refactor helpers (small, orthogonal) ---------------------------------
-
-            def _sig_base_arity(sig: Sig) -> int:
-                return len(sig.positional) + len(sig.keywords)
-
-            def _sig_accepts_arity(sig: Sig, call_args: list) -> bool:
-                base = _sig_base_arity(sig)
-                if sig.rest is None:
-                    return len(call_args) == base
-                return len(call_args) >= base
-
-            async def _matches_sig(
-                method: SlipFunction, sig: Sig, call_args: list
-            ) -> bool:
-                if not _sig_accepts_arity(sig, call_args):
-                    return False
-
-                if not await self._sig_types_match(
-                    sig, method, call_args, scope
-                ):
-                    return False
-                return True
-
-            async def _matches_untyped(method: SlipFunction, call_args: list) -> bool:
-                """
-                Legacy/untyped methods: still respect arity and guards, but have no Sig typing constraints.
-                """
-                try:
-                    sig = getattr(method, "args", None)
-                    if isinstance(sig, Sig):
-                        if not _sig_accepts_arity(sig, call_args):
-                            return False
-                    elif isinstance(getattr(method, "args", None), Code):
-                        # Legacy Code param list: exact arity
-                        if len(call_args) != len(method.args.nodes):
-                            return False
-                except Exception:
-                    pass
-
-                # Apply guards if present (errors propagate)
-                guards = getattr(method, "meta", {}).get("guards") or []
-                if not guards:
-                    return True
-                call_scope = Scope(parent=method.closure)
-                for g in guards:
-                    val = (
-                        await self._eval(g.ast, call_scope)
-                        if hasattr(g, "ast")
-                        else await self._eval(g, call_scope)
-                    )
-                    val = unwrap_return(val)
-                    if not val:
-                        return False
-                return True
-
-            async def _guard_passes(
-                method: SlipFunction, sig: Sig, call_args: list
-            ) -> bool:
-                guards = getattr(method, "meta", {}).get("guards") or []
-                if not guards:
-                    return True
-
-                call_scope = Scope(parent=method.closure)
-
-                # Bind parameters into guard scope so guards can reference them.
-                # NOTE: bind against the *real* sig/args (including `this`) so guard code can see `this`.
-                #
-                # In GenericFunction dispatch, call_args includes the receiver as the first argument
-                # when the signature declares `this: ...`.
-                arg_i = 0
-
-                for nm, _type_spec in self._sig_param_order(sig):
-                    if arg_i < len(call_args):
-                        call_scope[nm] = call_args[arg_i]
-                        arg_i += 1
-
-                if sig.rest is not None:
-                    nm = (
-                        sig.rest
-                        if isinstance(sig.rest, str)
-                        else getattr(sig.rest, "text", str(sig.rest))
-                    )
-                    call_scope[nm] = call_args[arg_i:] if arg_i < len(call_args) else []
-
-                def _eval_guard_result(result):
-                    result = unwrap_return(result)
-                    return bool(result)
-
-                for g in guards:
-                    # Guards are stored as Code blocks. Evaluate them like normal code:
-                    # - run each expression in order
-                    # - use the last expression's value as the predicate result
-                    if hasattr(g, "ast"):
-                        exprs = g.ast
-                        if not isinstance(exprs, list) or not exprs:
-                            # Empty guard => treat as "true"
-                            continue
-                        last = None
-                        for expr in exprs:
-                            last = await self._eval_expr(expr, call_scope)
-                        if not _eval_guard_result(last):
-                            return False
-                    else:
-                        # Fallback: allow raw AST nodes (should be rare)
-                        out = await self._eval(g, call_scope)
-                        if not _eval_guard_result(out):
-                            return False
-
-                return True
-
-            async def _specificity_vector(
-                method: SlipFunction, sig: Sig, call_args: list
-            ) -> tuple[int, ...] | None:
-                """
-                Lexicographic specificity by parameter order (typed constraints only).
-
-                For each *scope-typed* constraint (in declaration order), compute prototype distance:
-                  0 = exact match, 1 = parent match, ...
-                Lower vector is better.
-
-                Returns None when there are no scope-typed constraints.
-                """
-                vec: list[int] = []
-                any_specific_constraints = False
-
-                def _dist(arg_scope: Scope, ann_scope: Scope) -> int | None:
-                    if arg_scope is ann_scope:
-                        return 0
-                    d = 1
-                    cur = getattr(arg_scope, "parent", None)
-                    while isinstance(cur, Scope):
-                        if cur is ann_scope:
-                            return d
-                        cur = getattr(cur, "parent", None)
-                        d += 1
-                    return None
-
-                for arg_i, (param_name, type_spec) in enumerate(
-                    self._sig_param_order(sig)
-                ):
-                    if type_spec is None:
-                        continue
-                    if arg_i >= len(call_args):
-                        return None
-                    arg_val = call_args[arg_i]
-
-                    spec = type_spec
-                    if isinstance(spec, PathLiteral):
-                        spec = spec.inner
-
-                    ann_scope = None
-                    if isinstance(spec, GetPath):
-                        try:
-                            ann_scope = await self.path_resolver.get(
-                                spec, method.closure
-                            )
-                        except Exception:
-                            try:
-                                ann_scope = await self.path_resolver.get(spec, scope)
-                            except Exception:
-                                ann_scope = None
-                    elif isinstance(spec, Scope):
-                        ann_scope = spec
-
-                    if isinstance(ann_scope, Scope):
-                        any_specific_constraints = True
-                        if not isinstance(arg_val, Scope):
-                            return None
-                        d = _dist(arg_val, ann_scope)
-                        if d is None:
-                            return None
-                        vec.append(d)
-                        continue
-
-                    ann_name = None
-                    if (
-                        isinstance(spec, GetPath)
-                        and len(spec.segments) == 1
-                        and isinstance(spec.segments[0], Name)
-                    ):
-                        ann_name = spec.segments[0].text
-                    if ann_name == "id":
-                        any_specific_constraints = True
-                        vec.append(0)
-                    elif ann_name == "string":
-                        any_specific_constraints = True
-                        vec.append(1)
-
-                if not any_specific_constraints:
-                    return None
-                return tuple(vec)
-
-            def _has_guards(method: SlipFunction) -> bool:
-                return bool(getattr(method, "meta", {}).get("guards") or [])
 
             def _format_sig(sig: Sig) -> str:
                 try:
@@ -4242,7 +4427,7 @@ class Evaluator:
             async def _method_reason(method: SlipFunction, call_args: list) -> str:
                 sig = getattr(method, "meta", {}).get("type")
                 if isinstance(sig, Sig):
-                    base = _sig_base_arity(sig)
+                    base = len(sig._parameters)
                     if sig.rest is None and len(call_args) != base:
                         return f"arity mismatch: expected {base}, got {len(call_args)}"
                     if sig.rest is not None and len(call_args) < base:
@@ -4250,9 +4435,9 @@ class Evaluator:
 
                     if not await self._sig_types_match(sig, method, call_args, scope):
                         return "type constraints did not match"
-                    if _has_guards(method):
+                    if method.meta.get("guards"):
                         try:
-                            if not await _guard_passes(method, sig, call_args):
+                            if not await self._method_guards(method, call_args, scope):
                                 return "guard did not pass"
                         except Exception as exc:
                             return f"guard raised {type(exc).__name__}: {exc}"
@@ -4265,9 +4450,9 @@ class Evaluator:
                             f"arity mismatch: expected {expected}, "
                             f"got {len(call_args)}"
                         )
-                if _has_guards(method):
+                if method.meta.get("guards"):
                     try:
-                        if not await _matches_untyped(method, call_args):
+                        if not await self._method_guards(method, call_args, scope):
                             return "guard did not pass"
                     except Exception as exc:
                         return f"guard raised {type(exc).__name__}: {exc}"
@@ -4288,107 +4473,7 @@ class Evaluator:
                     lines.append(f"- {label}: {reason}")
                 return "\n".join(lines)
 
-            async def _pick_best(methods: list[SlipFunction]) -> SlipFunction | None:
-                """
-                Contract:
-                  1) arity tier: exact before variadic
-                  2) type constraints match
-                  3) type specificity is lexicographic by parameter order
-                  4) guards refine ties only after type specificity
-                  5) last-defined wins within the final candidate set
-                """
-                exact: list[SlipFunction] = []
-                variadic: list[SlipFunction] = []
-
-                for m in methods:
-                    s = getattr(m, "meta", {}).get("type")
-                    if not isinstance(s, Sig):
-                        continue
-                    if s.rest is None:
-                        exact.append(m)
-                    else:
-                        variadic.append(m)
-
-                def _vec_key(vec: tuple[int, ...] | None) -> tuple[int, ...]:
-                    # No scope constraints => least specific.
-                    return vec if vec is not None else (10**9,)
-
-                def _has_type_constraints(sig: Sig) -> bool:
-                    return any(
-                        type_spec is not None
-                        for _name, type_spec in self._sig_param_order(sig)
-                    )
-
-                for tier in (exact, variadic):
-                    # 1) filter by arity/type match; compute:
-                    #    - whether the method has typed constraints
-                    #    - the specificity vector (lexicographic, per-param order)
-                    matched: list[
-                        tuple[bool, tuple[int, ...] | None, SlipFunction]
-                    ] = []
-                    for m in tier:
-                        s = getattr(m, "meta", {}).get("type")
-                        if not isinstance(s, Sig):
-                            continue
-                        if not await _matches_sig(m, s, args):
-                            continue
-                        has_types = _has_type_constraints(s)
-                        vec = await _specificity_vector(m, s, args)
-                        matched.append((has_types, vec, m))
-
-                    if not matched:
-                        continue
-
-                    # 2) Prefer methods that have declared type constraints over those that don't.
-                    if any(has_types for has_types, _v, _m in matched):
-                        matched = [(ht, v, m) for (ht, v, m) in matched if ht]
-
-                    # 3) select most specific (lexicographic)
-                    best_key = min(_vec_key(v) for _ht, v, _m in matched)
-                    best = [m for _ht, v, m in matched if _vec_key(v) == best_key]
-
-                    # 4) guards refine ties (guarded first), last-defined wins
-                    guarded = [m for m in best if _has_guards(m)]
-                    unguarded = [m for m in best if not _has_guards(m)]
-
-                    for group in (guarded, unguarded):
-                        for m in reversed(group):
-                            s = getattr(m, "meta", {}).get("type")
-                            if not isinstance(s, Sig):
-                                continue
-                            if await _guard_passes(m, s, args):
-                                return m
-
-                    # No guards passed; fall back to last-defined (unguarded) within the best set.
-                    if unguarded:
-                        return unguarded[-1]
-
-                    return None
-
-                # Fallback: legacy/untyped methods (no Sig) + optional core fallback.
-                legacy: list[SlipFunction] = []
-                for m in methods or []:
-                    s = getattr(m, "meta", {}).get("type")
-                    if isinstance(s, Sig):
-                        continue
-                    legacy.append(m)
-
-                if legacy:
-                    guarded = [m for m in legacy if _has_guards(m)]
-                    unguarded = [m for m in legacy if not _has_guards(m)]
-                    for group in (guarded, unguarded):
-                        for m in reversed(group):
-                            if await _matches_untyped(m, args):
-                                return m
-
-                return None
-
             methods = list(getattr(func, "methods", []) or [])
-            chosen = await _pick_best(methods)
-            if chosen is not None:
-                return await self.call(chosen, args, scope)
-
-            # No match
             res = await self._try_core_fallback(func, args, scope)
             if res is not None:
                 return res
@@ -4399,6 +4484,7 @@ class Evaluator:
                 pass
             raise err
 
+    async def _call_method(self, func, args, scope):
         match func:
             case SlipFunction():
                 # A function call creates a new scope. The parent of this scope for
@@ -4482,7 +4568,7 @@ class Evaluator:
                             active_this_receiver = v
                             self.path_resolver._remember_resolver(v)
                         call_scope._set_allow_this_token(True)
-                        call_scope[nm] = v
+                        call_scope._set_name(nm, v)
                         call_scope._set_allow_this_token(False)
 
                     if self._debug_on():
@@ -4562,38 +4648,12 @@ class Evaluator:
                             self._dbg("Call-scope bindings", list(call_scope.keys()))
                     except Exception:
                         pass
-                    result = await self._eval(func.body.nodes, call_scope)
+                    result = await self._eval_block(func.body.nodes, call_scope)
                 finally:
                     self.current_local_scope = prev_local
                     self._transaction_receiver.reset(token)
 
-                from slip.slip_datatypes import ReturnSignal as _RS
-
-                # Handle ReturnSignal control-flow (early exit) coming from function bodies.
-                try:
-                    from slip.slip_datatypes import ReturnSignal as _RS
-                except Exception:
-                    _RS = None
-
-                if _RS is not None and isinstance(result, _RS):
-                    return result.value
-                return result
-
-            case _ if callable(func):
-                # Prepare kwargs for Python functions that need `scope`
-                kwargs = {}
-                if _python_accepts_scope(func):
-                    kwargs["scope"] = scope
-
-                if inspect.iscoroutinefunction(func):
-                    return await func(*args, **kwargs)
-                result = func(*args, **kwargs)
-                if inspect.isawaitable(result):
-                    # Do not await asyncio.Task; return handle so background tasks remain concurrent
-                    if isinstance(result, asyncio.Task):
-                        return result
-                    return await result
-                return result
+                return unwrap_return(result)
 
             case _:
                 raise TypeError(f"Object is not callable: {repr(func)}")

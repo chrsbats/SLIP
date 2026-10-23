@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # This is the main section for your project's metadata.
 [project]
 name = "slip"
-version = "0.2"
+version = "0.2.1"
 authors = [
   { name="Chris Bates", email="1314008+chrsbats@users.noreply.github.com" },
 ]
@@ -26,7 +26,7 @@ classifiers = [
 # These are the libraries your project depends on.
 # uv/setuptools will automatically install these from the project metadata.
 dependencies = [
-    "koine>=0.10.1",
+    "koine>=0.11.0",
     "pystache==0.6.8",
     "httpx==0.28.1",
     "xmltodict==0.14.2",
@@ -36,14 +36,19 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/<you>/slip"
-"Bug Tracker" = "https://github.com/<you>/slip/issues"
+"Homepage" = "https://github.com/chrsbats/SLIP"
+"Bug Tracker" = "https://github.com/chrsbats/SLIP/issues"
 
-[tool.setuptools.packages.find]
-include = ["slip*"]
+[tool.setuptools]
+packages = ["slip", "slip.grammar"]
+
+# Keep one grammar source directory for the runtime and parser tooling.
+[tool.setuptools.package-dir]
+"slip.grammar" = "grammar"
 
 [tool.setuptools.package-data]
-slip = ["root.slip", "grammar/*.yaml"]
+slip = ["root.slip"]
+"slip.grammar" = ["*.yaml"]
 
 [project.optional-dependencies]
 dev = [

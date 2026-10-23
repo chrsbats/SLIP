@@ -8,6 +8,11 @@ data types that the SLIP interpreter will work with.
 from abc import ABC
 from typing import List, Dict, Any, Optional, Union, TYPE_CHECKING
 import collections.abc
+from weakref import ref
+
+
+_PLAIN_VALUES = frozenset((int, float, bool, str, bytes, type(None), list, dict, tuple))
+_MISSING_BINDING = object()
 
 
 class PathNotFound(Exception):
@@ -68,6 +73,85 @@ class SlipBlock(collections.abc.MutableSequence):
 # =================================================================
 
 
+class _Bindings(dict):
+    """Binding mutations invalidate only lookups depending on that name."""
+
+    def __init__(self, values=()):
+        super().__init__(values)
+        self.versions = {}
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.versions[key] = self.versions.get(key, 0) + 1
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self.versions[key] = self.versions.get(key, 0) + 1
+
+    def update(self, *args, **kwargs):
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def pop(self, key, *default):
+        if len(default) > 1:
+            raise TypeError(
+                f"pop expected at most 2 arguments, got {1 + len(default)}"
+            )
+        if key not in self:
+            if default:
+                return default[0]
+            raise KeyError(key)
+        value = self[key]
+        del self[key]
+        return value
+
+    def popitem(self):
+        key, value = super().popitem()
+        self.versions[key] = self.versions.get(key, 0) + 1
+        return key, value
+
+    def clear(self):
+        for key in self:
+            self.versions[key] = self.versions.get(key, 0) + 1
+        super().clear()
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+    def __reduce__(self):
+        return type(self), (dict(self),)
+
+
+class _BindingLookup:
+    """A resolved location and the bindings/parent links it depends on."""
+
+    def __init__(self, key, owner, guards):
+        self.key = key
+        self.owner = ref(owner)
+        self.guards = guards
+
+    def valid(self):
+        for scope_ref, bindings_ref, version, parent_ref in self.guards:
+            scope = scope_ref()
+            bindings = bindings_ref()
+            parent = parent_ref() if parent_ref is not None else None
+            if (
+                scope is None or scope.bindings is not bindings
+                or bindings is None
+                or bindings.versions.get(self.key, 0) != version
+                or scope.meta.get("parent") is not parent
+                or (parent_ref is not None and parent is None)
+            ):
+                return False
+        return True
+
+
 class Scope:
     """Represents a SLIP scope (object) with a prototype parent.
 
@@ -81,7 +165,9 @@ class Scope:
 
     def __init__(self, parent: Optional["Scope"] = None):
         # User-visible bindings on this scope.
-        self.bindings: Dict[str, Any] = {}
+        self.bindings: Dict[str, Any] = _Bindings()
+        self._name_lookups = None
+        self._operator_lookups = None
         # System metadata used by the object model and dispatch.
         # name/type_id may be populated during "christening" by set-path logic.
         self.meta: Dict[str, Any] = {"parent": parent}
@@ -93,32 +179,52 @@ class Scope:
         self._allow_this_token = bool(allowed)
 
     def __setitem__(self, key: Any, value: Any):
-        key = self._normalize_key(key)
-        if key == "meta":
-            raise KeyError("'.meta' is reserved and cannot be rebound.")
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if not isinstance(key, str):
             raise TypeError(f"Scope key must be a str, not {type(key)}")
+        self._set_name(key, value)
+
+    def _set_name(self, key, value):
+        """Store a known string key through the normal binding mutation boundary."""
+        if key == "meta":
+            raise KeyError("'.meta' is reserved and cannot be rebound.")
         # Contract: `This` cannot be stored in a scope (except for the internal
         # evaluator binding of the reserved `this` param in a call scope).
-        from slip.slip_datatypes import This as _This
-
-        if isinstance(value, _This) and not getattr(self, "_allow_this_token", False):
+        if type(value) not in _PLAIN_VALUES and isinstance(value, This) and not self._allow_this_token:
             raise PermissionError("`this` cannot be stored")
         self.bindings[key] = value
 
     def __getitem__(self, key: Any) -> Any:
-        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if key == "meta":
             return self.meta
         if not isinstance(key, str):
             raise TypeError(f"Scope key must be a str, not {type(key)}")
+        return self._get_name(key)
+
+    def _get_name(self, key):
+        """Read a known string key without repeating public key conversion."""
+        if key == "meta":
+            return self.meta
+        if type(self) is Scope and type(self.bindings) is _Bindings:
+            value = self.bindings.get(key, _MISSING_BINDING)
+            if value is not _MISSING_BINDING:
+                return value
+            parent = self.meta.get("parent")
+            if type(parent) is Scope and type(parent.bindings) is _Bindings:
+                value = parent.bindings.get(key, _MISSING_BINDING)
+                if value is not _MISSING_BINDING:
+                    return value
         owner = self.find_owner(key)
         if owner:
             return owner.bindings[key]
         raise KeyError(f"'{key}'")
 
     def __delitem__(self, key: Any):
-        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if key == "meta":
             raise KeyError("'.meta' is reserved and cannot be deleted.")
         if not isinstance(key, str):
@@ -129,7 +235,8 @@ class Scope:
 
     def __contains__(self, key: Any) -> bool:
         """Checks if a key exists in this Scope or its prototypes."""
-        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if isinstance(key, str):
             return self.find_owner(key) is not None
         return False
@@ -138,15 +245,59 @@ class Scope:
         """Finds the Scope in the lookup chain (self → parent) that owns key."""
         if key in self.bindings:
             return self
+        lookup = self._binding_lookup(key)
+        if lookup is not None:
+            return lookup.owner()
         # Walk the prototype chain.
         parent = self.meta.get("parent")
         if parent:
             return parent.find_owner(key)
         return None
 
+    def _binding_lookup(self, key):
+        """Resolve ordinary scopes; live/custom scopes retain their own lookup."""
+        if type(self) is not Scope:
+            return None
+        if self._name_lookups is None:
+            self._name_lookups = {}
+        cached = self._name_lookups.get(key)
+        if cached is not None and cached.valid():
+            return cached
+        self._name_lookups.pop(key, None)
+        guards = []
+        seen = set()
+        scope = self
+        while type(scope) is Scope and type(scope.bindings) is _Bindings:
+            if id(scope) in seen:
+                raise RecursionError("Scope parent cycle detected")
+            seen.add(id(scope))
+            bindings = scope.bindings
+            parent = scope.meta.get("parent")
+            if parent is not None and not isinstance(parent, Scope):
+                return None
+            guards.append((
+                ref(scope), ref(bindings), bindings.versions.get(key, 0),
+                ref(parent) if parent is not None else None,
+            ))
+            if key in bindings:
+                lookup = _BindingLookup(key, scope, guards)
+                self._name_lookups[key] = lookup
+                return lookup
+            scope = parent
+        return None
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.update(_name_lookups={}, _operator_lookups={})
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     def get(self, key: Any, default: Any = None) -> Any:
         """Gets a value, returning a default if not found."""
-        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if not isinstance(key, str):
             return default
         owner = self.find_owner(key)
@@ -164,6 +315,8 @@ class Scope:
 
     def _normalize_key(self, key):
         """Allow a single-name PathLiteral(GetPath(...)) or GetPath to be used as a key."""
+        if isinstance(key, str):
+            return key
         try:
             if isinstance(key, PathLiteral):
                 inner = getattr(key, "inner", None)
@@ -397,7 +550,8 @@ class HostScopePath(Scope, _HostPathAdapter):
         self.meta["parent"] = parent
 
     def __getitem__(self, key: Any) -> Any:
-        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if key == "meta":
             self._refresh_meta()
             return self.meta
@@ -407,7 +561,8 @@ class HostScopePath(Scope, _HostPathAdapter):
         raise KeyError(f"'{key}'")
 
     def __setitem__(self, key: Any, value: Any):
-        key = self._normalize_key(key)
+        if not isinstance(key, str):
+            key = self._normalize_key(key)
         if key == "meta":
             raise KeyError("'.meta' is reserved and cannot be rebound.")
         if isinstance(value, This) and not getattr(self, "_allow_this_token", False):
@@ -1098,6 +1253,19 @@ class Name(PathSegment):
 
     def __init__(self, text: str):
         self.text = text
+
+    @property
+    def text(self):
+        return self._text
+
+    @text.setter
+    def text(self, value):
+        self._text = value
+        self.key = value[1:] if value.startswith(".") and len(value) > 1 else value
+        self.is_resource = value.startswith(("http://", "https://", "file://"))
+        self._control_name = value if value in (
+            "return", "logical-and", "logical-or", "if", "fn", "while", "foreach",
+        ) else None
 
     def __repr__(self) -> str:
         return f"Name<{self.text!r}>"
