@@ -1,3 +1,18 @@
+# Unreleased fixes
+
+- `add`, `core-add`, and `+` share the same addition primitive, including appending
+  a non-list element to a list without mutating the input containers.
+- Live host-backed lists now compare by contents and concatenate with literal or
+  live lists in either operand order. Saved views retain replacement-following and
+  write-through behavior; concatenation makes an ordinary shallow list.
+- Restore bare callable pipeline inputs: `time |format` passes the function,
+  while `(time) |format` passes its result. Both
+  `take-method |command |public` and `command take-method |public` work.
+  This corrects the overly broad expression-head rule shipped in 0.3.0; ordinary
+  calls and standalone missing-argument errors retain their existing behavior.
+
+---
+
 # SLIP v0.3.0 — synchronous Python runtime
 
 ## Included

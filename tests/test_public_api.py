@@ -8,8 +8,11 @@ from slip import ScriptRunner, slip_core as core
 from slip.slip_core import Generic, Lambda, Scope
 
 
-@pytest.fixture
-def commands(tmp_path):
+@pytest.fixture(params=[
+    "take: public mechanics.take\nput: public mechanics.put",
+    "take: mechanics.take |public\nput: mechanics.put |public",
+], ids=["prefix-exports", "piped-exports"])
+def commands(tmp_path, request):
     (tmp_path / "mechanics.slip").write_text("""
         take: fn {actor, object} [emit 'audit' object; #[actor, object]]
         put: fn {actor, object, relation |where relation = 'in'} ['in']
@@ -17,11 +20,9 @@ def commands(tmp_path):
         put: fn {actor, object, relation, adverb} [adverb]
         helper: fn {x} [x]
     """)
-    (tmp_path / "api.slip").write_text("""
-        mechanics: import `file://mechanics.slip`
-        take: public mechanics.take
-        put: public mechanics.put
-    """)
+    (tmp_path / "api.slip").write_text(
+        "mechanics: import `file://mechanics.slip`\n" + request.param,
+    )
     with ScriptRunner() as runner:
         runner.source_dir = str(tmp_path)
         yield runner.import_public_module("file://api.slip")
@@ -92,8 +93,11 @@ def test_public_source_conversion_is_literal_only(commands):
 @pytest.mark.parametrize("name", [
     "object", "target", "value", "command-scope",
 ])
+@pytest.mark.parametrize("declaration", [
+    "command take-method |public", "take-method |command |public",
+])
 def test_command_slip_closures_hydrate_without_parameter_name_collisions(
-    tmp_path, name, monkeypatch,
+    tmp_path, name, declaration, monkeypatch,
 ):
     path = tmp_path / "api.slip"
     signature = f"actor: Persona, {name}: Item, text |where {name}.enabled"
@@ -104,7 +108,7 @@ def test_command_slip_closures_hydrate_without_parameter_name_collisions(
             emit 'audit' text
             #[actor.name, {name}.name, text]
         ]
-        take: command take-method |public
+        take: {declaration}
     """)
     registry = {
         "id:actor": {"__slip__": {"type": "scope", "prototype": "Persona"},

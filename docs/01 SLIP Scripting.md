@@ -248,9 +248,10 @@ boundary; parentheses can explicitly bound an inner call. Functions are also
 ordinary argument values: use `example four description` when passing `four` to
 another function. Callers do not infer that intent from a following pipe's arity.
 
-A statement is an implicit evaluation group. A function at its head is called;
-missing arguments are errors, so both `add` and `(add)` fail. In argument position,
-functions remain values regardless of arity:
+A statement is an implicit evaluation group. A function used as a call head is
+called; missing arguments are errors, so both standalone `add` and `(add)` fail.
+Function arguments and bare callable inputs immediately before an explicit pipe remain
+values regardless of arity:
 
 ```slip
 keep: fn {value} [return value]
@@ -263,6 +264,23 @@ is-fn clock
 passes its result. Likewise, `add 1 (sub 1 2)` evaluates the subtraction first.
 `add 1 sub 1 2` passes the function `sub` as an argument to `add` and fails.
 Use `return function` when returning a callable value from a function body.
+
+A bare callable before `|` is the input value: `time |format` passes the clock
+function, while `(time) |format` passes its result. This also makes
+`take-method |command |public` equivalent to `command take-method |public`.
+The distinction comes from the explicit pipe boundary, not either function's arity:
+
+```slip
+clock: fn {} [42]
+keep: fn {value} [return value]
+is-fn (clock |keep)
+-- => true
+(clock) |keep
+-- => 42
+```
+
+Pipe aliases used without `|` retain ordinary call and argument rules, including
+passing a saved alias as a function argument.
 
 A completed group supplies its result once, even when the result is a function.
 Use `call` to invoke that result explicitly:
@@ -305,9 +323,9 @@ dec: fn {value} [value - 1]
 ```
 
 Preparing a callable reference does not invoke it. Zero-argument functions run at
-expression heads and in explicit nested calls, and stay values in argument
-positions. Refs and cells retain live reads; a quoted path explicitly passed to
-`call` resolves at that call.
+call heads and in explicit nested calls, and stay values in argument and bare
+pipeline-input positions. Refs and cells retain live reads; a quoted path explicitly
+passed to `call` resolves at that call.
 
 Binding a piped callable captures both its target and accumulator-first calling
 mode:

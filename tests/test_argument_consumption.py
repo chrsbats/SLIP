@@ -19,7 +19,7 @@ def test_required_pipe_argument_does_not_depend_on_its_targets_arity(target):
         return value
 
     scope['identity'], scope['target'] = identity, target
-    value = core.execute(parse('identity |target'), scope)
+    value = core.execute(parse('identity (|target)'), scope)
     assert isinstance(value, core.Pipe)
     assert value.target is target
     assert calls == [value]

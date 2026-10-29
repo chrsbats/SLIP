@@ -199,6 +199,148 @@ def test_host_gateway_is_exact_live_typed_and_leaves_storage_raw():
         assert raw["inventory"] == [{"hp": 15}]
 
 
+@pytest.mark.parametrize(("left", "right", "equal"), [
+    ("obj.values", "#[1, 2]", True),
+    ("#[1, 2]", "obj.values", True),
+    ("obj.values", "obj.other", True),
+    ("obj.values", "obj.values", True),
+    ("obj.values", "#[2, 1]", False),
+    ("#[2, 1]", "obj.values", False),
+    ("obj.values", "#[1]", False),
+    ("#[1]", "obj.values", False),
+    ("obj.empty", "#[]", True),
+    ("#[]", "obj.empty", True),
+    ("obj.values", "none", False),
+    ("none", "obj.values", False),
+    ("obj.nested", "#[#[1, 2], #{n: 3}]", True),
+    ("#[#[1, 2], #{n: 3}]", "obj.nested", True),
+])
+def test_live_host_lists_compare_by_value(left, right, equal):
+    raw = {"values": [1, 2], "other": [1, 2], "empty": [],
+           "nested": [[1, 2], {"n": 3}]}
+    with ScriptRunner(host_data=lambda object_id: raw,
+                      background_io=False) as runner:
+        result = runner.handle_script(f"""
+            obj: host-object 'id:probe'
+            #[{left} = {right}, {left} != {right}]
+        """)
+        assert result.status == "ok", result.error_message
+        assert result.value == [equal, not equal]
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    ("obj.values + #[3]", [1, 2, 3]),
+    ("#[0] + obj.values", [0, 1, 2]),
+    ("obj.values + obj.other", [1, 2, 3]),
+    ("obj.empty + obj.values", [1, 2]),
+    ("obj.values + obj.empty", [1, 2]),
+    ("add obj.values #[3]", [1, 2, 3]),
+    ("add #[0] obj.values", [0, 1, 2]),
+    ("add obj.values obj.other", [1, 2, 3]),
+    ("add obj.values 3", [1, 2, 3]),
+])
+def test_live_host_lists_concatenate_without_mutating_storage(
+    source, expected,
+):
+    raw = {"values": [1, 2], "other": [3], "empty": []}
+    with ScriptRunner(host_data=lambda object_id: raw,
+                      background_io=False) as runner:
+        result = runner.handle_script(
+            "obj: host-object 'id:probe'; " + source,
+        )
+        assert result.status == "ok", result.error_message
+        assert type(result.value) is list
+        assert result.value == expected
+        assert raw == {"values": [1, 2], "other": [3], "empty": []}
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    ("obj.values + 3", [1, 2, 3]), ("3 + obj.values", None),
+    ("obj.values + '3'", [1, 2, '3']), ("'3' + obj.values", None),
+])
+def test_live_host_list_addition_accepts_elements_only_on_the_right(
+    source, expected,
+):
+    raw = {"values": [1, 2]}
+    with ScriptRunner(host_data=lambda object_id: raw,
+                      background_io=False) as runner:
+        result = runner.handle_script(
+            "obj: host-object 'id:probe'; " + source,
+        )
+        if expected is None:
+            assert result.status == "err"
+            assert "TypeError:" in result.error_message
+        else:
+            assert result.status == "ok", result.error_message
+            assert result.value == expected
+        assert raw == {"values": [1, 2]}
+
+
+def test_comparing_and_concatenating_saved_host_lists_preserves_live_writes():
+    original = [1, 2]
+    raw = {"values": original}
+    with ScriptRunner(host_data=lambda object_id: raw,
+                      background_io=False) as runner:
+        result = runner.handle_script("""
+            obj: host-object 'id:probe'
+            saved: obj.values
+            combined: saved + #[3]
+            #[is-list saved, saved = #[1, 2]]
+        """)
+        assert result.status == "ok", result.error_message
+        assert result.value == [True, True]
+        assert raw["values"] is original and original == [1, 2]
+        raw["values"] = [4, 5]
+        result = runner.handle_script("""
+            saved[0]: 9
+            ~saved[1]
+            combined[0]: 7
+            #[saved = #[9], #[9] != saved, combined]
+        """)
+        assert result.status == "ok", result.error_message
+        assert result.value == [True, False, [7, 2, 3]]
+        assert raw["values"] == [9] and original == [1, 2]
+        saved = runner.scope["saved"]
+        assert saved == [9] and [9] == saved
+        saved.append(8)
+        assert raw["values"] == [9, 8]
+
+
+def test_live_host_list_equality_is_reflexive_for_cycles():
+    raw = []
+    raw.append(raw)
+    with ScriptRunner(host_data=lambda object_id: raw,
+                      background_io=False) as runner:
+        result = runner.handle_script("""
+            saved: host-object 'id:probe'
+            #[saved = saved, saved != saved]
+        """)
+        assert result.status == "ok", result.error_message
+        assert result.value == [True, False]
+
+
+def test_concatenated_host_lists_keep_nested_elements_live():
+    raw = {"values": [{"n": 1}]}
+    with ScriptRunner(host_data=lambda object_id: raw,
+                      background_io=False) as runner:
+        result = runner.handle_script("""
+            obj: host-object 'id:probe'
+            combined: #[] + obj.values
+            combined[0].n: 7
+        """)
+        assert result.status == "ok", result.error_message
+        assert raw == {"values": [{"n": 7}]}
+        raw["values"] = [{"n": 10}]
+        result = runner.handle_script("""
+            combined[0].n: + 1
+            combined: add combined #{n: 2}
+            len combined
+        """)
+        assert result.status == "ok", result.error_message
+        assert result.value == 2
+        assert raw == {"values": [{"n": 11}]}
+
+
 def test_rehydration_is_recursive_and_prototypes_are_runner_local():
     source = """
         as-slip #{

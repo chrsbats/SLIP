@@ -6,7 +6,7 @@ import pytest
 
 from slip.slip_core import (
     Code, Generic, Get, Group, Lambda, Parameter, Path, PathLiteral, Pipe,
-    Query, Scope, Sig, convert, evaluate, execute, invoke, language_scope,
+    Query, Scope, Sig, add, convert, evaluate, execute, invoke, language_scope,
 )
 
 
@@ -25,8 +25,8 @@ def test_direct_function_identity_and_reusable_lists():
     scope = language_scope()
     function = Lambda(Sig(["x"]), Code([[Path(["x"]), Path(["+"]), 1]]), scope)
     saved = function.stacks[0]
-    assert saved[1].target is operator.add
-    assert scope["core-add"] is operator.add
+    assert saved[1].target is add
+    assert scope["core-add"] is add
     assert isinstance(saved[0], Get)
     assert function(10, scope=scope) == 11
     assert function(20, scope=scope) == 21
@@ -129,7 +129,7 @@ def test_callable_arguments_are_non_greedy_and_nested_calls_are_explicit():
     ], scope)
     assert calls == []
     function, value = evaluate(list(reversed(expression)), scope)
-    assert function is operator.add
+    assert function is add
     assert value == 7
     assert calls == [1]
 
@@ -142,10 +142,10 @@ def test_pipe_values_can_be_passed_as_required_arguments():
 
     scope["identity"] = identity
     result = execute(Code([
-        [Path(["identity"]), Path(["add"], "pipe")],
+        [Path(["identity"]), Group([[Path(["add"], "pipe")]])],
     ]), scope)
     assert isinstance(result, Pipe)
-    assert result.target is operator.add
+    assert result.target is add
 
 
 def test_bare_return_exits_with_none():

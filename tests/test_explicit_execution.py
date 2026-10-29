@@ -1,7 +1,5 @@
 """Position selects calls; arguments retain values and deletion is exact."""
 
-import operator
-
 import pytest
 
 from slip import slip_core as core
@@ -92,7 +90,7 @@ def test_function_values_can_be_returned_explicitly_at_every_arity():
     core.execute(parse('keep: fn {value} [return value]'), scope)
     scope['zero'] = lambda: 7
     assert core.execute(parse('keep zero'), scope) is scope['zero']
-    assert core.execute(parse('keep add'), scope) is operator.add
+    assert core.execute(parse('keep add'), scope) is core.add
 
 
 def test_ungrouped_function_argument_is_not_a_nested_call():

@@ -15,7 +15,7 @@ from safer_yaml import dumps, loads
 
 from .slip_core import (
     Code, Collection, Failure, Generic, Get, IString, Lambda, Locator,
-    Parameter, Path, PathLiteral, Pipe, Scope, Sig, Template, bind,
+    Parameter, Path, PathLiteral, Pipe, Scope, Sig, Template, add, bind,
     convert_path, dereference, emit, execute, fail, get_path, invoke,
     is_function, is_list,
     language_scope, make_dict, make_list, resolve_type, resource_read,
@@ -24,12 +24,6 @@ from .slip_core import (
 
 
 SOURCE = files(__package__).joinpath("root.slip").read_text(encoding="utf-8")
-
-
-def add(left, right):
-    if isinstance(left, list) and not isinstance(right, list):
-        return [*left, right]
-    return left + right
 
 
 def extract_simple_param(sig):

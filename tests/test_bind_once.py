@@ -146,7 +146,7 @@ def test_one_native_call_boundary_per_operation():
     saved = core.convert([
         core.Path(["core-add"]), 1, 2, core.Path(["core-mul"], "pipe"), 3,
     ], scope)
-    assert saved[0] is operator.add
+    assert saved[0] is core.add
     with patch.object(
         core, "bind_signature", side_effect=AssertionError("sig"),
     ):

@@ -108,7 +108,7 @@ def test_dynamic_binders_reuse_lists_and_keep_captured_fallbacks(monkeypatch):
 def test_stable_function_scopes_keep_direct_callable_references():
     scope = core.language_scope()
     execute(parse('stable: fn {x} [core-add x 1]'), scope)
-    assert scope['stable'].methods[0].stacks[0][0] is operator.add
+    assert scope['stable'].methods[0].stacks[0][0] is core.add
 
 
 def test_equal_native_callables_keep_identity_specific_argument_readers():

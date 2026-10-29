@@ -732,6 +732,18 @@ def convert(expression, scope, locals=None, *, shadowed=(), dynamic=False):
                 result.append(value)
             case _:
                 result.append(term)
+        if (isinstance(term, Path) and term.mode == "get"
+                or is_function(term)):
+            following = expression[index + 1] \
+                if index + 1 < len(expression) else None
+            if isinstance(following, Path) and following.mode == "pipe":
+                # A bare callable before a pipe is its input, not a call.
+                value = result[-1]
+                if isinstance(value, Reference) and not value.piped:
+                    result[-1] = Get(value.read)
+                elif is_function(value) and not isinstance(value, Pipe):
+                    signature(value, scope)
+                    result[-1] = Get(lambda scope, value=value: value)
     for value in result:
         if isinstance(value, Pipe):
             value = value.target
@@ -1462,9 +1474,15 @@ def logical_or(first=_MISSING, second=_MISSING, *, stack, scope):
     return first
 
 
+def add(left, right):
+    if is_list(left) and not is_list(right):
+        return [*left, right]
+    return left + right
+
+
 def language_scope():
     functions = {
-        "add": operator.add, "sub": operator.sub, "mul": operator.mul,
+        "add": add, "sub": operator.sub, "mul": operator.mul,
         "div": operator.truediv, "eq": operator.eq, "ne": operator.ne,
         "lt": operator.lt, "le": operator.le, "gt": operator.gt,
         "ge": operator.ge, "pow": operator.pow,
@@ -1473,7 +1491,7 @@ def language_scope():
         f"core-{name}": function for name, function in functions.items()
     }})
     for name, function in {
-        "+": operator.add, "-": operator.sub, "*": operator.mul,
+        "+": add, "-": operator.sub, "*": operator.mul,
         "/": operator.truediv, "**": operator.pow, "=": operator.eq,
         "!=": operator.ne, "<": operator.lt, "<=": operator.le,
         ">": operator.gt, ">=": operator.ge,

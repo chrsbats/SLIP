@@ -49,9 +49,11 @@ Important mental model:
 - `{...}` is a sig literal used for parameter declarations and other metadata-like binding patterns
 - statements are separated by newlines or `;`
 - commas separate list, dict, and signature items, not calls or statements
-- a function at an expression head is called; missing arguments are errors
+- a function used as a call head is called; missing arguments are errors
 - function arguments stay values at every arity: `f time` passes the function,
   while `f (time)` passes its result
+- bare callable inputs before explicit `|` stay values: `time |format` passes the
+  function, while `(time) |format` passes its result
 
 Examples:
 
@@ -149,8 +151,8 @@ script order. Later rebinding affects new definitions. Parameters, local binding
 and data/member reads remain live; callable parameters select behavior per call.
 `op: |target` captures the callable target and pipe mode. Use an explicit quoted
 path with `call` when name lookup must remain late-bound. Capture does not invoke
-zero-argument functions; they execute at expression heads or in explicit groups,
-and stay values in argument positions. Use `return function` to return a callable
+zero-argument functions; they execute at call heads or in explicit groups,
+and stay values in argument and bare pipeline-input positions. Use `return function` to return a callable
 value and ``alias: core-function `function` `` to look one up without calling it.
 Extending the same generic object remains visible through its captured references.
 
@@ -299,6 +301,9 @@ take-method: fn {actor: Persona, object: Item, original-text} [
 
 take: command take-method |public
 ```
+
+The equivalent pipeline form is `take: take-method |command |public`; the bare
+method is passed into `command` without being invoked.
 
 `command` is implemented in SLIP. It projects prototype-typed parameters to the `` `id` `` refinement and hydrates them through `host-object`; `|public` only marks the resulting callable for exposure. The `id:` prefix is part of the canonical entity ID and is passed unchanged to exact host lookup. Overloaded methods remain overloaded after projection.
 

@@ -109,6 +109,23 @@ class LiveSequence(MutableSequence):
                 value, partial(member, self.read, index), self.scope,
             )
 
+    def __eq__(self, other):
+        if self is other:
+            return True
+        if not is_list(other):
+            return NotImplemented
+        return list(self) == list(other)
+
+    def __add__(self, other):
+        if not is_list(other):
+            return NotImplemented
+        return [*self, *other]
+
+    def __radd__(self, other):
+        if not is_list(other):
+            return NotImplemented
+        return [*other, *self]
+
     def insert(self, index, value):
         self.read().insert(index, value)
 
