@@ -1,0 +1,64 @@
+{
+  "scope": "approved strings and partial legacy behavior migration",
+  "python": "3.12.11",
+  "koine": "0.11.2",
+  "tests": {
+    "tests": 547,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "junit": {
+    "path": "/tmp/opencode/slip-strings-legacy-tests.xml",
+    "sha256": "e6b2cd6f7ef51db2da1f18e153931fb8ab8f2d7bccf6ccffc4a69896960dcfcd"
+  },
+  "sources": {
+    "slip/slip_core.py": "0aa788d9fb10d1035ee92d57e550a04f8c84c91eb2eaae6355d4900d7dc1c2e2",
+    "slip/slip_syntax.py": "f6e4813cc3860bfc6f25d67881a3b3310fd2070feb4251e4a9edee9a9b338c76",
+    "slip/slip_library.py": "1c6cfb18e63377083a03b218f2034bd01bbb0fbef0378f0926c264f8d55deb0f",
+    "slip/slip_resources.py": "fcb6f1d4d2008d2b8c541f67dde552038f936e8f2ef71ce30ef99583ddc9a82f",
+    "slip/slip_embedding.py": "edee32f5635bdf743b8806e812ff3e727f89d69b1d573c854dcca7858b5b51de",
+    "slip/slip_jobs.py": "301cca2047720af65c2b0f685e57c39edf6bec26a35f5b3b7b91525f376effb2",
+    "slip/slip_cache.py": "1a03e67810881df7f4995e2cbb223f048ada14f58ae7049c8f8dd13f1a08f62b",
+    "slip/slip_public.py": "3d2f7261bb577f26cbd82aaab1b5be946605b052a39708107b6c0f5593466237",
+    "grammar/slip_grammar.yaml": "32b1de16587d2869640720d8913210aedaed94c6a1e91fa6b3bd5391a52f5ab7",
+    "grammar/slip_path.yaml": "b8f3f9bcd64330e1b9290e77a9371ad81fb3e5efd41b1e44cdb27e6730f94259",
+    "grammar/slip_sig.yaml": "7432a523c8709930e088aa2556c29a67ed614b2828142afd062234893cda7d6c",
+    "independent/test_strings.py": "f12e54b64dca5e4b5bdd04e1baf5aad1333421aa9ea045620f3a0884775034ac",
+    "independent/test_documented_scripts.py": "60ec8bcf173c560b9f6f6706223a3a63a9ebbf5bdee9cf82e6faeabccd6ae839",
+    "independent/test_remaining_values.py": "d14af9500b299b76c67632401d6282d91dcdeb7cac82b4c242e38323de4f551b",
+    "independent/test_source_printing.py": "22811e7b55647009464024e654dce0426c743126b274e0ddb736524668361b33",
+    "independent/legacy/conftest.py": "5a54e48365a80be5f11da3bafc6def98952ca63cacb78da599918ca9909600e5",
+    "independent/legacy/test_chapter_001.py": "a136e04ee920269ab6fd7cbfcf6d20b5fa6f2687eca88f315feffe9c4b5479b6",
+    "independent/legacy/test_chapter_002.py": "bdf6f726873c55e1f65b22b20ea552367fe3fdb4adbddb156c01e155ecdb4922",
+    "independent/legacy/test_chapter_003.py": "9208f96f1c701f48fc1b1c43e43b1180f107e72b809527a10a45c3c270e1a248",
+    "independent/legacy/test_functions_and_controls.py": "d9fec2201ae4010fe4df2393963562c8d9530346df088d4cba36be0ba605cd91",
+    "independent/legacy/README.md": "ee19c797503d0bed51045973ce2b910a24f2168eac784feaa1e8bcdf2443f22d",
+    "independent/legacy/INVENTORY.md": "f7499bd1157495bda6618a676b8158ea5bf08064d7f68126d9a5ab2d12b612d9",
+    "docs/01 SLIP Scripting.md": "52e32e268d3ac64bdcb9799646e2ad3d0ef949f4d239a62a12ff99388daf260d",
+    "docs/02 SLIP Programs.md": "4559241546735ba4c1c94920d635d5dc664a2fe8141883ed72e9f08672dfdd9a",
+    "docs/04 SLIP Best Practices.md": "c17fa7e14329eb46387a36d6c2825ef0dfd2a3628c1d55a8c90bd5a619069b51",
+    "docs/Appendix A - StdLib Reference.md": "1da38c70576a677c3cca159b6a7daceca59a0e0d565e9478f39a6a85679c4728",
+    "plan/SPEC.md": "2f8f011218ac1dc86b1dd03aa8ff96cb584b8f38802fbfc169cd94345ae20c8c"
+  },
+  "fresh_probe": {
+    "values": [
+      "\n  padded\n",
+      "\nAda\n",
+      "Hello.\nWelcome."
+    ],
+    "types": [
+      "str",
+      "IString",
+      "IString"
+    ],
+    "printed_source_preserves_values": true,
+    "legacy_runtime_imported": false
+  },
+  "legacy_coverage": {
+    "collected_tests": 1474,
+    "collected_modules": 80,
+    "ported_checks": 107,
+    "migration_complete": false
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "scope": "signature-counted arguments and explicit grouping",
+  "tests": {
+    "tests": 643,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "argument_regressions": 24,
+    "ported_legacy_checks": 179
+  },
+  "junit": {
+    "path": "/tmp/opencode/slip-argument-consumption-tests.xml",
+    "sha256": "5cac4bca9a02ff3102dee877dde1d0bfda0d109083753751b7b4beccea2a53d0"
+  },
+  "sources": {
+    "slip/slip_core.py": "c058d204eba6933178a7c2a6b3fa51cae29946aa2765026809c991a412503da0",
+    "slip/slip_library.py": "463d9666df1380d3286fa011d0348c20a7202cc41ffa6c0fb85e7bd86f98de60",
+    "slip/slip_syntax.py": "62a3a33f890b68c06c8f121a69dfdb71b965faa268331f2d359cbf7d951f57f0",
+    "slip/slip_embedding.py": "edee32f5635bdf743b8806e812ff3e727f89d69b1d573c854dcca7858b5b51de",
+    "slip/slip_public.py": "3d2f7261bb577f26cbd82aaab1b5be946605b052a39708107b6c0f5593466237",
+    "slip/slip_resources.py": "fcb6f1d4d2008d2b8c541f67dde552038f936e8f2ef71ce30ef99583ddc9a82f",
+    "slip/slip_cache.py": "1a03e67810881df7f4995e2cbb223f048ada14f58ae7049c8f8dd13f1a08f62b",
+    "slip/slip_jobs.py": "301cca2047720af65c2b0f685e57c39edf6bec26a35f5b3b7b91525f376effb2",
+    "independent/test_argument_consumption.py": "d84b560cf4a807338f434197293ab25679053961632072295b1e6005308f83bd",
+    "independent/test_public_api.py": "2ee08972b84be84d23a6d73e6a7a363fe11600d018c48a9040371bb65b83bf79",
+    "independent/test_schema_refs_examples.py": "4950d020b89993cb98b0e1103df340764434e62292ca950ce0bd2dff65013f56",
+    "independent/legacy/test_advanced.py": "f0c3997c0f19a15c9a7072720fadd171e7905cad1e9f5c60528abc98f995afa4",
+    "independent/legacy/test_examples_reflection.py": "3202dc7b80d980928dc2bc3d769e66fd9d89bf2fddabb2a00b954e6ee90a965b",
+    "independent/legacy/README.md": "a114e4e164102280715cbd80c0ec24a69ec146f2358746c535eb423362cb2244",
+    "docs/01 SLIP Scripting.md": "29c67f6cf14abcc3469e982cf609ed624a1b20d3dd3ef9bfc4b60b539f24a7fe",
+    "docs/02 SLIP Programs.md": "3e124ab85a73d328101cb9576edd1d4474728e4d3ca3e4c7e08ff4806a65d4ae",
+    "docs/03 SLIP Advanced.md": "fa3776d57a510a3e6ba31c6acad51a7d79d13c632ecb62daad261e90ff121645",
+    "docs/04 SLIP Best Practices.md": "3a5f9de386fba3f6c695d71bb9589299e54684fa0b2aa383294b62519c2e29c5",
+    "docs/Appendix A - StdLib Reference.md": "1f6b5aa0171a6c9eea7297f2e5da566ed0a4219c64505fb5441fdb1c05a83c73",
+    ".agents/skills/slip/SKILL.md": "d086629080111083ebe58b7db830386b14484a4b7d4dbe55884e0140062da644",
+    "plan/SPEC.md": "9667c969c9cf3f3d6c1a86988dfb6429988419a5bbaf4afbc4c13085468c0c8c",
+    "plan/interpreter_plan.py": "dc5cc62d8fe94ce5d31ed540dfe4e212d0422321dfe40636515db383268f1ae5"
+  },
+  "probe": {
+    "source": "four: fn {a, b, c, d} [a + b + c + d]; twice: fn {x} [x * 2]; results: #[four 1 2 (twice 3) 4, 1 |four 2 (twice 3) 4]; example four {a: 1, b: 2, c: 6, d: 4 -> 13}; #[results, test four]",
+    "value": [[13, 13], 1]
+  },
+  "verification": {
+    "flake8": "passed",
+    "git_diff_check": "passed",
+    "pseudocode_empty_ast": true,
+    "baseline_runtime_change": "only slip_core.py: removed six-line cross-call look-ahead"
+  }
+}

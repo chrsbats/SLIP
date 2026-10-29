@@ -1,0 +1,242 @@
+"""Same real mechanics/workloads across the async-to-sync contract change."""
+
+import argparse
+import asyncio
+import copy
+import cProfile
+import hashlib
+import importlib.metadata
+import inspect
+import json
+import platform
+import pstats
+import shutil
+import statistics
+import sys
+import time
+from pathlib import Path
+
+WORKSPACE = Path(__file__).resolve().parents[1]
+FILES = ["slip/" + name for name in (
+    "slip_core.py", "slip_library.py", "slip_syntax.py", "slip_embedding.py",
+    "slip_resources.py", "slip_cache.py",
+)] + ["grammar/" + name for name in (
+    "slip_grammar.yaml", "slip_path.yaml", "slip_sig.yaml",
+)]
+PROGRAM = """
+sum: fn {n} [total: 0; for {i} 0 n [total: + i]; total]
+sum-while: fn {n} [
+    i: 0; total: 0
+    while [i < n] [total: + i; i: + 1]
+    total
+]
+increment: fn {x} [x + 1]
+calls: fn {n} [
+    i: 0; total: 0
+    while [i < n] [total: increment total; i: + 1]
+    total
+]
+query: fn {players, limit} [players[.hp < limit].hp]
+attack: fn {actor, target} [
+    damage: actor.strength * 2 + actor.weapon - target.armor
+    if [damage < 1] [damage: 1]
+    target.hp: target.hp - damage
+    emit 'combat' #{damage: damage, hp: target.hp}
+    damage
+]
+"""
+
+
+def source_files(root):
+    worker = "slip/slip_jobs.py"
+    return FILES + ([worker] if (root / worker).exists() else [])
+
+
+async def async_batch(invoke, function, args, scope, count):
+    for _ in range(count):
+        value = await invoke(function, args, scope)
+    return value
+
+
+def sync_batch(invoke, function, args, scope, count):
+    for _ in range(count):
+        value = invoke(function, args, scope)
+    return value
+
+
+def python_attack(actor, target, effects):
+    damage = actor["strength"] * 2 + actor["weapon"] - target["armor"]
+    if damage < 1:
+        damage = 1
+    target["hp"] = target["hp"] - damage
+    effects.append({"topics": ["combat"],
+                    "message": {"damage": damage, "hp": target["hp"]}})
+    return damage
+
+
+def python_batch(function, args, count):
+    for _ in range(count):
+        value = function(*args)
+    return value
+
+
+async def measure(root):
+    sys.path.insert(0, str(root / "slip"))
+    from slip_core import Scope, execute, invoke
+    from slip_embedding import ScriptRunner
+    from slip_library import SOURCE, library_scope
+    from slip_syntax import parse
+
+    asynchronous = inspect.iscoroutinefunction(invoke)
+    start = time.perf_counter()
+    library, program = parse(SOURCE), parse(PROGRAM)
+    parse_ms = (time.perf_counter() - start) * 1000
+    setup = []
+    for _ in range(7):
+        start = time.perf_counter()
+        scope = Scope(parent=library_scope())
+        if asynchronous:
+            await execute(library, scope.root)
+            await execute(program, scope)
+        else:
+            execute(library, scope.root)
+            execute(program, scope)
+        setup.append((time.perf_counter() - start) * 1000)
+    players = [{"hp": i} for i in range(40)]
+    actor, target = {"strength": 12, "weapon": 5}, {"armor": 8, "hp": 10**12}
+    original = copy.deepcopy((players, actor, target))
+    python_actor, python_target = copy.deepcopy((actor, target))
+    python_effects = []
+    cases = [("sum", [1000], 499500), ("sum-while", [1000], 499500),
+             ("calls", [1000], 1000),
+             ("query", [players, 20], list(range(20))),
+             ("attack", [actor, target], 21),
+             ("python-attack",
+              [python_actor, python_target, python_effects], 21)]
+
+    async def run(case, count):
+        name, args, _ = case
+        if name == "python-attack":
+            value = python_batch(python_attack, args, count)
+        elif asynchronous:
+            value = await async_batch(invoke, scope[name], args, scope, count)
+        else:
+            value = sync_batch(invoke, scope[name], args, scope, count)
+        return value
+
+    results = {}
+    for case in cases:
+        assert await run(case, 3) == case[2]
+        start = time.perf_counter()
+        value = await run(case, 1)
+        elapsed = time.perf_counter() - start
+        assert value == case[2]
+        results[case[0]] = {"batch": max(1, round(0.1 / elapsed)),
+                            "samples_us": []}
+    for sample in range(7):
+        for offset in range(len(cases)):
+            case = cases[(sample + offset) % len(cases)]
+            result = results[case[0]]
+            start = time.perf_counter()
+            value = await run(case, result["batch"])
+            elapsed = time.perf_counter() - start
+            result["samples_us"].append(
+                elapsed * 1e6 / result["batch"],
+            )
+            assert value == case[2]
+    for case in cases:
+        profile = cProfile.Profile()
+        profile.enable()
+        value = await run(case, 1)
+        profile.disable()
+        assert value == case[2]
+        counts = {}
+        stats = pstats.Stats(profile).stats
+        for (filename, _, function), entry in stats.items():
+            if filename == str(root / "slip/slip_core.py"):
+                counts[function] = counts.get(function, 0) + entry[1]
+        result = results[case[0]]
+        result["profile_calls"] = counts
+        result["median_us"] = statistics.median(result["samples_us"])
+    assert (players, actor) == original[:2]
+    for name, state, effects in (
+        ("attack", target, scope.effects),
+        ("python-attack", python_target, python_effects),
+    ):
+        count = 5 + 7 * results[name]["batch"]
+        assert state == {"armor": 8, "hp": 10**12 - 21 * count}
+        assert len(effects) == count
+        assert effects[0] == {"topics": ["combat"],
+                              "message": {"damage": 21, "hp": 10**12 - 21}}
+        assert effects[-1]["message"] == {"damage": 21, "hp": state["hp"]}
+    runner_setup = []
+    for _ in range(7):
+        start = time.perf_counter()
+        runner = ScriptRunner()
+        constructed = time.perf_counter()
+        if asynchronous:
+            result = await runner.handle_script("2 + 3")
+        else:
+            result = runner.handle_script("2 + 3")
+        executed = time.perf_counter()
+        assert result.status == "ok" and result.value == 5
+        if asynchronous:
+            await runner.close()
+        else:
+            runner.close()
+        closed = time.perf_counter()
+        runner_setup.append({"construct": (constructed - start) * 1000,
+                             "first_script": (executed - constructed) * 1000,
+                             "close": (closed - executed) * 1000})
+    assert not any(n == "slip" or n.startswith("slip.") for n in sys.modules)
+    files = source_files(root)
+    return {
+        "execution": "async" if asynchronous else "sync",
+        "python": platform.python_version(),
+        "koine": importlib.metadata.version("koine"),
+        "workload_sha256": hashlib.sha256(PROGRAM.encode()).hexdigest(),
+        "harness_sha256": hashlib.sha256(
+            Path(__file__).read_bytes(),
+        ).hexdigest(),
+        "parse_ms": parse_ms, "setup_ms": setup, "results": results,
+        "runner_setup_ms": runner_setup,
+        "source_sha256": {
+            p: hashlib.sha256((root / p).read_bytes()).hexdigest()
+            for p in files
+        },
+        "source_lines": {p: len((root / p).read_text().splitlines())
+                         for p in files},
+        "values_state_effects_verified": True, "inputs_unchanged": True,
+        "legacy_modules_loaded": False,
+        "comparison_scope": "independent async-to-sync; not frozen v0.2.1",
+        "loop_note": "sync removes cooperative yields by approved contract",
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-root", type=Path, default=WORKSPACE)
+    parser.add_argument("--snapshot", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if args.snapshot is not None:
+        args.snapshot.mkdir()
+        for name in source_files(args.source_root):
+            destination = args.snapshot / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(args.source_root / name, destination)
+            assert destination.read_bytes() == (
+                args.source_root / name
+            ).read_bytes()
+    report = asyncio.run(measure(args.source_root.resolve()))
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    assert json.loads(args.output.read_text()) == report
+    print(json.dumps({"execution": report["execution"],
+                      "runner_setup_median_ms": {
+                          key: statistics.median(row[key] for row in
+                                                 report["runner_setup_ms"])
+                          for key in ("construct", "first_script", "close")
+                      },
+                      "median_us": {k: v["median_us"]
+                                    for k, v in report["results"].items()}},
+                     indent=2))

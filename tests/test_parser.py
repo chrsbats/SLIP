@@ -250,7 +250,6 @@ TEST_CASES = [
                     {'tag': 'name', 'text': 'items'},
                     {'tag': 'query-segment', 'children': [
                         {'tag': 'slice-query', 'children': [
-                            {'tag': 'start-expr'},
                             {'tag': 'end-expr', 'children': [{'tag': 'expr', 'children': [{'tag': 'number', 'value': 3}]}]}
                         ]}
                     ]}
@@ -268,7 +267,6 @@ TEST_CASES = [
                     {'tag': 'name', 'text': 'items'},
                     {'tag': 'query-segment', 'children': [
                         {'tag': 'slice-query', 'children': [
-                            {'tag': 'start-expr'},
                             {'tag': 'end-expr'}
                         ]}
                     ]}

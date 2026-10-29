@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # This is the main section for your project's metadata.
 [project]
 name = "slip"
-version = "0.2.1"
+version = "0.3.0"
 authors = [
   { name="Chris Bates", email="1314008+chrsbats@users.noreply.github.com" },
 ]
@@ -26,14 +26,16 @@ classifiers = [
 # These are the libraries your project depends on.
 # uv/setuptools will automatically install these from the project metadata.
 dependencies = [
-    "koine>=0.11.1",
-    "pystache==0.6.8",
+    "koine>=0.11.2",
     "httpx==0.28.1",
     "xmltodict==0.14.2",
     "safer-yaml==0.1.1",
     "toml>=0.10.2",
     "jsonschema>=4.0.0",
 ]
+
+[project.scripts]
+slip = "slip.cli:main"
 
 [project.urls]
 "Homepage" = "https://github.com/chrsbats/SLIP"

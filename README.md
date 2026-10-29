@@ -88,11 +88,11 @@ SLIP's object model supports stateful domains where behavior is often clearer as
 Character: scope #{}
 Golem: scope #{} |inherit Character
 
-handle-effect: fn {target: Character, effect: `poison`} [
+handle-effect: fn {target: Character, effect |where effect = `poison`} [
     target.hp: target.hp - 5
 ]
 
-handle-effect: fn {target: Golem, effect: `poison`} [
+handle-effect: fn {target: Golem, effect |where effect = `poison`} [
     print "The Golem is immune to poison!"
 ]
 ```
@@ -107,7 +107,7 @@ SLIP unifies variable access, object properties, and data filtering into a singl
 
 ```slip
 -- A single expression to find the names of all active warriors with low health.
-wounded-warriors: players[.class = "Warrior" and .is-active = true and .hp < 50].name
+wounded-warriors: players[.class = "Warrior" and (.is-active = true) and (.hp < 50)].name
 ```
 
 This is SLIP's **unified path system**, where identity, location, and queries are a single, first-class concept.
@@ -127,11 +127,11 @@ for {i} 0 5 [
 
 This is possible because SLIP is **homoiconic**. It allows for powerful, runtime metaprogramming without a separate macro system.
 
-#### 4. User Scripts Can't Freeze Your Application
+#### 4. Explicit Background I/O
 
-SLIP is designed to be safely embedded in a host application. A user's script should not monopolize the host just because it launches a background loop.
+Local SLIP execution is synchronous and runs to completion. Python owns scheduling, timers, and local state changes.
 
-**How it works:** Background work runs through `task`, which integrates with the host event loop and keeps the async story focused on practical jobs like polling, timers, and maintenance work.
+**How it works:** Explicit `submit` calls run external I/O on one Runner-owned worker and return pollable native Futures. The interpreter never implicitly awaits a value. Local `task`/`sleep` suspension and resolver transaction authority remain deferred in this rewrite.
 
 ---
 
@@ -154,7 +154,7 @@ To read the full argument for this design, see **[Appendix C - Design Philosophy
 This project is a **stable alpha**. The Python implementation is the active reference runtime.
 
 - **Current:** Refine the language through the Python prototype and an interactive-fiction application that exercises its features together.
-- **Next:** Build a standalone Nim interpreter using native values and JSON-compatible interchange. See the [Nim port specification](nim/SPEC.md) and [implementation plan](nim/PLAN.md). The initial implementation does not require a JIT.
+- **Next:** Build a standalone Nim interpreter using native values and JSON-compatible interchange. The initial implementation does not require a JIT.
 - **Known Focus Area:** The current work is on persistence boundaries, host integration, and keeping the practical documentation aligned with the real runtime.
 
 ### Getting Started
@@ -187,37 +187,37 @@ This project is a **stable alpha**. The Python implementation is the active refe
     ```
     _(Note: Running `uv run python3 slip.py` with no arguments will start a REPL for interactive use.)_
 
+    Installed packages also provide `slip my-script.slip` and
+    `python3 -m slip my-script.slip`; omit the filename for the REPL.
+
 #### Embedding in Python
 
-SLIP is designed to be embedded. A key advantage is that it provides a safe, simple concurrency model that doesn't require you to manage Python's complex `async` model directly in your scripts.
+Use an ordinary context manager and synchronous calls. Keep one Runner alive when
+preloading mechanics for repeated calls; closing it cleans up its I/O worker.
 
 ```python
-import asyncio
 from slip import ScriptRunner
 
-async def main():
-    script = """
+script = """
         -- Find players with hp over a threshold and return their names
         strong-players: players[.hp > 100]
         strong-players.name
-    """
+"""
 
-    # Provide a context with some data for the script to use
-    context = {
+context = {
         "players": [
             {"name": "Karl", "hp": 120, "class": "Warrior"},
             {"name": "Jaina", "hp": 45, "class": "Mage"},
         ]
-    }
+}
 
-    runner = ScriptRunner()
+with ScriptRunner() as runner:
     runner.root_scope["players"] = context["players"]
-    result = await runner.handle_script(script)
+    result = runner.handle_script(script)
 
     if result.status == 'ok':
         print(f"Script succeeded! Strong players: {result.value}")
 
-asyncio.run(main())
 ```
 
 ### Agent Guidance

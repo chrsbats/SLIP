@@ -125,7 +125,8 @@ GET_PATH_TEST_CASES = [
             {"tag": "name", "text": "a"},
             {"tag": "query-segment", "children": [
                 {"tag": "slice-query", "children": [
-                    {"tag": "start-expr", "children": [{"tag": "expr", "text": "1"}]},
+                    {"tag": "start-expr", "children": [{"tag": "expr", "children": [
+                        {"tag": "expr", "text": "1"}]}]},
                     {"tag": "end-expr", "children": [{"tag": "expr", "text": "10"}]}
                 ]}
             ]}
@@ -146,7 +147,8 @@ GET_PATH_TEST_CASES = [
             {"tag": "name", "text": "a"},
             {"tag": "query-segment", "children": [
                 {"tag": "slice-query", "children": [
-                    {"tag": "start-expr", "children": [{"tag": "expr", "text": "1"}]},
+                    {"tag": "start-expr", "children": [{"tag": "expr", "children": [
+                        {"tag": "expr", "text": "1"}]}]},
                     {"tag": "end-expr", "children": [{"tag": "expr"}]}
                 ]}
             ]}
@@ -167,7 +169,8 @@ GET_PATH_TEST_CASES = [
             {"tag": "name", "text": "a"},
             {"tag": "query-segment", "children": [
                 {"tag": "slice-query", "children": [
-                    {"tag": "start-expr", "children": [{"tag": "expr", "text": "x "}]},
+                    {"tag": "start-expr", "children": [{"tag": "expr", "children": [
+                        {"tag": "expr", "text": "x "}]}]},
                     {"tag": "end-expr", "children": [{"tag": "expr", "text": " y+1"}]}
                 ]}
             ]}
@@ -267,7 +270,8 @@ PIPED_PATH_TEST_CASES = [
             {"tag": "name", "text": "b"},
             {"tag": "query-segment", "children": [
                 {"tag": "slice-query", "children": [
-                    {"tag": "start-expr", "children": [{"tag": "expr", "text": "i1"}]},
+                    {"tag": "start-expr", "children": [{"tag": "expr", "children": [
+                        {"tag": "expr", "text": "i1"}]}]},
                     {"tag": "end-expr", "children": [{"tag": "expr", "text": "i2"}]}
                 ]}
             ]},

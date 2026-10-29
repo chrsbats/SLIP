@@ -1,6 +1,6 @@
 ---
 name: slip
-description: Write idiomatic SLIP code for this repository using current runtime semantics, local rebinding, task-based background work, and explicit as-slip rehydration.
+description: Write idiomatic SLIP using synchronous execution, explicit background I/O, local rebinding, and explicit as-slip rehydration.
 ---
 
 # SKILL.md
@@ -49,6 +49,9 @@ Important mental model:
 - `{...}` is a sig literal used for parameter declarations and other metadata-like binding patterns
 - statements are separated by newlines or `;`
 - commas separate list, dict, and signature items, not calls or statements
+- a function at an expression head is called; missing arguments are errors
+- function arguments stay values at every arity: `f time` passes the function,
+  while `f (time)` passes its result
 
 Examples:
 
@@ -141,6 +144,16 @@ Use the clearest form for the task. Do not introduce extra temporaries unless re
 
 Use `fn {args} [body]`.
 
+Known lexical functions/operators are captured when the definition executes, in
+script order. Later rebinding affects new definitions. Parameters, local bindings,
+and data/member reads remain live; callable parameters select behavior per call.
+`op: |target` captures the callable target and pipe mode. Use an explicit quoted
+path with `call` when name lookup must remain late-bound. Capture does not invoke
+zero-argument functions; they execute at expression heads or in explicit groups,
+and stay values in argument positions. Use `return function` to return a callable
+value and ``alias: core-function `function` `` to look one up without calling it.
+Extending the same generic object remains visible through its captured references.
+
 Preferred style:
 
 - `kebab-case` for normal functions and values
@@ -201,6 +214,7 @@ Especially with imports:
 - treat imported modules as providers of definitions
 - customize locally by shadowing names
 - avoid action at a distance
+- delete only the addressed entry with `~path`; empty ancestor Scopes remain
 
 Example:
 
@@ -220,14 +234,14 @@ Use these as the default building blocks:
 - `create` for instances
 - `inherit` for prototype linkage
 - `with` for fluent configuration
-- `resolver` for authority-rooted transactional writes
+- `resolver` for future authority-rooted transactional writes (deferred in 0.3)
 - `ref` and `cell` for derived/observed values
 
 Use this rule of thumb:
 
 - plain dict/list when the data is local and does not need ownership rules
 - `scope`/prototype when many values share defaults or behavior shape
-- `resolver` when one place should own the truth for a domain and commit writes centrally
+- the host owns domain write policy in 0.3; resolver/`this` authority is deferred
 
 Example:
 
@@ -238,7 +252,7 @@ Player: scope #{} |inherit Character
 p: create Player |with [ hp: 150 ]
 ```
 
-MUD-shaped example:
+Future resolver example (not executable in 0.3):
 
 ```slip
 Combat: resolver #{
@@ -283,10 +297,10 @@ take-method: fn {actor: Persona, object: Item, original-text} [
     #[actor, object, original-text]
 ]
 
-take: take-method |command |public
+take: command take-method |public
 ```
 
-`|command` is implemented in SLIP. It projects prototype-typed parameters to the `` `id` `` refinement and hydrates them through `host-object`; `|public` only marks the resulting callable for exposure. The `id:` prefix is part of the canonical entity ID and is passed unchanged to exact host lookup. Overloaded methods remain overloaded after projection.
+`command` is implemented in SLIP. It projects prototype-typed parameters to the `` `id` `` refinement and hydrates them through `host-object`; `|public` only marks the resulting callable for exposure. The `id:` prefix is part of the canonical entity ID and is passed unchanged to exact host lookup. Overloaded methods remain overloaded after projection.
 
 ### Signature reflection
 
@@ -301,7 +315,7 @@ adapter: fn (sig description) [
 ]
 ```
 
-Python internals call the corresponding field `SigParameter.annotation`. `.positional`, `.keywords`, and `.param-order` are derived compatibility views, not independent storage. Prefer `.parameters` in new SLIP metaprogramming.
+Python internals call the corresponding field `Parameter.annotation`. `.positional`, `.keywords`, and `.param-order` are derived views, not independent storage. Prefer `.parameters` in new SLIP metaprogramming.
 
 ## 12. Host integration
 
@@ -326,17 +340,17 @@ Conceptually:
 
 <!-- slip-test: fragment -->
 ```python
-runner = ScriptRunner(host_data=load_from_db)
+with ScriptRunner(host_data=load_from_db) as runner:
 
-await runner.handle_script("""
-attack: fn {attacker, target} [
-    Combat |apply-damage target.id 10
-]
-""")
+    runner.handle_script("""
+    attack: fn {attacker, target} [
+        target.hp: target.hp - 10
+    ]
+    """)
 
-await runner.handle_script(
-    "attack (host-object 'id:player-1') (host-object 'id:goblin-1')"
-)
+    runner.handle_script(
+        "attack (host-object 'id:player-1') (host-object 'id:goblin-1')"
+    )
 ```
 
 Prefer a narrow gateway over exposing a large host graph directly.
@@ -380,26 +394,21 @@ When the data comes from the host persistence boundary, prefer:
 
 ## 14. Background work
 
-Use `task` for background work.
+Local evaluation is synchronous and runs to completion. The host owns timers,
+scheduling and local state changes. Use `submit` for external I/O and poll its
+native Future; collect a completed result before applying local changes.
 
-Good uses:
-
-- maintenance jobs
-- polling
-- timers
-- periodic checks
-- host-managed background jobs
-
-Example:
-
+<!-- slip-test: fragment -->
 ```slip
-task [
-    loop [
-        sleep 60
-        print "tick"
-    ]
-]
+job: submit `https://example.test/data`
+if [job-done job] [data: job-result job]
 ```
+
+Each Runner owns one worker by default; `ScriptRunner(background_io=False)` opts
+out and rejects submission while retaining foreground HTTP. Use `with` in Python, or
+call `runner.close()` at host shutdown. Native async functions must be submitted
+explicitly. Local SLIP `task`/`sleep` suspension and resolver transactions remain
+deferred; do not use them as working features of the synchronous runtime.
 
 ### Randomness
 
@@ -428,6 +437,10 @@ Use:
 - `inject` to insert one value into code
 - `splice` to insert many values or statements
 - `call` for runtime-selected targets
+
+`call` always invokes; omitted args mean zero args. Construct paths with `to-path`.
+`(inject function)` inserts a callable value; group a call explicitly when its
+result is wanted, such as `(inject (add 1 2))`.
 
 Prefer the smallest powerful tool:
 
@@ -461,7 +474,7 @@ Avoid these:
 - forgetting that `[...]` is code, not an eager list literal
 - forgetting that `#{...}` and `#[...]` are data constructors while `dict [...]` and `list [...]` are function forms
 - treating plain dicts as typed scopes without `as-slip`
-- overcomplicating background work instead of using `task`
+- calling async host operations directly instead of explicitly submitting I/O
 
 ## 18. Good defaults checklist
 

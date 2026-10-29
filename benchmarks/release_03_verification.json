@@ -1,0 +1,214 @@
+{
+  "version": "0.3.0",
+  "tests": {
+    "current": {
+      "tests": 1471,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "junit_sha256": "06043f7894dd1e9ddbaed472805ccf57203f4255304331027b38623e5acdd612"
+    },
+    "wheel": {
+      "tests": 260,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "junit_sha256": "6ecf97ed263e07875e012c64514baa26d2fc73a4c2201d0081834d7871ef297e"
+    },
+    "sdist": {
+      "tests": 260,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "junit_sha256": "6eee66d52e71cb31cf1e8b18fefb37dcbbea19846e74476322e35b6234a6f37f"
+    }
+  },
+  "artifacts": {
+    "artifacts": {
+      "slip-0.3.0-py3-none-any.whl": {
+        "sha256": "87efd748f1b35782600fba98f788d3d1675c151f277e9abb12feb88e26b9afd8",
+        "files": 22
+      },
+      "slip-0.3.0.tar.gz": {
+        "sha256": "f08f436770d19ca51f3127a58c6a0deda19cde2443974f9bdce671862cda9f5f",
+        "files": 67
+      }
+    },
+    "frozen_sha256": {
+      "slip-0.2.1-py3-none-any.whl": "9af348f4a537895dfc2635891688f1283065d95d461f2816cdc87a64b779572b",
+      "slip-0.2.1.tar.gz": "3227eab0036a3dd9aa953c9b9dca722e3e4affa8227a1fd23ffd4af508150584"
+    },
+    "source_sha256": {
+      "slip/cli.py": "3bb11ea2874007334532e5ef57c5c53bb271137efb47228e5210bb0127756058",
+      "slip/root.slip": "425886c21f000e72617e5e3a945271e65e171fb2fcd848e67293250e92dea5d2",
+      "slip/slip_cache.py": "3b819ca6fa82331d0811095e6a290cfc88f478d64b014b2d06d90b10491bd4e8",
+      "slip/slip_core.py": "b2e01c21a2753d4ae8df91d7f18a1cb04b29c7760a4d7919c9b7189eab9b3119",
+      "slip/slip_embedding.py": "9f9debd77088193c6b4b238010699716fa75cbdaf0cca8477d845fccb63a29be",
+      "slip/slip_jobs.py": "301cca2047720af65c2b0f685e57c39edf6bec26a35f5b3b7b91525f376effb2",
+      "slip/slip_library.py": "88a9812b4e17c37715bb2dced34dcab88105ea69f20b6416cd2a124f514d2ccf",
+      "slip/slip_public.py": "2f1944a01375a4f6e23216f0ce8502123ee01bb6699b645df464af4b280f2253",
+      "slip/slip_resources.py": "70e2949d4fc2d38217b5d8faf5f1efcc0d403c0fa3b37994f263e01395315cb0",
+      "slip/slip_syntax.py": "d5979f43bcde321a37b586751adefaeac34ee7af83cc316c7b3c10914f6f7c9a",
+      "slip/__init__.py": "86a96eadd86246f92c22ea4d979c77981032e87ce025024d2e1d305688e9e310",
+      "slip/__main__.py": "0f7d54f3fbb1f79a85eb8110f11793db99da6f3c61ee979de5abe9a1b5f3fdb3",
+      "grammar/slip_grammar.yaml": "32b1de16587d2869640720d8913210aedaed94c6a1e91fa6b3bd5391a52f5ab7",
+      "grammar/slip_path.yaml": "b8f3f9bcd64330e1b9290e77a9371ad81fb3e5efd41b1e44cdb27e6730f94259",
+      "grammar/slip_sig.yaml": "7432a523c8709930e088aa2556c29a67ed614b2828142afd062234893cda7d6c",
+      "grammar/__init__.py": "86f7b8fa7162b17d6da57417f3f9785865344b8619313a8a1fc40da8d2aaf51d"
+    },
+    "wheel_and_sdist_installed_source_match": true,
+    "legacy_modules_and_nim_absent": true
+  },
+  "source_sha256": {
+    ".agents/skills/slip/SKILL.md": "aac83903f4c1ab86c18528b08610bb1d2ed4f07a5d0fe03efe610205001b6f22",
+    "README.md": "2df78a95f0633d790a787ea64c63a32d923fb2516bf0e3dc2f6f90629062b83c",
+    "docs/01 SLIP Scripting.md": "580cc6d33a0ccca030f5d86b86d88066abe43e82dd32703afa2bbff60af24ed5",
+    "docs/02 SLIP Programs.md": "5c46b0ccce27978e88e6539ae883177678dad06b07345eec29c54e76ebba6f8a",
+    "docs/03 SLIP Advanced.md": "ff9e943582f35458c166c907af345831b5c340d4e8c6f38b07629d809def69f8",
+    "docs/04 SLIP Best Practices.md": "03c74d5ed0cc02694af796abe6d44343c544a94e207c0ea20a6bf716b319c393",
+    "docs/Appendix A - StdLib Reference.md": "26113e33530cd22e945f682e5ccfee968d7046266aff90bbc4ffabf6fb948ed2",
+    "docs/Appendix B - SLIP Style Guide.md": "50228b399d07eb9f299e27bfd57ebe144fc2eef66ae554185d8b736c0ab7d51a",
+    "docs/Appendix C - Design Philosophy.md": "2b3892e8cb8a8b1dfd2ef48d86b502c5a0e82c0a533a2e772209cfc14b04e440",
+    "grammar/__init__.py": "86f7b8fa7162b17d6da57417f3f9785865344b8619313a8a1fc40da8d2aaf51d",
+    "grammar/slip_grammar.yaml": "32b1de16587d2869640720d8913210aedaed94c6a1e91fa6b3bd5391a52f5ab7",
+    "grammar/slip_path.yaml": "b8f3f9bcd64330e1b9290e77a9371ad81fb3e5efd41b1e44cdb27e6730f94259",
+    "grammar/slip_sig.yaml": "7432a523c8709930e088aa2556c29a67ed614b2828142afd062234893cda7d6c",
+    "plan/SPEC.md": "6632ee67c778e954839d6f267848578efd1a188ded0d23f4de21f992ce07b60a",
+    "plan/interpreter_plan.py": "347b635a45279507141c88c97041009d1836c6d2058572b88b5c9ede6eeb39a7",
+    "pyproject.toml": "a202ed557f8f1a465a3351c1f411fbe0e28380584f40f8a55fcf84ce629f379a",
+    "slip/.pytest_cache/README.md": "73fd6fccdd802c419a6b2d983d6c3173b7da97558ac4b589edec2dfe443db9ad",
+    "slip/__init__.py": "86a96eadd86246f92c22ea4d979c77981032e87ce025024d2e1d305688e9e310",
+    "slip/__main__.py": "0f7d54f3fbb1f79a85eb8110f11793db99da6f3c61ee979de5abe9a1b5f3fdb3",
+    "slip/cli.py": "3bb11ea2874007334532e5ef57c5c53bb271137efb47228e5210bb0127756058",
+    "slip/root.slip": "425886c21f000e72617e5e3a945271e65e171fb2fcd848e67293250e92dea5d2",
+    "slip/slip_cache.py": "3b819ca6fa82331d0811095e6a290cfc88f478d64b014b2d06d90b10491bd4e8",
+    "slip/slip_core.py": "b2e01c21a2753d4ae8df91d7f18a1cb04b29c7760a4d7919c9b7189eab9b3119",
+    "slip/slip_embedding.py": "9f9debd77088193c6b4b238010699716fa75cbdaf0cca8477d845fccb63a29be",
+    "slip/slip_jobs.py": "301cca2047720af65c2b0f685e57c39edf6bec26a35f5b3b7b91525f376effb2",
+    "slip/slip_library.py": "88a9812b4e17c37715bb2dced34dcab88105ea69f20b6416cd2a124f514d2ccf",
+    "slip/slip_public.py": "2f1944a01375a4f6e23216f0ce8502123ee01bb6699b645df464af4b280f2253",
+    "slip/slip_resources.py": "70e2949d4fc2d38217b5d8faf5f1efcc0d403c0fa3b37994f263e01395315cb0",
+    "slip/slip_syntax.py": "d5979f43bcde321a37b586751adefaeac34ee7af83cc316c7b3c10914f6f7c9a",
+    "tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/conftest.py": "31b9daf0e08a8174163441b66d8528fc221c41275a23bbce08f42f94845b5785",
+    "tests/legacy/INVENTORY.md": "d326c06658a6862ddc9c7752459c25947d25e9f5cd7cdf49cf6570d0be3f7775",
+    "tests/legacy/README.md": "ab67d06ee0315d6275f70e68fe7622173983b6beaea315e414799a06a2e54506",
+    "tests/legacy/test_advanced.py": "b95a1fbd88486ffab90c555ed0bfe470d6e61d0a28361aa176735295c6c074c0",
+    "tests/legacy/test_boundary_contracts.py": "0e53ed8b1c999315775357d7d1b4211fced219259b7bf4d408b643cbcc3f73aa",
+    "tests/legacy/test_capture_and_evaluation.py": "933ffab054ec48a913c6d1ff9d2018c2588105187fb4ca354e35d79a2f3f85ab",
+    "tests/legacy/test_chapter_001.py": "e3dace1c424bb58926aba1c39675c84dbfddb5366c335a201360d6357d0fe34c",
+    "tests/legacy/test_chapter_002.py": "84f10d413dc1295172fb5d1210a5f3786bec9485dba0b88270206b170aeff70d",
+    "tests/legacy/test_chapter_003.py": "ed5366da5f891dad57b379894e4771ea37ed97948b67ebb04d87af5be07aaa5f",
+    "tests/legacy/test_examples_reflection.py": "2c444d167b3e50285586fb8c0300fcbecbaa87f45b66e4d8d058fc3864d54353",
+    "tests/legacy/test_execution_composition.py": "b6b038c9e280ad74e60a9766eaaf0a7f36118b56a33f140d88390fab1cdbc3a3",
+    "tests/legacy/test_focused_contracts.py": "672e272002dbf353bf9360bfaef9353bbd9187647e5c300daa806313b3a47420",
+    "tests/legacy/test_functions_and_controls.py": "e146ca41db34e5b457b7535b6129366c4c0ab91674d30b2564b805669af43f37",
+    "tests/legacy/test_host_effects.py": "1bfe57d015e5f5fe4be6b36d717b1fcfa16005f7eb02b59ede96fd7a88f6562d",
+    "tests/legacy/test_metaprogramming.py": "bf07c0beb1290d3234fab789fd18ab87ea04c669d96a58959a79e84a1c11f38b",
+    "tests/legacy/test_persistent_data.py": "40912181f54ba3bec96dbbb7c82328b1a3cd91eeea6450412b5a5f0016412c5c",
+    "tests/legacy/test_release_contracts.py": "0d3d3d4c5c272c6e708a1347f5d351c2df409b01b4c437b242b3f5ddcc685ffe",
+    "tests/legacy/test_resources_results.py": "cc0283da33d023d8c1e9449eeb5b6d543e13f6dd95b1e90505cae7f72af66bfa",
+    "tests/legacy/test_schemas.py": "99f65822f2e313ed2e50e823116f1bfa5b3fca82013a6442c8cea669a1c27d3f",
+    "tests/test_argument_consumption.py": "53de547ce43725c7b72f97e695ab1d438a30adf6736992b4c952ccbe264349e4",
+    "tests/test_as_slip.py": "e3f0e65f4993f20dfbb4ab37651488852a5f432067866f747160f56ecf415ec0",
+    "tests/test_bind_once.py": "2df569db04e11ad366456b35b8d0afb880db24ed240f358cdcf077c02f910c82",
+    "tests/test_code_cache.py": "2ed8e57d9f91b90851afd161f98081e18ad2151a5b27d85aadd9df5941424ce7",
+    "tests/test_core.py": "6e292372f7ec70567d713c384811bd82524069640e64bedc14be1cbe96e2d583",
+    "tests/test_dispatch_precedence.py": "94a84b054eb8715f2ec7b6491b285af3929bb8900d36aa083f4a5c5f445f22e8",
+    "tests/test_documentation_examples.py": "99b0d12c973605ae1dc9e66c34e4e9ee25aa0a8ee85821589c363aed619ed654",
+    "tests/test_documented_library.py": "cf555868d3461029d17ad6512ddd7fb5197533b1262792224c921d9453c5820c",
+    "tests/test_documented_metaprogramming.py": "8ac773c9d72a78a42f53da80c125f1b71ccdc978636206dfbbcbdeef3c2d73a7",
+    "tests/test_documented_scripts.py": "e71544255d7194d9d33ad54ba5ca3d7456b319bc033872a6fa828566a39064da",
+    "tests/test_embedding.py": "7a798fcb5245682901314277763262befabf7dc8e7b30b9cd896aa85f888f0b9",
+    "tests/test_explicit_execution.py": "759a80220981e8ba10bebe15523a0b1bdceeddcea96e3cc8fb4e44af4331320a",
+    "tests/test_file_resources.py": "de858f9f4220c1d0fb3078124c3a3adc9f5285421342f7201f8ccb3d7982f799",
+    "tests/test_host_views.py": "15cc95c95853c46ea85a115c02dc0b51f18a4ef8bb2dbd5bafc08285eb00bd4b",
+    "tests/test_http_resources.py": "6c51eaad6870227cd29ef97ef116f0f00491967841c5fcebd72aa2d02a75bc20",
+    "tests/test_io_jobs.py": "0676cfc24e6810066820ed7ea523c63589ab47ecfe156360d8b1453d717129e6",
+    "tests/test_membership.py": "786247ae670464c5f4755e1caa37980e522b37787e980c88c39419a1610e1b9e",
+    "tests/test_package_resources.py": "52d32b30fc649276aa7e9ce85f3a89cdb0578634c74b1e6bff04405273be89c5",
+    "tests/test_parser.py": "2d7e2641196e9b2bb1329193766b3e7ca8eecf7a4a646631d499bd904f1db2f1",
+    "tests/test_parser_paths.py": "095a1afe43201b3c1562ef718b141cfcc0309132ee0c6342b727d62d9dc1bc96",
+    "tests/test_parser_placeholder.py": "3648378772a8e649f0f8b04a655a0cc6b99b3de28db4f4c77cda416fe3b99b52",
+    "tests/test_parser_sig.py": "56511945b1212f4691bea575ed0f4686c3517fe8952232753363c1b4db007a51",
+    "tests/test_pop_core.py": "906f4524feafb0ed254f560432b0d563563c14aae092eba90c88187d359c08e4",
+    "tests/test_public_api.py": "f9fbedb059e0ead78e8a2e039c62a079fdb490719493655ca5f25e037f1f299d",
+    "tests/test_python_overhead_benchmark.py": "2a7b705db66fd4d653a413ef3bf53adac4a24310cb12a94daf1fba244726204e",
+    "tests/test_reducer_resolution.py": "f2b4e23558a8ad865d7e83bb314921a3f626d982d9c8a85067134c4a6ee56b65",
+    "tests/test_remaining_values.py": "6d96421d6474e2cb75b1f637cf4b6ad64623923a2cff851a45df872b7b02b40d",
+    "tests/test_repl.py": "11a571773aca6a53eccd0954dc0400559215bb07fa165e544feedb1696770115",
+    "tests/test_root_comment_and_sig_integration.py": "7908fdb7ae9b026d11d41c272bede19285b89896c357ee76fa731e3b148fad55",
+    "tests/test_root_slip.py": "bb4497ec3a907c647187a4350f31f44f1b5976a849b7389fd1bb75c31d4538a9",
+    "tests/test_runtime_http_and_import.py": "fda9f0003fb94cd5cddbe52628a4cf477b12666af6bdce3b5a1e37cdf6fa6a28",
+    "tests/test_runtime_primitives.py": "00ab7fae1d70d3f96a72b3335cb11c4860c68d9fe024dd0feaf23b2c7094d334",
+    "tests/test_schema_refs_examples.py": "beb09be16b83f078ecaa3f0c4f9e2567ddd998747b9536b93eb9b442f7141540",
+    "tests/test_scope_functions.py": "ddac86baa005f19c003ba965f5631e57ce2ac8d37185b17479dac6cccd85f9e5",
+    "tests/test_simple_model.py": "a08fe0af97c5c0e09a7353bab2bbe6fb42e8a4ad470e21cbb2bf76c1cb607e34",
+    "tests/test_source_diagnostics.py": "72b8fa8f725d5fb4425a2d0044ae21f3f43164e2b844b534cbbe2c151e940595",
+    "tests/test_source_printing.py": "083d365c6c7d06daa3a957138f40c5ff83d0b181669e999abfb15627a0a926bd",
+    "tests/test_strings.py": "9a7ac4c2f8c726313ebe82cc5b4d493f79f7662d782b1257586184ae17609af0",
+    "tests/test_sync_execution.py": "c7ed1d843f7dcde2e3a672cb4817c8ca641d64780c28d1a2a903c82c59df2a8f",
+    "tests/test_value_operations.py": "2f0ce5e38a81f88bc63b72c147c2ee0126c7c0e4e85fe382fcf51c107d81a3dd",
+    "uv.lock": "deb421667731063d276bdd2829200907926456857a45bcd2c1ca0cf0b14b05e5"
+  },
+  "benchmark_reports": {
+    "benchmarks/python_overhead_03_frozen.json": "a3de078e9ae2e2939339ac2e17e2c42be44d256defb34b40cca1506399fcdc5e",
+    "benchmarks/python_overhead_03_results.json": "507ce3a2444b723e88bda201d8ae3e095ecdc56e8831b778caac333d8c8204e1"
+  },
+  "warm_comparison": [
+    {
+      "name": "loop-sum",
+      "frozen_ms": 39.70656675,
+      "current_ms": 20.20943525,
+      "before_after_ratio": 1.9647539012749007,
+      "time_reduction_percent": 49.103040368001594,
+      "frozen_range_ms": [
+        38.96153575,
+        40.41913825
+      ],
+      "current_range_ms": [
+        20.090534,
+        20.357023125
+      ]
+    },
+    {
+      "name": "function-calls",
+      "frozen_ms": 64.7361935,
+      "current_ms": 30.65373375,
+      "before_after_ratio": 2.1118534540674023,
+      "time_reduction_percent": 52.64822954102175,
+      "frozen_range_ms": [
+        63.8805335,
+        65.487388
+      ],
+      "current_range_ms": [
+        30.362874,
+        30.878427
+      ]
+    },
+    {
+      "name": "traverse-objects",
+      "frozen_ms": 2.788722765625,
+      "current_ms": 1.708731453125,
+      "before_after_ratio": 1.632042741722151,
+      "time_reduction_percent": 38.72709492002715,
+      "frozen_range_ms": [
+        2.710828125,
+        2.79806690625
+      ],
+      "current_range_ms": [
+        1.6762963125,
+        1.7279486875
+      ]
+    }
+  ],
+  "workload_algorithms_match_v021": true,
+  "fresh_warm_calls_without_conversion": true,
+  "consumer_scope": "Disposable serial host/state/commands with pending I/O; no Domain repository access or integration claim",
+  "scoped_reviews": {
+    "architecture": "ses_e87ab3408ffePkkuz9KZemN3OK: R1-R3 source-closed",
+    "behavior": "ses_e87de968effebqGpDfywatDw7s: B/G/C source-closed"
+  },
+  "lint_scope": "Runtime, new/changed native tests and warm harness pass; unchanged original parser tests retain pre-existing lint findings",
+  "startup_in_performance_acceptance": false
+}

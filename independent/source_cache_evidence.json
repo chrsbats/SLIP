@@ -1,0 +1,83 @@
+{
+  "status": "independent source/cache increment verified",
+  "python": "3.12.11",
+  "koine": "0.11.2",
+  "verification": {
+    "pytest": {
+      "tests": 214,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "junit_path": "/tmp/opencode/slip-source-cache-tests.xml",
+    "junit_sha256": "d04b6b2cce880dd1f0dfcdf52fda12da386e5f02e9ee41b8f5b8b8d0cda2b4c2",
+    "scoped_flake8": "passed",
+    "pseudocode_ast": "empty module"
+  },
+  "fresh_probes": {
+    "symbolic_library_round_trip": true,
+    "koine_number_nodes": {
+      "-0.0": {
+        "value": -0.0,
+        "python_type": "float",
+        "sign": -1.0
+      },
+      "0.0": {
+        "value": 0.0,
+        "python_type": "float",
+        "sign": 1.0
+      },
+      "1.0": {
+        "value": 1.0,
+        "python_type": "float",
+        "sign": 1.0
+      }
+    },
+    "code_cache": {
+      "receiving_runner_values": [
+        13,
+        23
+      ],
+      "source_parses": 1,
+      "fresh_process_cross_path": {
+        "parser_bypassed": true,
+        "unbound": true,
+        "current_path_reattached": true
+      }
+    },
+    "legacy_modules_loaded": false
+  },
+  "source_sha256": {
+    "slip/slip_core.py": "a4749955c11226cc6c16b62cab0616b47b1389fdf8ff7d0d32100e648e5af6c5",
+    "slip/slip_library.py": "687b8ad61adbdfc44362c17fd6156afa7a508f9d6995307cfba91bcfd9cbff5b",
+    "slip/slip_syntax.py": "d527aa4d585589ac86c3c51b6267f7d2ca7b2d21a805777ac2c450e30809caa3",
+    "slip/slip_embedding.py": "03e41c01e76c19ca3aef1dc039cac4e3664cbca279f806a67a30757afa61dfb0",
+    "slip/slip_resources.py": "ff900f75cc8c39c1809d2f4ecbba67ac76f4118f2ec8d9692f25a125f0b6d2cb",
+    "slip/slip_cache.py": "9d8d74e8a195a0fc49bcfbfd4d4d2e4b8c7d2bead4fd7d53566b6c7e8dbc2857",
+    "independent/test_source_printing.py": "eb988ab44559ff988bdf102921269a97b312d07b275bc385f85646e7df724086",
+    "independent/test_code_cache.py": "eefea176bad155127939ab95d3a5a8f8e48ee81335faccfc38f8e0900aa19fc8",
+    "independent/benchmark_core.py": "a90582f38d7d66781d85aa8ad9d38b7d91382d745d5a6c06fbb442d1e7258224",
+    "grammar/slip_grammar.yaml": "cec2a68e029c8c654fcabcfaf7183d268eba6b19fd2dac79b8a5f4080bdf7161",
+    "grammar/slip_path.yaml": "223437614aa984f8b63706b7ccfc9b57d3371cff6da18fd81704f9a3f80ab746",
+    "grammar/slip_sig.yaml": "c8e109f161394599096249cd00fe45647587b450bed0d418eecb615e53e3f70a",
+    "pyproject.toml": "6b7e1baa9949f98c98032ef84e0b58712776fd31482880bee786d586635a34fe",
+    "uv.lock": "039a49cc70ab6740954229f40d67cbdb3d9363f485d18dced0a80458ccb6a80e"
+  },
+  "source_lines": {
+    "slip/slip_core.py": 1000,
+    "slip/slip_library.py": 301,
+    "slip/slip_syntax.py": 284,
+    "slip/slip_embedding.py": 281,
+    "slip/slip_resources.py": 354,
+    "slip/slip_cache.py": 181,
+    "independent/test_source_printing.py": 120,
+    "independent/test_code_cache.py": 348,
+    "independent/benchmark_core.py": 136,
+    "grammar/slip_grammar.yaml": 402,
+    "grammar/slip_path.yaml": 320,
+    "grammar/slip_sig.yaml": 188,
+    "pyproject.toml": 64,
+    "uv.lock": 1078
+  },
+  "performance_claim": null
+}

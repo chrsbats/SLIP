@@ -61,6 +61,9 @@ run-with [
 
 ## Use Resolvers For Authority
 
+Resolver/transaction execution is deferred in the synchronous runtime. The
+authority guidance here describes the intended design rather than a current API.
+
 Use resolvers when one place should own the truth for a domain.
 
 Good candidates:
@@ -97,7 +100,9 @@ apply-damage: fn {this: Combat, target-id, amount, kind |where kind = `fire`} [
 
 For host-backed verbs, keep the call shape natural. Actor-first signatures are fine, and typed parameters can appear after untyped parameters.
 
-Use raw strings for IDs and other values intended for `` `string` `` or `` `id` `` dispatch. Double-quoted strings are `` `i-string` `` values.
+Use single-quoted non-interpolated strings for IDs and other values intended for
+`` `string` `` or `` `id` `` dispatch. Double-quoted strings are `` `i-string` ``
+values. Both quote styles decode escapes such as `\n` and `\\`.
 
 Bad use is when the reader has to reverse-engineer which of ten overlapping methods will run before they can understand the rule.
 
@@ -132,7 +137,7 @@ take-method: fn {actor: Persona, object: Item, original-text} [
   object
 ]
 
-take: take-method |command |public
+take: command take-method |public
 ```
 
 The mechanics stay typed. The command adapter is the visible declaration that external entity IDs should be hydrated before invocation. Keep `id:` as part of the canonical entity ID everywhere; the adapter recognizes the refinement but passes the complete value unchanged to `host-object`.

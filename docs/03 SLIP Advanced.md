@@ -1,8 +1,96 @@
 # SLIP Advanced
 
+The public Python API uses synchronous, run-to-completion evaluation. A Runner
+owns a separate async I/O worker; explicit submissions return pollable jobs. Use
+ordinary `with`, `handle_script(...)` and `close()`. Local `task`/`sleep` suspension
+and resolver transaction authority remain deferred.
+
+## Background I/O jobs
+
+`from slip import ScriptRunner` provides `submit` alongside synchronous script
+execution. No separate runner or event-loop setup is needed.
+
+Submit an HTTP locator or a native async host function and receive a standard
+`concurrent.futures.Future`. Submission returns immediately; poll with `done()`
+and collect with `result()` after completion. Errors are raised on collection.
+
+<!-- slip-test: fragment -->
+```python
+job = runner.submit("https://example.test/data")
+
+# On a later host tick:
+if job.done():
+    value = job.result()
+```
+
+For native async operations, pass the function and an argument sequence:
+
+<!-- slip-test: fragment -->
+```python
+job = runner.submit(host.fetch, ["id:item-1"])
+```
+
+SLIP uses the same explicit submission boundary. Quote paths so submitting does
+not first perform an ordinary resource read or call the host function:
+
+<!-- slip-test: fragment -->
+```slip
+first: submit `https://example.test/first`
+second: submit `https://example.test/second`
+loaded: submit `fetch` #['id:item-1']
+
+if [job-done first] [data: job-result first]
+```
+
+`job-result` fails immediately when pending; it never blocks a host tick. Python's
+Future also provides `cancel()`. Assigning/passing job handles retains their identity.
+For PUT/POST, use the corresponding path suffix and supply one payload argument;
+for example, `submit 'https://example.test/items<-' #[data]`. GET/DELETE take none.
+Attached path metadata is evaluated in the submitting caller's scope, once; request
+encoding and metadata normalization happen before queueing. Submit locator paths
+without queries and apply collection queries after collecting the response.
+
+By default, each Runner starts one worker/event loop/client and reuses it, with at
+most 32 active operations. Ordinary HTTP reads still return decoded values and wait at the
+resource boundary; they share the owned session with background HTTP. File I/O and
+all local SLIP evaluation remain synchronous. Use the runner's ordinary context
+manager or call `close()` at host shutdown; it cancels pending jobs, waits for their
+cleanup, closes the owned client and joins the thread. Borrowed synchronous
+`http_client` instances retain their foreground behavior and caller ownership;
+background HTTP with that injection fails explicitly rather than using a different
+session. Native async functions are submitted explicitly, not called by evaluation.
+
+### Disable background I/O
+
+Background I/O is enabled by default. Use `background_io=False` for a Runner
+without a background worker, thread or event loop:
+
+```python
+from slip import ScriptRunner
+
+
+with ScriptRunner(background_io=False) as runner:
+    result = runner.handle_script("10 + 20")
+    assert result.status == "ok", result.error_message
+    assert result.value == 30
+```
+
+Foreground HTTP uses an owned synchronous client in this mode; files, modules,
+host calls and script execution work normally. Python and SLIP `submit` calls
+report that background I/O is disabled. Closing the Runner closes its owned
+client. An injected `http_client` remains caller-owned in either mode.
+
+Worker jobs perform external I/O and must return data to the host for local state
+changes. Calling back into the Runner's evaluator or blocking HTTP API from its
+I/O worker fails clearly. Local SLIP Code jobs, `task` and `sleep` are deferred.
+Future `slip://` calls to other processes can use this boundary; RPC is not yet
+implemented. Executable API examples are in `tests/test_io_jobs.py`.
+
+---
+
 Parts 1 and 2 teach the fast path for scripting and program design. This guide covers the features you reach for when:
 
-- a script needs to keep running in the background
+- an application needs overlapping external I/O
 - SLIP is embedded inside a Python application
 - host or database data needs to become a live SLIP object
 - you want to build your own control-flow helpers
@@ -12,57 +100,13 @@ These features are powerful, but they are not the default path. Reach for them w
 
 ---
 
-## How do I run background tasks?
+## Who schedules local work?
 
-The practical async story in SLIP is `task`.
-
-Use it for:
-
-- maintenance jobs
-- polling loops
-- periodic checks
-- cooldowns and timers
-- long-running watchers inside a host application
-
-### Launch a task
-
-```slip
-task [
-  sleep 0.01
-  print "done"
-]
-```
-
-### Use tasks for repeating work
-
-```slip
-task [
-  loop [
-    sleep 60
-    print "tick"
-  ]
-]
-```
-
-### What happens inside loops?
-
-Within task context, long `while` and `foreach` loops cooperate with the event loop so they do not monopolize execution.
-
-Task loops yield between iterations, so timers and watchers can share the event loop without introducing a second concurrency model. Blocking host operations still need to stay out of the task body.
-
-### Host-managed lifecycle
-
-If your script is running inside a `SLIPHost`, tasks can be tracked and canceled by the host.
-
-That makes `task` a good fit for embedded applications where background jobs belong to the host lifecycle.
-
-### Takeaway
-
-Use `task` when work should continue in the background without blocking the host.
-
-- for periodic work, combine it with `sleep`
-- keep tasks focused on one job
-- let the host manage long-lived task lifecycle
+Python owns timers, maintenance scheduling and local state changes. SLIP loops run
+to completion on the calling thread and do not yield. Use `submit` for native
+external I/O, then apply the completed data during a later host call. Local SLIP
+`task` and `sleep` currently raise unsupported-operation errors without executing
+a task body; they do not start background mechanics.
 
 ---
 
@@ -72,7 +116,8 @@ SLIP is designed to be embedded in a Python application.
 
 For many real uses, this is the main advanced feature: Python owns the engine, infrastructure, and persistence; SLIP owns game logic, rules, and moddable behavior.
 
-The Python examples in this section show statements inside an async function or async REPL.
+The Python examples use the synchronous public package. The context manager owns
+cleanup; long-lived applications can instead call `runner.close()` at shutdown.
 
 ### Run one script
 
@@ -82,8 +127,8 @@ Start with a `ScriptRunner` and inspect its result:
 from slip import ScriptRunner
 
 
-runner = ScriptRunner()
-result = await runner.handle_script("10 + 20")
+with ScriptRunner() as runner:
+    result = runner.handle_script("10 + 20")
 
 if result.status == "ok":
     print(result.value)
@@ -121,8 +166,9 @@ class CharacterHost(SLIPHost):
 
 
 host = CharacterHost()
-runner = ScriptRunner(host_object=host)
-runner.root_scope["obj"] = host
+with ScriptRunner(host_object=host) as runner:
+    runner.root_scope["obj"] = host
+    result = runner.handle_script("obj.hp: 80; take-damage 3; obj.hp")
 ```
 
 From SLIP, that object looks like ordinary path-accessible data:
@@ -161,21 +207,32 @@ registry = {
     "id:p1": {"name": "Player"},
     "id:goblin-1": {"name": "Goblin"},
 }
-runner = ScriptRunner(host_data=lambda object_id: registry[object_id])
-
-await runner.handle_script("""
+with ScriptRunner(host_data=registry.__getitem__) as runner:
+    runner.handle_script("""
 attack: fn {attacker, target} [
     print "attack!"
     return none
 ]
-""")
+    """)
 
-result = await runner.handle_script(
-    "attack (host-object 'id:p1') (host-object 'id:goblin-1')"
-)
+    result = runner.handle_script(
+        "attack (host-object 'id:p1') (host-object 'id:goblin-1')"
+    )
 ```
 
 This pattern keeps loaded SLIP mechanics available while Python manages the surrounding application.
+
+Known lexical callables, including exposed host methods, are captured when each
+function definition executes. Keep a stable host gateway whose backing data can
+change between calls; capturing the gateway does not snapshot its data. Rebinding
+a callable name does not redirect functions already defined against it. Define a
+new function or supply a callable parameter when behavior must change.
+
+Parsed and persistently cached Code contains syntax, not another runner's callable
+bindings. Each receiving runtime prepares its own function captures. Code bodies
+remain inspectable and editable; defining a new function establishes a new capture
+boundary. See [binding time](<01 SLIP Scripting.md#when-are-function-bindings-chosen>)
+for the distinction between captured behavior, live operands, and quoted paths.
 
 ### Expose a public command API to Python
 
@@ -189,10 +246,14 @@ take-method: fn {actor: Persona, object: Item, original-text} [
   object
 ]
 
-take: take-method |command |public
+take: command take-method |public
 ```
 
 `|command` projects entity parameters to the `` `id` `` refinement and hydrates them through `host-object`. `|public` marks the resulting function for host discovery.
+
+The adapter prepares its projected signatures and hydration closures once in the
+original definition environment. Invocations use ordinary calls with live host
+data, retaining that environment's prototypes and the caller's effects.
 
 Put those public adapters in a small command API module instead of exposing every imported definition:
 
@@ -201,9 +262,9 @@ Put those public adapters in a small command API module instead of exposing ever
 movement: import `file://movement.slip`
 combat: import `file://combat.slip`
 
-take: movement.take |command |public
-put: movement.put |command |public
-attack: combat.attack |command |public
+take: command movement.take |public
+put: command movement.put |public
+attack: command combat.attack |public
 ```
 
 Only names marked with `|public` become host-visible. Internal helpers stay inside their modules. An `` `id` `` is a string beginning with `id:` and is more specific than `` `string` `` during dispatch. Overloaded methods remain overloaded at the command boundary, and the original generic still performs typed dispatch and evaluates its `|where` guards after hydration.
@@ -217,12 +278,11 @@ Import the module from Python and generate JSON Schema for the host-facing comma
 from slip import ScriptRunner
 
 
-runner = ScriptRunner()
-commands = await runner.import_public_module("file://command-api.slip")
-
-schema = commands.json_schema(
-    host_parameters={"actor", "original-text"},
-)
+with ScriptRunner() as runner:
+    commands = runner.import_public_module("file://command-api.slip")
+    schema = commands.json_schema(
+        host_parameters={"actor", "original-text"},
+    )
 ```
 
 The schema describes one nested public call. By default, every JSON-compatible function parameter appears in the schema. Use `commands.commands_schema()` when you want an ordered list for compound input.
@@ -240,7 +300,7 @@ commands.validate_json_command(
     payload,
     host_parameters={"actor", "original-text"},
 )
-result = await commands.run_json_command(
+result = commands.run_json_command(
     payload,
     host_arguments={
         "actor": session.actor_id,
@@ -287,8 +347,8 @@ class WorldHost(SLIPHost):
     ...
 
     @slip_api_method
-    async def run_json_command(self, actor, command_json):
-        result = await self.commands.run_json_command(
+    def run_json_command(self, actor, command_json):
+        result = self.commands.run_json_command(
             command_json,
             host_arguments={
                 "actor": actor["id"],
@@ -483,6 +543,12 @@ A function's current scope has `meta.parent` pointing to its definition scope an
 helpers use the caller link to execute supplied blocks against caller-local
 bindings; ordinary function lookup remains lexical.
 
+Binding forms such as `foreach` and `for` declare the zero-based argument that
+introduces names in their callable metadata (`.meta.binds`). This lets preparation
+retain definition-time callable captures while observing nearer loop bindings,
+including runtime Sig values. Raw loop blocks are prepared once with those names;
+iterations reuse the prepared code rather than rebinding it.
+
 ### Constructor functions help here too
 
 The advanced forms `list [ ... ]` and `dict [ ... ]` are useful when you want to construct values from generated code.
@@ -537,16 +603,18 @@ This is the most advanced layer: build code at runtime, select targets dynamical
 It can:
 
 - call a function with a list of args
-- evaluate a runtime path value
-- build a path from a string
+- invoke a target resolved from a runtime path or string
 - perform dynamic assignment or deletion
+
+Omitting the argument list means a zero-argument call. `call` always invokes;
+use `to-path` when constructing path data.
 
 ```slip
 call add #[1, 2]
 ```
 
 ```slip
-p: call 'a.b'
+p: to-path 'a.b'
 eq p `a.b`
 ```
 
@@ -564,6 +632,9 @@ Use `call` when the target is only known at runtime. If the target is already st
 #### `inject`
 
 `inject` inserts one value into a code block.
+
+Its argument follows the ordinary value rule: `(inject add)` inserts the function,
+while `(inject (add 1 2))` inserts the result. Group nested expressions explicitly.
 
 ```slip
 my-var: 10

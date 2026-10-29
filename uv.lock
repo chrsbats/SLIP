@@ -297,17 +297,17 @@ wheels = [
 
 [[package]]
 name = "koine"
-version = "0.11.1"
+version = "0.11.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parsimonious" },
     { name = "safer-yaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/27/cc2db2a8ab90e4144025dce19443b65154cafb9f9ea15f060cc287ede360/koine-0.11.1.tar.gz", hash = "sha256:709552786ab60a1e7c56e52489a87242f0d080f698995a67de0de296cdb7a6d0", size = 146784, upload-time = "2026-10-23T11:44:25.905Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/a4/cffb66c9a21e257b897a4a5ce5ba0ae8b573a111946b819139d37357d77f/koine-0.11.2.tar.gz", hash = "sha256:c3bdf544f2f7aad8c2197eb40dea307aa4ad752954d79a7aca9c3c38b0dd83fb", size = 148099, upload-time = "2026-10-25T10:34:56.221Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/90/1590ed00560a0e8bac30367f27dbb06270b526821d2d2c04009d7c598f62/koine-0.11.1-py3-none-any.whl", hash = "sha256:9952bcd56dd3e1db983e6b534407b229e84d9829fa737bd11d3a14ccb901faa2", size = 28363, upload-time = "2026-10-23T11:44:16.022Z" },
-    { url = "https://files.pythonhosted.org/packages/cc/bd/dbf1bc0d1d70ebf14dca3b832db02ebe8bf2406ad16f0b741b78e848c21f/koine-0.11.1-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6626df3aaa683c7aa855a39df68fa37fdd15f9161e6eed872c5534e9de01cf3c", size = 799885, upload-time = "2026-10-23T11:44:20.971Z" },
-    { url = "https://files.pythonhosted.org/packages/56/2f/e3ca16135993ec1c434811afe3a6b7969c661bd1f5d4f7c374f3dae26039/koine-0.11.1-py3-none-win_amd64.whl", hash = "sha256:4bd8ebeb574795b8205d1d389c55ec828791854111a2acdf0e1567988d69296c", size = 584069, upload-time = "2026-10-23T11:44:24.188Z" },
+    { url = "https://files.pythonhosted.org/packages/84/6d/f9f60467e2e910eb59428110cd3fae05a83db2c37da088325c2bd7a6a18f/koine-0.11.2-py3-none-any.whl", hash = "sha256:d871db5ccddc70369d69fca7d33dc8396f3492a6f7aa5e556de4e1a1bd17de01", size = 28384, upload-time = "2026-10-25T10:34:50.78Z" },
+    { url = "https://files.pythonhosted.org/packages/33/51/4c24557b9f374a695a5f2feec8870d76877440a565088346e1154a297b30/koine-0.11.2-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:89905c0ce9305a4236665fcc867aab450279f0c7a42cca366f597fef5ad4ec58", size = 799945, upload-time = "2026-10-25T10:34:53.034Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/5f/3a205e043decf4e0e5c2593fcc707dae30a79326b5c1db7065ab75ae5898/koine-0.11.2-py3-none-win_amd64.whl", hash = "sha256:6c2bafd8643a4afdbd8879f1fe6bfe741e09b7703aa5900ad74bc88170ffc3d0", size = 581514, upload-time = "2026-10-25T10:34:54.898Z" },
 ]
 
 [[package]]
@@ -383,15 +383,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f", size = 4955991, upload-time = "2026-03-29T13:29:33.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
-]
-
-[[package]]
-name = "pystache"
-version = "0.6.8"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/85/89/0a712ca22930b8c71bced8703e5bb45669c31690ea81afe15f6cb284550c/pystache-0.6.8.tar.gz", hash = "sha256:3707518e6a4d26dd189b07c10c669b1fc17df72684617c327bd3550e7075c72c", size = 101892, upload-time = "2025-03-18T11:54:47.595Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/78/ffd13a516219129cef6a754a11ba2a1c0d69f1e281af4f6bca9ed5327219/pystache-0.6.8-py3-none-any.whl", hash = "sha256:7211e000974a6e06bce2d4d5cad8df03bcfffefd367209117376e4527a1c3cb8", size = 82051, upload-time = "2025-03-18T11:54:45.813Z" },
 ]
 
 [[package]]
@@ -940,13 +931,12 @@ wheels = [
 
 [[package]]
 name = "slip"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "koine" },
-    { name = "pystache" },
     { name = "safer-yaml" },
     { name = "toml" },
     { name = "xmltodict" },
@@ -971,8 +961,7 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = ">=4.0.0" },
-    { name = "koine", specifier = ">=0.11.1" },
-    { name = "pystache", specifier = "==0.6.8" },
+    { name = "koine", specifier = ">=0.11.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0.0" },

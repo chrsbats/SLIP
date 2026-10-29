@@ -1,0 +1,61 @@
+{
+  "scope": "examples, schemas, reflection and Code; partial legacy migration",
+  "python": "3.12.11",
+  "koine": "0.11.2",
+  "tests": {
+    "tests": 619,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "junit": {
+    "path": "/tmp/opencode/slip-metadata-metaprogramming-tests.xml",
+    "sha256": "57d59bb26ac32f7e0b778f16cd5d82aa64cbc2b87543033f621b0826afe8127d"
+  },
+  "sources": {
+    "slip/slip_core.py": "0aa788d9fb10d1035ee92d57e550a04f8c84c91eb2eaae6355d4900d7dc1c2e2",
+    "slip/slip_syntax.py": "62a3a33f890b68c06c8f121a69dfdb71b965faa268331f2d359cbf7d951f57f0",
+    "slip/slip_library.py": "463d9666df1380d3286fa011d0348c20a7202cc41ffa6c0fb85e7bd86f98de60",
+    "slip/slip_resources.py": "fcb6f1d4d2008d2b8c541f67dde552038f936e8f2ef71ce30ef99583ddc9a82f",
+    "slip/slip_embedding.py": "edee32f5635bdf743b8806e812ff3e727f89d69b1d573c854dcca7858b5b51de",
+    "slip/slip_jobs.py": "301cca2047720af65c2b0f685e57c39edf6bec26a35f5b3b7b91525f376effb2",
+    "slip/slip_cache.py": "1a03e67810881df7f4995e2cbb223f048ada14f58ae7049c8f8dd13f1a08f62b",
+    "slip/slip_public.py": "3d2f7261bb577f26cbd82aaab1b5be946605b052a39708107b6c0f5593466237",
+    "grammar/slip_grammar.yaml": "32b1de16587d2869640720d8913210aedaed94c6a1e91fa6b3bd5391a52f5ab7",
+    "grammar/slip_path.yaml": "b8f3f9bcd64330e1b9290e77a9371ad81fb3e5efd41b1e44cdb27e6730f94259",
+    "grammar/slip_sig.yaml": "7432a523c8709930e088aa2556c29a67ed614b2828142afd062234893cda7d6c",
+    "tests/test_chapter_008.py": "790491a792f80a2e8c54a72386fd4d93129aac61f6233428e33fc7c5992211bb",
+    "tests/test_chapter_009.py": "6909cdfc4d5bf013a09839f13f3c658a26eeb94a6d66c8da149c414566c20370",
+    "tests/test_chapter_010.py": "022eb0de4828f070e14f8e3fee2d4e63de9fa22b19dceaa37a947d5b3432a0f7",
+    "tests/test_test_framework.py": "309d73dea70a6c4bf39655fe7085c3c43b24ec2494c6c69374f17a40bd8cfad3",
+    "tests/test_sig_reflection.py": "5cfd7d98d2b07fabf96284892339303aeaa54074253760ad479596a93f25cca6",
+    "tests/test_where_sugar.py": "89bc26c0b6af907cb9980cd517d79f0ae0e622b3ed969251b1a03b9accc33365",
+    "independent/legacy/README.md": "796bdc6485b5393d3a3a1cf9a14bcde3f93f7325c9b588998ebf25d82e69a44b",
+    "independent/legacy/INVENTORY.md": "b55eeb5e0a5c5a4df14e30e2357f8ec95478672ba01db278cb04df25fb7900da",
+    "docs/02 SLIP Programs.md": "168004e62292e05a81752964d51ad4e8645ad32eed6e8ab8282b8f2a00e98b07",
+    "docs/03 SLIP Advanced.md": "b834f6ad367268c53c6c4cd0cd267dc526a82df74d6bf52804b1277ee76e0b36",
+    "docs/Appendix A - StdLib Reference.md": "a65dae4f885ecc369c71514bf12ddddc8c18e108b373468e3c69f5c625b63acf",
+    "plan/SPEC.md": "d48b51c01cbf7d3afb31130dc8655baf2877125a06f0cc364a84ef6393641e89"
+  },
+  "independent_python_tree": {
+    "files": 32,
+    "sha256": "b0fe23d83735964a59346855ce238f501fe9260b75b3efb154af0083757459bf"
+  },
+  "fresh_probe": {
+    "sample_values": [2.0, 4.0],
+    "sample_types": ["float", "float"],
+    "method_count": 1,
+    "identity_signature_stacks_preserved": true,
+    "preparation_error_code": "test-failed",
+    "injected_result": 5,
+    "core_unchanged_from_strings_checkpoint": true,
+    "legacy_runtime_imported": false
+  },
+  "legacy_coverage": {
+    "collected_tests": 1474,
+    "collected_modules": 80,
+    "ported_checks": 179,
+    "migration_complete": false,
+    "automatic_example_specialization": "deferred"
+  }
+}

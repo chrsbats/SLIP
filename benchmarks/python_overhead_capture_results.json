@@ -1,0 +1,245 @@
+{
+  "python_version": "3.12.11 (main, Jun 12 2025, 12:40:51) [Clang 20.1.4 ]",
+  "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "koine_version": "0.11.1",
+  "gc_enabled": true,
+  "preparation_ns": 287696823,
+  "preparation_scope": "runner construction and SLIP loading; imports excluded",
+  "timing_scope": "warm Evaluator.call versus direct Python call",
+  "batch_target_ns": 100000000,
+  "warmup_calls": 3,
+  "source_sha256": {
+    "slip": "31991627a04d768fffce2f4946919cb69eb8a67f0b23e276f6bb68d82f6aa36e",
+    "python": "545ac8698557d3ad1373e5e010dc39e840dfab5c051f0ad875f5518637d4376c"
+  },
+  "cases": [
+    {
+      "name": "loop-sum",
+      "input_size": 1000,
+      "result": 499500,
+      "python": {
+        "calls_per_batch": 4096,
+        "samples_ns_per_call": [
+          40138.569091796875,
+          40404.8046875,
+          39061.32568359375,
+          40418.93505859375,
+          39485.877685546875,
+          45087.552490234375,
+          40246.721435546875
+        ],
+        "median_ns": 40246.721435546875,
+        "min_ns": 39061.32568359375,
+        "max_ns": 45087.552490234375
+      },
+      "slip": {
+        "calls_per_batch": 4,
+        "samples_ns_per_call": [
+          43126007.0,
+          41870158.75,
+          45212268.5,
+          45090132.0,
+          41413756.0,
+          39672158.75,
+          51439420.0
+        ],
+        "median_ns": 43126007.0,
+        "min_ns": 39672158.75,
+        "max_ns": 51439420.0
+      },
+      "slip_to_python_ratio": 1071.5408724425954,
+      "extra_ns_per_call": 43085760.27856445
+    },
+    {
+      "name": "function-calls",
+      "input_size": 1000,
+      "result": 1000,
+      "python": {
+        "calls_per_batch": 2048,
+        "samples_ns_per_call": [
+          76768.5888671875,
+          89943.60986328125,
+          62626.64453125,
+          84169.8671875,
+          92692.88232421875,
+          73944.67822265625,
+          69966.9306640625
+        ],
+        "median_ns": 76768.5888671875,
+        "min_ns": 62626.64453125,
+        "max_ns": 92692.88232421875
+      },
+      "slip": {
+        "calls_per_batch": 2,
+        "samples_ns_per_call": [
+          76315774.0,
+          62094129.0,
+          75394269.0,
+          69253445.5,
+          61679057.5,
+          65579938.5,
+          75229819.5
+        ],
+        "median_ns": 69253445.5,
+        "min_ns": 61679057.5,
+        "max_ns": 76315774.0
+      },
+      "slip_to_python_ratio": 902.1065323971374,
+      "extra_ns_per_call": 69176676.91113281
+    },
+    {
+      "name": "traverse-objects",
+      "input_size": 40,
+      "result": [
+        26,
+        533
+      ],
+      "python": {
+        "calls_per_batch": 65536,
+        "samples_ns_per_call": [
+          1810.0344543457031,
+          1899.9823608398438,
+          1971.1314544677734,
+          1963.93310546875,
+          1636.896987915039,
+          2189.363235473633,
+          1679.7608947753906
+        ],
+        "median_ns": 1899.9823608398438,
+        "min_ns": 1636.896987915039,
+        "max_ns": 2189.363235473633
+      },
+      "slip": {
+        "calls_per_batch": 64,
+        "samples_ns_per_call": [
+          2082724.484375,
+          2244161.734375,
+          2005129.984375,
+          2552897.546875,
+          2398962.671875,
+          1920629.25,
+          1692418.265625
+        ],
+        "median_ns": 2082724.484375,
+        "min_ns": 1692418.265625,
+        "max_ns": 2552897.546875
+      },
+      "slip_to_python_ratio": 1096.1809579402511,
+      "extra_ns_per_call": 2080824.5020141602
+    }
+  ],
+  "runtime_source_sha256": {
+    "slip/slip_interpreter.py": "f16bdc240517db4a169b12b6dcb5261aa2e3e3f008349e5cf7707849d4c60b26",
+    "slip/slip_datatypes.py": "6aff50f37391175bb0ce26a58a5c73aeb3fb9c64ad16b2a34b990b61262cb59c",
+    "slip/slip_runtime.py": "3d1ea860e8c5753587775700a03f9138ae758edefbeec3f1e590da971d0259b1",
+    "slip/slip_transformer.py": "0c8a16dcc844629c0e606754a413890a74782acdbdade5def51cd3ea5102974c",
+    "slip/slip_file.py": "ab8e3a6489460c88bbbd7dbdc25a0650ab9b346d7816c8de166c2db49867df77",
+    "slip/root.slip": "338c4e08c11666a70f2b1281acd926671eb6e46499b414940fca4e26dfd635b3"
+  },
+  "baseline_report_sha256": "8a1af4b90feab3a07254cce7acd55f50539854c9e76ed9317481417777787cb5",
+  "frozen_release_profile": {
+    "release_commit": "7913c071d7d156d5a3a4bceeb8ebc8c61a59eca7",
+    "wheel_sha256": "9af348f4a537895dfc2635891688f1283065d95d461f2816cdc87a64b779572b",
+    "python_version": "3.12.11 (main, Jun 12 2025, 12:40:51) [Clang 20.1.4 ]",
+    "runtime_source_sha256": {
+      "slip/slip_interpreter.py": "4cc267cd595fbf09be44834afb9dbced478481c103784c7b7ca57c6a212a2126",
+      "slip/slip_datatypes.py": "ab4fcfc6434b58946bfeb656f57a29d99eb6c91b566420a9ec26cd8b080bf05b",
+      "slip/slip_runtime.py": "03442e9fc9f31491e62a0514411ae5e80bdcf369685fa75e08533adcf35d254f",
+      "slip/slip_transformer.py": "0c8a16dcc844629c0e606754a413890a74782acdbdade5def51cd3ea5102974c",
+      "slip/slip_file.py": "97c3a30660a4b31952a95dbe542fc93ab9b77739d1fa357da8e35b7b437c2f79",
+      "slip/root.slip": "a5e26080eb482f37b84b96d8f24ecd8332b707a30a0824bb635c7c5e5f80766a"
+    },
+    "profiles": {
+      "loop-sum": {
+        "total_calls": 373923,
+        "isinstance_calls": 67082,
+        "plain_name_classifications": 20012,
+        "operand_key_classifications": 0,
+        "ordinary_or_path_reads": 8005,
+        "general_path_reads": 0,
+        "segment_key_evaluations": 0,
+        "get_path_allocations": 0,
+        "binding_resolutions": 0,
+        "operator_name_lookups": 7002,
+        "scope_name_reads": 10007,
+        "expression_evaluations": 5017
+      },
+      "function-calls": {
+        "total_calls": 523923,
+        "isinstance_calls": 99082,
+        "plain_name_classifications": 21012,
+        "operand_key_classifications": 0,
+        "ordinary_or_path_reads": 9005,
+        "general_path_reads": 0,
+        "segment_key_evaluations": 0,
+        "get_path_allocations": 0,
+        "binding_resolutions": 0,
+        "operator_name_lookups": 6002,
+        "scope_name_reads": 11007,
+        "expression_evaluations": 6017
+      },
+      "traverse-objects": {
+        "total_calls": 23676,
+        "isinstance_calls": 5967,
+        "plain_name_classifications": 653,
+        "operand_key_classifications": 0,
+        "ordinary_or_path_reads": 254,
+        "general_path_reads": 106,
+        "segment_key_evaluations": 238,
+        "get_path_allocations": 0,
+        "binding_resolutions": 0,
+        "operator_name_lookups": 104,
+        "scope_name_reads": 308,
+        "expression_evaluations": 192
+      }
+    }
+  },
+  "profile_scope": "one separately warmed call per workload; profiling excluded from timings",
+  "profiles": {
+    "loop-sum": {
+      "total_calls": 321787,
+      "isinstance_calls": 54067,
+      "plain_name_classifications": 6003,
+      "operand_key_classifications": 8006,
+      "ordinary_or_path_reads": 0,
+      "general_path_reads": 0,
+      "segment_key_evaluations": 0,
+      "get_path_allocations": 0,
+      "binding_resolutions": 0,
+      "operator_name_lookups": 4001,
+      "scope_name_reads": 7005,
+      "expression_evaluations": 5017,
+      "prepared_reads": 5004
+    },
+    "function-calls": {
+      "total_calls": 443787,
+      "isinstance_calls": 80067,
+      "plain_name_classifications": 5003,
+      "operand_key_classifications": 9006,
+      "ordinary_or_path_reads": 0,
+      "general_path_reads": 0,
+      "segment_key_evaluations": 0,
+      "get_path_allocations": 0,
+      "binding_resolutions": 0,
+      "operator_name_lookups": 3001,
+      "scope_name_reads": 7005,
+      "expression_evaluations": 6017,
+      "prepared_reads": 6004
+    },
+    "traverse-objects": {
+      "total_calls": 12722,
+      "isinstance_calls": 2476,
+      "plain_name_classifications": 132,
+      "operand_key_classifications": 255,
+      "ordinary_or_path_reads": 0,
+      "general_path_reads": 0,
+      "segment_key_evaluations": 0,
+      "get_path_allocations": 0,
+      "binding_resolutions": 0,
+      "operator_name_lookups": 52,
+      "scope_name_reads": 175,
+      "expression_evaluations": 192,
+      "prepared_reads": 162
+    }
+  }
+}

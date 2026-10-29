@@ -4,6 +4,7 @@ import pytest
 
 from benchmarks import python_overhead
 from slip import ScriptRunner
+from slip.slip_core import invoke
 
 
 @pytest.mark.asyncio
@@ -24,17 +25,15 @@ async def test_benchmark_workloads_match_python_and_preserve_inputs():
             [1, 9],
         ),
     ]
-    for name, function, args, expected in cases:
-        original = copy.deepcopy(args)
-        for _ in range(2):
-            assert function(*args) == expected, name
-            result = await runner.evaluator.call(
-                runner.root_scope[name], args, runner.root_scope
-            )
-            assert result == expected, name
-            assert args == original, name
-        assert not runner.evaluator.side_effects
-        assert not runner.evaluator.call_stack
+    with runner:
+        for name, function, args, expected in cases:
+            original = copy.deepcopy(args)
+            for _ in range(2):
+                assert function(*args) == expected, name
+                result = invoke(runner.scope[name], args, runner.scope)
+                assert result == expected, name
+                assert args == original, name
+            assert not runner.scope.effects
 
 
 @pytest.mark.asyncio
@@ -42,9 +41,9 @@ async def test_benchmark_report_preloads_once_and_records_samples(monkeypatch):
     loads = []
     original = ScriptRunner.handle_script
 
-    async def record_load(runner, source):
+    def record_load(runner, source):
         loads.append(source)
-        return await original(runner, source)
+        return original(runner, source)
 
     monkeypatch.delenv("SLIP_DEBUG", raising=False)
     monkeypatch.setattr(ScriptRunner, "handle_script", record_load)

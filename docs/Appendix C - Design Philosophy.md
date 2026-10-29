@@ -22,7 +22,7 @@ The question behind SLIP is:
 
 > **How much of a language can emerge from a few visible, composable structures?**
 
-SLIP is a general-purpose scripting language. The current implementation is a working research prototype in which code blocks, signatures, scopes, paths, generic functions, and resolvers are implemented and tested together.
+SLIP is a general-purpose scripting language. The current Python rewrite composes code blocks, signatures, scopes, paths and generic functions through a synchronous evaluator. Resolver transactions remain a deferred part of the design described below.
 
 ## A Small, Visible Grammar
 
@@ -81,17 +81,19 @@ for: fn {vars, start, end, body-block} [
     var-name: extract-simple-param vars
     for-scope: current-scope
     for-scope: for-scope.meta.caller
+    body-block: core-bind body-block for-scope vars
     step: if [start <= end] [1] [-1]
     i: start
 
     while [if [step > 0] [i < end] [i > end]] [
         for-scope[var-name]: i
-        run-with body-block for-scope
+        core-execute body-block for-scope
         i: i + step
     ]
 
     none
 ]
+for.meta.binds: 0
 
 seen: #[]
 for {i} 0 3 [
@@ -217,6 +219,9 @@ This requires deliberate treatment of shared mutable values. Local rebinding est
 
 ## Resolvers Make Ownership Explicit
 
+This section describes the deferred resolver/transaction design; it is not yet
+implemented by the synchronous Python rewrite.
+
 First-class scopes are useful for objects and environments, but persistent multi-user systems introduce a harder question:
 
 > **Who owns the truth, and who is allowed to change it?**
@@ -236,7 +241,7 @@ apply-damage: fn {this: Combat, target-id, amount} [
 ]
 
 Combat |apply-damage 'p1' 10
--- => 90
+-- Future resolver result: 90
 ```
 
 Different resolvers can own different parts of the same application. Cross-domain reads use an explicitly read-only authority path, written `::`. Changes can be requested through transactions owned by the other resolver:
@@ -261,7 +266,7 @@ apply-fire: fn {this: Combat, spatial: Spatial, target-id, amount} [
 
 room-id: Combat |apply-fire Spatial 'p1' 10
 #[room-id, Combat.hp['p1'], Spatial.on-fire['p1']]
--- => #['room.square', 90, true]
+-- Future resolver result: #['room.square', 90, true]
 ```
 
 The transaction reads the room through `spatial::room`; writes across that `::` boundary are rejected. It asks `Spatial` to record ignition by calling `apply-ignite` on that resolver. Ownership is expressed at the call and write sites.
@@ -296,7 +301,7 @@ The data boundary is explicit too:
 
 This keeps storage-shaped data useful on its own. Turning it into runtime objects is a visible operation with a defined place in the program.
 
-Background work follows the same approach. `task` schedules code through the host's event loop, and host-aware task tracking provides a place to manage its lifetime. This supports practical jobs such as polling, timers, and maintenance alongside the application's other work.
+Background I/O follows the same approach. Explicit submissions return native Futures from a Runner-owned worker. The host polls them and owns subsequent local state changes. The evaluator remains synchronous; local task/sleep suspension is deferred.
 
 ## What Exists Today
 
@@ -310,8 +315,8 @@ SLIP is an actively used research prototype. The current implementation includes
 - generic functions, multidispatch, and guarded value dispatch
 - paths, collection queries, and file/HTTP resource schemes
 - modules loaded from files, HTTP resources, or code
-- resolvers, transactions, references, and derived cells
-- asynchronous tasks, structured failures, and executable documentation tests
+- references and derived cells
+- explicit background I/O jobs, structured failures and executable documentation tests
 
 I am testing the language by building an interactive-fiction application. Its interacting actors, rules, paths, and long-lived state exercise the features together in a substantial domain. That application is a test of a general-purpose language, rather than a boundary around what the language is for.
 

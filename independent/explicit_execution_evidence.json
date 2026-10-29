@@ -1,0 +1,51 @@
+{
+  "scope": "explicit call positions, exact deletion and prepared commands",
+  "tests": {
+    "tests": 664,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "explicit_execution_regressions": 21,
+    "ported_legacy_checks": 179
+  },
+  "junit": {
+    "path": "/tmp/opencode/slip-explicit-execution-tests.xml",
+    "sha256": "8c7eddb560ed41abf386bd4f987a8aa19a9b020a2e3760d5a5cb5711e16aab31"
+  },
+  "sources": {
+    "slip/slip_core.py": "dee5b89752f9e8ce5528683ed7213d83934bc63b19ec493edbdf09889d40d631",
+    "slip/slip_library.py": "8b982bf6ad50a2932f95c681b02e65cf3e61ff398559e1194afc3bd964423e3b",
+    "slip/slip_syntax.py": "62a3a33f890b68c06c8f121a69dfdb71b965faa268331f2d359cbf7d951f57f0",
+    "slip/slip_embedding.py": "edee32f5635bdf743b8806e812ff3e727f89d69b1d573c854dcca7858b5b51de",
+    "slip/slip_public.py": "3d2f7261bb577f26cbd82aaab1b5be946605b052a39708107b6c0f5593466237",
+    "slip/slip_resources.py": "fcb6f1d4d2008d2b8c541f67dde552038f936e8f2ef71ce30ef99583ddc9a82f",
+    "slip/slip_cache.py": "1a03e67810881df7f4995e2cbb223f048ada14f58ae7049c8f8dd13f1a08f62b",
+    "slip/slip_jobs.py": "301cca2047720af65c2b0f685e57c39edf6bec26a35f5b3b7b91525f376effb2",
+    "independent/test_explicit_execution.py": "4c997310178125d813a1c0103900a4382a1218c7924c360d023d1fc5dc51c8dd",
+    "independent/test_public_api.py": "26ce03a1a242a82f8c84a4d73d372c5d0dc8db8f23ff7681ca8de4931d20ff5e",
+    "independent/legacy/README.md": "0498db5163b06e3ed0849f3d32989853bba8e21f5d9b77fbee778a008df25a51",
+    "independent/legacy/INVENTORY.md": "330ab5c078392d34c87f8e7b52b39bf908c7a3223ff033316bbd29efc96d9a94",
+    "docs/01 SLIP Scripting.md": "39778273b3ee8eb44d86924872914c21c866bd6eff7db9a0145739ceeb25102c",
+    "docs/03 SLIP Advanced.md": "4afc003439412f8193022c7d4589ced5a5f2479b59dd6e8de236969d578276e5",
+    "docs/Appendix A - StdLib Reference.md": "32c4573effe9b410d62fc566e5ac2ca9b5efbb633e2c31cfd74c43d8b152f6b4",
+    ".agents/skills/slip/SKILL.md": "24009b1b1ad6a65f53151e33cc83d2c5f7a74043b0570b9e2264aff300fdfb6b",
+    "plan/SPEC.md": "189fb6357fd1cdadf6c49724245028c28bac0a0742b2d52d8debdfaac3b67fa3",
+    "plan/interpreter_plan.py": "413752d3d3abdb8f1010e1ab4d3ce5ed56f5003d523cd41ecc0a481cd834cda7"
+  },
+  "independent_python_tree": {
+    "files": 34,
+    "sha256": "93b334fae303d052e90c0a0816bbb9da5018ee1b0410415079c1bd19fc72ad9b"
+  },
+  "fresh_probe": {
+    "clock_results": [7, 7],
+    "query_metadata_calls": ["note"],
+    "warm_commands": [["Ada", "key", "first"], ["Ada", "coin", "second"]]
+  },
+  "verification": {
+    "flake8": "passed",
+    "git_diff_check": "passed",
+    "pseudocode_empty_ast": true,
+    "review": "ses_e88fc6dafffegIj2hoRLHsxU4M: approved scoped mechanism; no remaining findings",
+    "resolved_review_finding": "query deletion metadata evaluated exactly once"
+  }
+}

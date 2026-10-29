@@ -1,38 +1,9 @@
-{--
-    SLIP Core Library v1.0
-
-    High-level utilities written in SLIP, loaded directly into the root scope.
---}
-
--- --- Operators and Statuses ---
-+: |core-add
--: |core-sub
-*: |core-mul
-/: |core-div
-**: |core-pow
-=: |core-eq
-!=: |core-neq
->: |core-gt
->=: |core-gte
-<: |core-lt
-<=: |core-lte
-and: |logical-and
-or: |logical-or
-in: |contains
-
-ok: `ok`
-err: `err`
+-- Ordinary SLIP definitions over the synchronous native core.
 not-found: `not-found`
 invalid: `invalid`
-
-print: fn {msg} [emit "stdout" msg]
-stderr: fn {msg} [emit "stderr" msg]
-
--- --- Types and Predicates ---
 ordered: {code or list or dict or scope}
 mapping: {dict or scope}
 number: {int or float}
-
 is-number: fn {x} [(type-of x) = `int` or ((type-of x) = `float`)]
 is-string: fn {x} [(type-of x) = `string` or ((type-of x) = `i-string`)]
 is-list: fn {x} [(type-of x) = `list`]
@@ -43,319 +14,93 @@ is-fn: fn {x} [(type-of x) = `function`]
 is-code: fn {x} [(type-of x) = `code`]
 is-boolean: fn {x} [(type-of x) = `boolean`]
 is-none: fn {x} [(type-of x) = `none`]
-
--- --- Mapping Utilities ---
-has: core-has
-
-update: fn {target: `mapping`, patch: `mapping`} [
-    foreach {k, v} (items patch) [target[k]: v]
-    target
-]
-
--- --- Control Flow ---
--- Extract the name in a binding signature such as {i}.
-extract-simple-param: fn {vars} [
-    probe: do [
-        #{
-            parameters: vars.parameters,
-            rest: vars.rest,
-            ret: vars.return_annotation
-        }
-    ]
-    if [probe.status = err] [
-        fail `invalid` "extract-simple-param expects a sig literal (e.g., {x})"
-    ]
-    info: probe.value
-    if [info.ret != none] [
-        fail `invalid` "extract-simple-param: return annotation is not allowed"
-    ]
-    if [info.rest] [
-        fail `invalid` "extract-simple-param: rest parameter is not allowed"
-    ]
-    if [(len info.parameters) != 1] [
-        fail `invalid` "extract-simple-param: expected exactly one parameter"
-    ]
-    parameter: info.parameters[0]
-    if [has parameter "type"] [
-        fail `invalid` "extract-simple-param: typed parameters are not allowed"
-    ]
-    parameter.name
-]
-
-when: fn {condition, then-block} [
-    caller: current-scope
-    caller: caller.meta.caller
-    if [run-with condition caller] [run-with then-block caller]
-]
-
-loop: fn {body-block} [
-    caller: current-scope
-    caller: caller.meta.caller
-    while [true] [run-with body-block caller]
-]
-
--- Count toward end (exclusive), binding the loop variable in the caller.
 for: fn {vars, start, end, body-block} [
     var-name: extract-simple-param vars
     for-scope: current-scope
     for-scope: for-scope.meta.caller
+    body-block: core-bind body-block for-scope vars
     step: if [start <= end] [1] [-1]
     i: start
     while [if [step > 0] [i < end] [i > end]] [
         for-scope[var-name]: i
-        run-with body-block for-scope
+        core-execute body-block for-scope
         i: i + step
     ]
     none
 ]
-
--- Each clause is #[condition-block, result]; a code result runs in the caller.
+for.meta.binds: 0
+when: fn {condition, body} [
+    caller: current-scope
+    caller: caller.meta.caller
+    condition: core-bind condition caller
+    body: core-bind body caller
+    accepted: core-execute condition caller
+    if [accepted] [core-execute body caller]
+]
 cond: fn {clauses} [
     caller: current-scope
     caller: caller.meta.caller
     foreach {clause} clauses [
         [condition-block, result-expr]: clause
-        if [run-with condition-block caller] [
+        condition-block: core-bind condition-block caller
+        if [core-execute condition-block caller] [
             if [is-code result-expr] [
-                return (run-with result-expr caller)
+                result-expr: core-bind result-expr caller
+                return (core-execute result-expr caller)
             ]
             return result-expr
         ]
     ]
     none
 ]
-
--- --- Collection Utilities ---
-reverse: fn {data-list: `ordered`} [
-    result: #[]
-    foreach {item} data-list [result: add #[item] result]
-    result
+partial: fn {function, bound...} [
+    fn {args...} [call function (add bound args)]
 ]
-
-map: fn {func, data-list: `ordered`} [
-    results: #[]
-    foreach {item} data-list [results: add results #[(func item)]]
-    results
-]
-
-map: fn {data-list: `ordered`, func: `function`} [map func data-list]
-
-filter: fn {predicate, data-list: `ordered`} [
-    results: #[]
-    foreach {item} data-list [
-        if [predicate item] [results: add results #[item]]
-    ]
-    results
-]
-
-filter: fn {data-list: `ordered`, predicate: `function`} [filter predicate data-list]
-
-reduce: fn {reducer, accumulator, data-list: `ordered`} [
-    foreach {item} data-list [accumulator: reducer accumulator item]
-    accumulator
-]
-
-zip: fn {list-a: `ordered`, list-b: `ordered`} [
-    results: #[]
-    limit: if [(len list-a) < (len list-b)] [len list-a] [len list-b]
-    for {i} 0 limit [
-        results: add results #[#[list-a[i], list-b[i]]]
-    ]
-    results
-]
-
--- --- Function Utilities ---
-partial: fn {func, partial-args...} [
-    fn {new-args...} [
-        all-args: add (copy partial-args) new-args
-        call func all-args
-    ]
-]
-
--- Apply functions from right to left.
-compose: fn {funcs...} [
-    fn {initial-arg} [
-        result: initial-arg
-        foreach {f} (reverse funcs) [result: f result]
+compose: fn {functions...} [
+    fn {value} [
+        result: value
+        foreach {function} (reverse functions) [
+            result: call function #[result]
+        ]
         result
     ]
 ]
-
--- --- Strings and Paths ---
-join: fn {xs: `list`, sep: `string`} [str-join xs sep]
-
-join: fn {first: `path`, rest...} [join-paths (add #[first] rest)]
-
-replace: fn {s: `string`, old: `string`, new: `string`} [str-replace s old new]
-
--- Replace items equal to old[0] with new[0] in a cloned sequence.
-replace: fn {src: `ordered`, old: `ordered`, new: `ordered`} [
-    out: clone src
-    for {i} 0 (len out) [
-        if [out[i] = old[0]] [out[i]: new[0]]
-    ]
-    out
-]
-
--- --- Serialization ---
-to: fn {format, data |where (format = `json`) or (format = 'json')} [
-    core-serialize-value format data
-]
-
-to: fn {format, data |where (format = `yaml`) or (format = 'yaml')} [
-    core-serialize-value format data
-]
-
-to: fn {format, data |where (format = `toml`) or (format = 'toml')} [
-    core-serialize-value format data
-]
-
-from: fn {format, data |where (format = `json`) or (format = 'json')} [
-    core-deserialize-value format data
-]
-
-from: fn {format, data |where (format = `yaml`) or (format = 'yaml')} [
-    core-deserialize-value format data
-]
-
-from: fn {format, data |where (format = `toml`) or (format = 'toml')} [
-    core-deserialize-value format data
-]
-
--- --- Object Construction ---
-with: fn {obj: `scope`, config: `code`} [
-    run-with config obj
-    obj
-]
-
-with: fn {obj: `scope`, config: `mapping`} [update obj config]
-
-create: fn {} [scope #{}]
-create: fn {prototype} [(create) |inherit prototype]
-create: fn {prototype, config-block} [(create prototype) |with config-block]
-
-is-a: fn {obj, proto} [
-    if [not (is-scope obj)] [return false]
-    current: obj
-    while [current] [
-        if [current = proto] [return true]
-        current: current.meta.parent
-    ]
-    false
-]
-
--- --- Schemas and Validation ---
 Schema: scope #{}
-
 schema: fn {config} [(scope config) |inherit Schema]
-
 is-schema: fn {obj} [is-a obj Schema]
-
 default: fn {value} [#{__marker__: `default`, value: value}]
 optional: fn {type} [#{__marker__: `optional`, type: type}]
-
-is-default-marker: fn {x} [
-    (is-dict x) and (has x "__marker__") and (x["__marker__"] = `default`)
-]
-
-is-optional-marker: fn {x} [
-    (is-dict x) and (has x "__marker__") and (x["__marker__"] = `optional`)
-]
-
-type-name-from-type: fn {ptype: `path`} [ptype.inner.segments[0].text]
-value-type-name: fn {v} [type-name-from-type (type-of v)]
-
-collect-schema-fields: fn {sch: `scope`} [
-    chain: #[]
-    cur: sch
-    while [cur] [
-        chain: add #[cur] chain
-        cur: cur.meta.parent
+command-apply: fn {command-scope} [
+    context: command-scope.meta.parent
+    args: #[]
+    foreach {step} context.steps [
+        value: command-scope[step.name]
+        if [step.hydrate] [value: context.hydrate-object value]
+        args: add args #[value]
     ]
-    fields: #{}
-    foreach {s} chain [update fields s]
-    fields
-]
-
--- Normalize one present value. Markers and schemas refine the plain fallback.
-validate-value: fn {value, spec, field} [value]
-
-validate-value: fn {value, spec: `path`, field} [
-    if [(type-of value) = spec] [return value]
-    fail `invalid` #[#{
-        field: field,
-        error: "expected type '{{type-name-from-type spec}}', got '{{value-type-name value}}'"
-    }]
-]
-
-validate-value: fn {value, spec: Schema, field} [validate value spec]
-
-validate-value: fn {value, spec, field |where is-optional-marker spec} [
-    validate-value value spec["type"] field
-]
-
-validate-field: fn {data, field, spec} [
-    if [has data field] [
-        return (validate-value data[field] spec field)
+    if [context.projected.rest != none] [
+        args: add args command-scope[context.projected.rest]
     ]
-    if [is-default-marker spec] [return spec["value"]]
-    fail `invalid` #[#{field: field, error: "field is required"}]
+    call context.command-context.command-callable args
 ]
-
--- Collect field failures and omit absent optionals.
-validate: fn {data: `mapping`, sch: `scope`} [
-    fields: collect-schema-fields sch
-    out: #{}
-    errs: #[]
-    foreach {field, spec} (items fields) [
-        if [(has data field) or (not (is-optional-marker spec))] [
-            result: do [validate-field data field spec]
-            if [result.status = ok] [
-                out[field]: result.value
-            ] [
-                errs: add errs result.error.data
-            ]
-        ]
-    ]
-    if [(len errs) > 0] [fail `invalid` errs]
-    out
-]
-
--- --- Host Command Adapters ---
--- Project one implementation into an ID-facing closure.
-command-method: fn {command-callable, method} [
-    projected: get-sig method
+command-method: fn {command-context, projected, definition} [
+    hydrate-object: run-with [
+        fn {object-id} [host-object object-id]
+    ] definition
     steps: #[]
-    foreach {signature-parameter} projected.parameters [
-        should-hydrate: false
-        if [has signature-parameter "type"] [
-            should-hydrate: is-scope signature-parameter.type
-        ]
-        steps: add steps #[#{
-            name: signature-parameter.name,
-            should-hydrate: should-hydrate
-        }]
-        if [should-hydrate] [signature-parameter.type: `id`]
+    foreach {parameter} projected.parameters [
+        hydrate: false
+        if [has parameter 'type'] [hydrate: is-scope parameter.type]
+        steps: add steps #[#{name: parameter.name, hydrate: hydrate}]
+        if [hydrate] [parameter.type: `id`]
     ]
-
-    -- The original method evaluates its guard after hydration.
     projected.where: none
-    fn (sig projected) [
-        command-scope: current-scope
-        command-arguments: #[]
-        foreach {step} steps [
-            command-value: command-scope[step.name]
-            if [step.should-hydrate] [command-value: host-object command-value]
-            command-arguments: add command-arguments #[command-value]
-        ]
-        call command-callable command-arguments
-    ]
+    fn (sig projected) [/command-apply (/current-scope)]
 ]
-
--- Repeated local definitions aggregate the projected methods into one generic.
 command: fn {command-callable} [
     foreach {method} command-callable.methods [
-        adapter: command-method command-callable method
+        description: get-sig method
+        adapter: command-method (/current-scope) description method.meta.parent
     ]
-    adapter
+    return adapter
 ]

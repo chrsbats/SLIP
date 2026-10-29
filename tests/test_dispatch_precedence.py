@@ -1,24 +1,19 @@
-import pytest
-from slip import ScriptRunner
 
-@pytest.mark.asyncio
-async def test_exact_arity_beats_variadic_after_partial():
-    runner = ScriptRunner()
+def test_exact_arity_beats_variadic_after_partial(runner):
     src = """
 inc: partial add 1
 inc: fn {y} [ y + 1 ]
 inc 10
 """
-    res = await runner.handle_script(src)
+    res = runner.handle_script(src)
     assert res.status == 'ok', res.error_message
     assert res.value == 11
 
-@pytest.mark.asyncio
-async def test_compose_prefers_exact_over_variadic_after_partial():
-    runner = ScriptRunner()
+
+def test_compose_prefers_exact_over_variadic_after_partial(runner):
 
     # Prime the name with a variadic method via partial (rest param).
-    res = await runner.handle_script("inc: partial add 1")
+    res = runner.handle_script("inc: partial add 1")
     assert res.status == 'ok', res.error_message
 
     # Now define an exact-arity method later, and compose.
@@ -28,22 +23,19 @@ inc: fn {y} [ y + 1 ]
 f: compose inc double
 f 10
 """
-    res = await runner.handle_script(script)
-    # This should select the exact {y} method of inc during compose, returning 21.
-    # If it fails, pytest will display res.error_message which includes the SLIP stacktrace
-    # (look for 'all-args' and '(call add #[1])' to confirm the variadic path was taken).
+    res = runner.handle_script(script)
+    # Select the exact {y} method of inc during compose.
     assert res.status == 'ok', res.error_message
     assert res.value == 21
 
-@pytest.mark.asyncio
-async def test_foreach_chain_prefers_exact_over_variadic_after_partial():
-    runner = ScriptRunner()
 
-    # Seed with a variadic method via partial in a prior run (stateful across runs)
-    res = await runner.handle_script("inc: partial add 1")
+def test_foreach_chain_prefers_exact_over_variadic_after_partial(runner):
+
+    # Seed a variadic method in a prior run.
+    res = runner.handle_script("inc: partial add 1")
     assert res.status == 'ok', res.error_message
 
-    # Define an exact-arity one-arg method later and call through a foreach-driven chain (no compose)
+    # Select the later exact-arity method through a foreach-driven chain.
     script = """
 inc: fn {y} [ y + 1 ]
 
@@ -55,10 +47,9 @@ apply-each: fn {fs, x} [
     result
 ]
 
-apply-each #[ inc ] 10
+apply-each #[core-function `inc`] 10
 """
-    res = await runner.handle_script(script)
+    res = runner.handle_script(script)
     # Expected: exact-arity inc should be selected, yielding 11.
-    # Current bug: variadic (from partial) may win, causing "(call add #[1])" invalid-args.
     assert res.status == 'ok', res.error_message
     assert res.value == 11

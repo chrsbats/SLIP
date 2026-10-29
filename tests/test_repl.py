@@ -1,86 +1,103 @@
-import asyncio
-import importlib.util
 import sys
-from pathlib import Path
-import uuid
-import pytest
 
-def _load_repl_module():
-    """Dynamically load the top-level slip.py (REPL) as a module with a unique name."""
-    repl_path = Path(__file__).resolve().parents[1] / "slip.py"
-    mod_name = f"slip_repl_for_test_{uuid.uuid4().hex}"
-    spec = importlib.util.spec_from_file_location(mod_name, str(repl_path))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[mod_name] = mod
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    return mod
+from slip import ScriptRunner, cli
 
-@pytest.mark.asyncio
-async def test_repl_exit_immediately(monkeypatch, capsys):
-    repl = _load_repl_module()
 
-    async def fake_ainput(prompt: str) -> str:
-        return "exit"
-    monkeypatch.setattr(repl, "ainput", fake_ainput)
-
-    await repl.main()
+def test_repl_exit_immediately(monkeypatch, capsys):
+    runner = ScriptRunner()
+    monkeypatch.setattr(cli, 'ScriptRunner', lambda: runner)
+    monkeypatch.setattr('builtins.input', lambda prompt: 'exit')
+    assert cli.main([]) == 0
     out = capsys.readouterr().out
-    assert "SLIP REPL v0.1" in out
+    assert 'SLIP REPL' in out
     assert "Type 'exit' or press Ctrl+D to quit." in out
+    assert runner.closed and not runner.resources.worker.thread.is_alive()
 
-@pytest.mark.asyncio
-async def test_repl_prints_side_effects_and_values(monkeypatch, capsys):
-    repl = _load_repl_module()
-    lines = iter([
-        'emit "stdout" "hello from slip"',
-        "1 + 2",
-        "exit",
-    ])
 
-    async def fake_ainput(prompt: str) -> str:
-        return next(lines)
-    monkeypatch.setattr(repl, "ainput", fake_ainput)
-
-    await repl.main()
+def test_repl_prints_side_effects_and_values(monkeypatch, capsys):
+    lines = iter(['emit "stdout" "hello from slip"', 'x: 1', 'x + 2', 'exit'])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(lines))
+    assert cli.main([]) == 0
     out, err = capsys.readouterr()
-    # Header
-    assert "SLIP REPL v0.1" in out
-    # Side effect printed to stdout
-    assert "hello from slip" in out
-    # Expression result printed
-    assert "\n3\n" in out or out.rstrip().endswith("3")
-    # No error for this run
-    assert "TypeError" not in err
+    assert 'SLIP REPL' in out and 'hello from slip' in out
+    assert '\n3\n' in out
+    assert err == ''
 
-@pytest.mark.asyncio
-async def test_repl_errors_print_to_stderr(monkeypatch, capsys):
-    repl = _load_repl_module()
-    lines = iter([
-        'add 1 "a"',  # will cause a TypeError in add
-        "exit",
-    ])
 
-    async def fake_ainput(prompt: str) -> str:
-        return next(lines)
-    monkeypatch.setattr(repl, "ainput", fake_ainput)
-
-    await repl.main()
+def test_repl_errors_print_to_stderr_once_and_allow_next_input(
+    monkeypatch, capsys,
+):
+    lines = iter(['add 1 "a"', '1 + 2', 'exit'])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(lines))
+    assert cli.main([]) == 0
     out, err = capsys.readouterr()
-    # Header still printed
-    assert "SLIP REPL v0.1" in out
-    # Error message should be nicely formatted to stderr
-    assert "TypeError: invalid-args" in err
+    assert 'SLIP REPL' in out and '\n3\n' in out
+    assert err.count('TypeError:') == 1
+    assert 'SLIP stacktrace:' in err
 
-@pytest.mark.asyncio
-async def test_repl_eof_quits(monkeypatch, capsys):
-    repl = _load_repl_module()
 
-    async def fake_ainput(prompt: str) -> str:
+def test_repl_eof_quits_and_closes_owned_resources(monkeypatch, capsys):
+    def end(prompt):
         raise EOFError
-    monkeypatch.setattr(repl, "ainput", fake_ainput)
 
-    await repl.main()
-    out = capsys.readouterr().out
-    assert "SLIP REPL v0.1" in out
-    assert "Exiting." in out
+    runner = ScriptRunner()
+    monkeypatch.setattr(cli, 'ScriptRunner', lambda: runner)
+    monkeypatch.setattr('builtins.input', end)
+    assert cli.main([]) == 0
+    assert 'Exiting.' in capsys.readouterr().out
+    assert runner.closed and runner.resources.http_client.is_closed
+
+
+def test_repl_interrupt_closes_owned_resources(monkeypatch, capsys):
+    def interrupt(prompt):
+        raise KeyboardInterrupt
+
+    runner = ScriptRunner()
+    monkeypatch.setattr(cli, 'ScriptRunner', lambda: runner)
+    monkeypatch.setattr('builtins.input', interrupt)
+    assert cli.main([]) == 130
+    assert 'Exiting.' in capsys.readouterr().out
+    assert runner.closed and not runner.resources.worker.thread.is_alive()
+
+
+def test_script_file_uses_its_directory_and_reports_stderr(tmp_path, capsys):
+    (tmp_path / 'data.json').write_text('{"answer": 42}')
+    path = tmp_path / 'script.slip'
+    path.write_text("stderr 'note'; data: file://data.json; data.answer")
+    assert cli.main([str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert out == '42\n' and err == 'note\n'
+    assert 'slip.slip_runtime' not in sys.modules
+
+
+def test_script_error_retains_file_location_and_prior_effects(
+    tmp_path, capsys,
+):
+    path = tmp_path / 'broken.slip'
+    path.write_text("print 'before'; stderr 'note'; 1 / 0")
+    assert cli.main([str(path)]) == 1
+    out, err = capsys.readouterr()
+    assert out == 'before\n'
+    assert err.startswith('note\n')
+    assert err.count('ZeroDivisionError:') == 1
+    assert str(path) in err and '^' in err
+
+
+def test_missing_script_does_not_construct_a_runner(
+    tmp_path, monkeypatch, capsys,
+):
+    def forbidden():
+        raise AssertionError('a missing file created owned resources')
+
+    monkeypatch.setattr(cli, 'ScriptRunner', forbidden)
+    assert cli.main([str(tmp_path / 'missing.slip')]) == 1
+    out, err = capsys.readouterr()
+    assert out == '' and 'missing.slip' in err
+
+
+def test_function_results_are_displayed_without_calling(tmp_path, capsys):
+    path = tmp_path / 'function.slip'
+    path.write_text('make: fn {} [fn {} [7]]; (make)')
+    assert cli.main([str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert out == '<function>\n' and err == ''

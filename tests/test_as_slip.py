@@ -1,6 +1,3 @@
-import pytest
-
-from slip import ScriptRunner
 
 
 def assert_ok(res, expected=None):
@@ -15,12 +12,10 @@ def assert_error(res, contains: str | None = None):
         assert contains in (res.error_message or "")
 
 
-@pytest.mark.asyncio
-async def test_as_slip_leaves_plain_data_as_dicts_and_lists():
-    runner = ScriptRunner()
+def test_as_slip_leaves_plain_data_as_dicts_and_lists(runner):
     runner.root_scope["data"] = {"a": {"b": 1}, "xs": [1, {"c": 2}]}
 
-    res = await runner.handle_script("""
+    res = runner.handle_script("""
     out: as-slip data
     #[ eq (type-of out) `dict`, out.a.b, out.xs[1].c ]
     """)
@@ -28,9 +23,7 @@ async def test_as_slip_leaves_plain_data_as_dicts_and_lists():
     assert_ok(res, [True, 1, 2])
 
 
-@pytest.mark.asyncio
-async def test_as_slip_rehydrates_scope_and_nested_scope():
-    runner = ScriptRunner()
+def test_as_slip_rehydrates_scope_and_nested_scope(runner):
     runner.root_scope["data"] = {
         "__slip__": {"type": "scope"},
         "hp": 10,
@@ -40,7 +33,7 @@ async def test_as_slip_rehydrates_scope_and_nested_scope():
         },
     }
 
-    res = await runner.handle_script("""
+    res = runner.handle_script("""
     obj: as-slip data
     #[
       eq (type-of obj) `scope`,
@@ -53,9 +46,9 @@ async def test_as_slip_rehydrates_scope_and_nested_scope():
     assert_ok(res, [True, 10, True, "Karl"])
 
 
-@pytest.mark.asyncio
-async def test_as_slip_rehydrated_scope_participates_in_dispatch_from_host_object():
-    runner = ScriptRunner()
+def test_as_slip_rehydrated_scope_participates_in_dispatch_from_host_object(
+    runner,
+):
 
     REGISTRY = {
         "player-1": {
@@ -69,7 +62,7 @@ async def test_as_slip_rehydrated_scope_participates_in_dispatch_from_host_objec
 
     runner.root_scope["host-object"] = host_object
 
-    res = await runner.handle_script("""
+    res = runner.handle_script("""
     Character: scope #{}
     describe: fn {x: Character} [ "typed" ]
     describe: fn {x} [ "fallback" ]
@@ -81,15 +74,13 @@ async def test_as_slip_rehydrated_scope_participates_in_dispatch_from_host_objec
     assert_ok(res, ["typed", 77])
 
 
-@pytest.mark.asyncio
-async def test_as_slip_auto_creates_missing_prototype_and_dispatches():
-    runner = ScriptRunner()
+def test_as_slip_auto_creates_missing_prototype_and_dispatches(runner):
     runner.root_scope["data"] = {
         "__slip__": {"type": "scope", "prototype": "MissingType"},
         "hp": 10,
     }
 
-    res = await runner.handle_script("""
+    res = runner.handle_script("""
     describe: fn {x: MissingType} [ "typed" ]
     describe: fn {x} [ "fallback" ]
 
@@ -100,9 +91,7 @@ async def test_as_slip_auto_creates_missing_prototype_and_dispatches():
     assert_ok(res, ["typed", 10, True])
 
 
-@pytest.mark.asyncio
-async def test_as_slip_reuses_generated_prototype_within_runner():
-    runner = ScriptRunner()
+def test_as_slip_reuses_generated_prototype_within_runner(runner):
     runner.root_scope["a"] = {
         "__slip__": {"type": "scope", "prototype": "Ghost"},
         "hp": 1,
@@ -112,7 +101,7 @@ async def test_as_slip_reuses_generated_prototype_within_runner():
         "hp": 2,
     }
 
-    res = await runner.handle_script("""
+    res = runner.handle_script("""
     a1: as-slip a
     b1: as-slip b
     #[ is-a a1 Ghost, is-a b1 Ghost, eq a1.meta.parent b1.meta.parent ]
@@ -121,15 +110,13 @@ async def test_as_slip_reuses_generated_prototype_within_runner():
     assert_ok(res, [True, True, True])
 
 
-@pytest.mark.asyncio
-async def test_as_slip_prefers_existing_local_prototype():
-    runner = ScriptRunner()
+def test_as_slip_prefers_existing_local_prototype(runner):
     runner.root_scope["data"] = {
         "__slip__": {"type": "scope", "prototype": "Character"},
         "hp": 10,
     }
 
-    res = await runner.handle_script("""
+    res = runner.handle_script("""
     Character: scope #{ kind: "local" }
     obj: as-slip data
     #[ is-a obj Character, obj.kind, obj.hp ]
@@ -138,15 +125,13 @@ async def test_as_slip_prefers_existing_local_prototype():
     assert_ok(res, [True, "local", 10])
 
 
-@pytest.mark.asyncio
-async def test_as_slip_errors_if_existing_prototype_name_is_not_scope():
-    runner = ScriptRunner()
+def test_as_slip_errors_if_existing_prototype_name_is_not_scope(runner):
     runner.root_scope["MissingType"] = 123
     runner.root_scope["data"] = {
         "__slip__": {"type": "scope", "prototype": "MissingType"},
         "hp": 10,
     }
 
-    res = await runner.handle_script("as-slip data")
+    res = runner.handle_script("as-slip data")
 
-    assert_error(res, "invalid-args in (as-slip)")
+    assert_error(res, "prototype")

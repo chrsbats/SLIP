@@ -71,6 +71,7 @@ rules:
     choice:
       - { rule: sig_union }
       - { rule: sig_logic }
+      - { rule: sig_group }
       - { rule: sig_value_atom }
 
   sig_logic:
@@ -82,13 +83,17 @@ rules:
   sig_primary:
     ast: { promote: true }
     choice:
-      - sequence:
-          - { literal: "(", ast: { discard: true } }
-          - { rule: WS_OPT }
-          - { rule: sig_logic }
-          - { rule: WS_OPT }
-          - { literal: ")", ast: { discard: true } }
+      - { rule: sig_group }
       - { rule: union_item }
+
+  sig_group:
+    ast: { promote: true }
+    sequence:
+      - { literal: "(", ast: { discard: true } }
+      - { rule: WS_OPT }
+      - { rule: sig_logic }
+      - { rule: WS_OPT }
+      - { literal: ")", ast: { discard: true } }
 
   sig_and_chain:
     ast: { tag: "sig-and", promote: true }

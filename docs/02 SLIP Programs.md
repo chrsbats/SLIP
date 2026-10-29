@@ -108,6 +108,19 @@ math1.value: 100
 
 Treat imported modules as providers of definitions. Adapt them by rebinding locally.
 
+Known callable bindings are retained by functions already defined in that context.
+Define a wrapper or a new function in the shadowing context to use its replacement.
+Capturing keeps the callable object itself: adding methods to the same generic
+remains visible through its references. Assigning a different callable to a name
+does not redirect existing captures.
+
+Ordinary assignment retains the evaluated value and its normal reference identity.
+Function parameters, locally introduced bindings, and member values remain live.
+Names not yet bound when a function is defined resolve when executed, supporting
+recursive and forward calls. Code values remain editable data; defining a function
+from Code establishes its callable-binding boundary. Explicit `run` and `run-with`
+retain their documented execution scopes.
+
 ### 1.3 A minimal project layout
 
 A simple way to organize a small program:
@@ -136,7 +149,7 @@ apply-damage: fn {state, target-id, amount} [
 combat: import `file://combat.slip`
 
 -- One place to re-export your program API
-apply-damage: combat.apply-damage
+apply-damage: core-function `combat.apply-damage`
 ```
 
 **File: `main.slip`**
@@ -274,7 +287,7 @@ math: import `file://math.slip`
 
 better-math: scope #{}
 better-math.add: fn {a, b} [ math.add a b + 1 ]
-better-math.mul: math.mul
+better-math.mul: core-function `math.mul`
 
 #[ better-math.add 2 3, better-math.mul 2 3 ]
 ```
@@ -293,6 +306,10 @@ Use prototypes when many values share the same defaults or behavior shape.
 ---
 
 ## How do I centralize authority over state?
+
+Resolver transactions in this section describe the deferred authority design.
+They are not implemented by the synchronous 0.3 runtime; ordinary scopes,
+prototype dispatch, refs and cells are available now.
 
 **The Problem:** "I have modules for combat and health regeneration, but they both touch `player.hp` directly. If I want to add a 'max health' rule or a 'death' log, I have to find every single line of code in every file that modifies HP."
 
@@ -705,14 +722,14 @@ format-msg: fn {x: `string`, rest...} [ "variadic" ]
 Primitive annotations participate in dispatch too. Remember that SLIP has two string types:
 
 ```slip
-kind-of-arg: fn {x: `string`} [ "raw string" ]
+kind-of-arg: fn {x: `string`} [ "non-interpolated string" ]
 kind-of-arg: fn {x: `i-string`} [ "i-string" ]
 
 #[
     kind-of-arg 'item-1',
     kind-of-arg "item-1"
 ]
--- => #["raw string", "i-string"]
+-- => #["non-interpolated string", "i-string"]
 ```
 
 Use single quotes for canonical `id:` values that should match `` `string` ``. Use `` `i-string` `` when you intentionally want double-quoted interpolated strings.
@@ -866,11 +883,16 @@ For game-like programs, a simple tick model works well:
 
 ### 9.1 Add examples to functions
 
-Attach examples to a function using `|example { ... -> ... }`.
+Attach examples with the ordinary call `example function { ... -> ... }`.
+
+In the Python interpreter, examples are test metadata. Declared signatures govern
+dispatch; attaching examples keeps the signature and method set intact. Sample
+values retain their types, so `2.0` remains a float. Inferring signatures and an
+optimized typed/C path from samples is a future direction.
 
 ```slip
 add: fn {x, y} [ x + y ]
-add |example { x: 2, y: 3 -> 5 }
+example add { x: 2, y: 3 -> 5 }
 ```
 
 ### 9.2 Run tests for one function: `test`

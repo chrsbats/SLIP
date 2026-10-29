@@ -1,0 +1,167 @@
+{
+  "python": "3.12.11",
+  "parse_ms": 224.44998403079808,
+  "setup_ms": [
+    1.0208310559391975,
+    0.22245594300329685,
+    0.45653502456843853,
+    0.29948109295219183,
+    0.4493779269978404,
+    0.2366530243307352,
+    0.19021600019186735
+  ],
+  "source_sha256": {
+    "slip/slip_core.py": "e2481d659b56f3ba0ab22be71879574cb5168a2bb4656c05515d65889c2e747e",
+    "slip/slip_library.py": "b2197da529b360957c834cd2c709248efb748162b0378bdbdbd671b64c8df509",
+    "slip/slip_syntax.py": "845cdd419ed10baffe5f593f67b63995eecf95a457be0692f1688533a1b14083",
+    "independent/benchmark_core.py": "c45f00d4aeaac9ff45b953655a02371a825e754b9f8f0aaa11ada25e8ceb6199"
+  },
+  "source_lines": {
+    "slip/slip_core.py": 741,
+    "slip/slip_library.py": 270,
+    "slip/slip_syntax.py": 150,
+    "independent/benchmark_core.py": 131
+  },
+  "results": {
+    "sum": {
+      "batch": 1,
+      "samples_ms": [
+        102.73570392746478,
+        80.74902708176523,
+        81.95532695390284,
+        79.89023707341403,
+        86.28716506063938,
+        82.36942708026618,
+        82.22143992315978
+      ],
+      "profile_calls": {
+        "evaluate": 13021,
+        "specificity": 5,
+        "apply": 11015,
+        "bind": 2,
+        "argument": 9016,
+        "__call__": 17020,
+        "convert": 8005,
+        "targets": 3007,
+        "shape": 23043,
+        "read": 23040,
+        "expand": 1000,
+        "run_with": 1000,
+        "__getitem__": 35025,
+        "invoke": 12016,
+        "while_loop": 1001,
+        "__init__": 1002,
+        "<genexpr>": 37,
+        "conditional": 1002,
+        "is_function": 39049,
+        "<lambda>": 2,
+        "current_scope": 1,
+        "execute": 6005,
+        "__setitem__": 3006
+      },
+      "median_ms": 82.22143992315978
+    },
+    "sum-while": {
+      "batch": 2,
+      "samples_ms": [
+        45.97015754552558,
+        36.4765910198912,
+        36.782189446967095,
+        38.59695646679029,
+        35.74160998687148,
+        41.1896604928188,
+        35.92977504013106
+      ],
+      "profile_calls": {
+        "evaluate": 6007,
+        "specificity": 1,
+        "apply": 6004,
+        "bind": 1,
+        "argument": 3003,
+        "__call__": 7007,
+        "convert": 3001,
+        "targets": 2002,
+        "shape": 12012,
+        "read": 9011,
+        "__getitem__": 17009,
+        "invoke": 7005,
+        "while_loop": 1001,
+        "__init__": 1,
+        "<genexpr>": 10,
+        "is_function": 15014,
+        "<lambda>": 1,
+        "execute": 2001,
+        "__setitem__": 2002
+      },
+      "median_ms": 36.782189446967095
+    },
+    "calls": {
+      "batch": 2,
+      "samples_ms": [
+        71.6069414629601,
+        52.911600505467504,
+        55.2976144826971,
+        52.147604001220316,
+        53.808631491847336,
+        51.450266502797604,
+        52.39868501666933
+      ],
+      "profile_calls": {
+        "evaluate": 7007,
+        "specificity": 1001,
+        "apply": 7004,
+        "bind": 1001,
+        "argument": 4003,
+        "__call__": 10007,
+        "convert": 3001,
+        "targets": 2002,
+        "shape": 15012,
+        "read": 12011,
+        "__getitem__": 16009,
+        "invoke": 8005,
+        "while_loop": 1001,
+        "__init__": 1001,
+        "<genexpr>": 18010,
+        "is_function": 18014,
+        "<lambda>": 1001,
+        "execute": 2001,
+        "__setitem__": 2002
+      },
+      "median_ms": 52.911600505467504
+    },
+    "query": {
+      "batch": 130,
+      "samples_ms": [
+        0.44514183850529104,
+        0.3734946152410255,
+        0.36595737686953866,
+        0.38780013117222834,
+        0.4085606304355539,
+        0.38352725364697665,
+        0.37389105418697
+      ],
+      "profile_calls": {
+        "evaluate": 41,
+        "specificity": 2,
+        "apply": 40,
+        "bind": 1,
+        "argument": 40,
+        "__call__": 83,
+        "convert": 40,
+        "targets": 41,
+        "shape": 81,
+        "read": 121,
+        "__getitem__": 362,
+        "invoke": 41,
+        "__init__": 41,
+        "<genexpr>": 13,
+        "is_function": 241,
+        "<lambda>": 1,
+        "execute": 40
+      },
+      "median_ms": 0.38352725364697665
+    }
+  },
+  "inputs_unchanged": true,
+  "legacy_modules_loaded": false
+}

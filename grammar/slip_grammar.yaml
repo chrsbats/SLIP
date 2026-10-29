@@ -179,11 +179,36 @@ rules:
       - { rule: set_path }
       - { rule: post_path }
       # Code block and group must be tried *after* set_path to allow multi_set_path and dynamic assignment to match first.
+      - { rule: value_term }
+
+  # Non-assignment terms also form slice bounds. Groups/containers still use the
+  # ordinary expression grammar internally, so their assignments remain explicit.
+  value_term:
+    ast: { promote: true }
+    choice:
+      - { rule: typed_list_literal }
+      - { rule: list_literal }
+      - { rule: dict_literal }
+      - { rule: sig_literal }
+      - { rule: string_literal }
+      - { rule: number_literal }
+      - { rule: boolean_literal }
+      - { rule: none_literal }
+      - { rule: path_literal }
       - { rule: code_block }
+      - { rule: grouped_path }
       - { rule: group }
       - { rule: piped_path }
       - { rule: del_path }
       - { rule: get_path }
+
+  grouped_path:
+    ast: { promote: true }
+    subgrammar:
+      file: "slip_path.yaml"
+      rule: "embedded_grouped_path"
+      placeholder:
+        { ast: { tag: "get-path", leaf: true }, regex: '\([^\n]*\)(?:\.[^\s;,]+|\[[^\]]*\])+' }
 
   get_path:
     ast: { promote: true }

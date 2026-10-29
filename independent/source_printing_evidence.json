@@ -1,0 +1,53 @@
+{
+  "status": "blocked on upstream numeric type preservation",
+  "python": "3.12.11",
+  "koine": "0.11.1",
+  "verification": {
+    "command": "uv run pytest --confcutdir=independent independent -q",
+    "passed": 195,
+    "failed": 1,
+    "seconds": 6.25,
+    "failure": "test_float_source_preserves_values_without_exponent_syntax[-0.0]",
+    "scoped_flake8": "passed",
+    "pseudocode_ast": "empty module"
+  },
+  "fresh_probes": {
+    "symbolic_library_round_trip": true,
+    "source_unbound": true,
+    "legacy_modules_loaded": false,
+    "koine_number_nodes": {
+      "-0.0": {
+        "text": "-0.0",
+        "value": 0,
+        "python_type": "int"
+      },
+      "0.0": {
+        "text": "0.0",
+        "value": 0,
+        "python_type": "int"
+      },
+      "1.0": {
+        "text": "1.0",
+        "value": 1,
+        "python_type": "int"
+      }
+    }
+  },
+  "source_sha256": {
+    "slip/slip_core.py": "a4749955c11226cc6c16b62cab0616b47b1389fdf8ff7d0d32100e648e5af6c5",
+    "slip/slip_library.py": "687b8ad61adbdfc44362c17fd6156afa7a508f9d6995307cfba91bcfd9cbff5b",
+    "slip/slip_syntax.py": "d527aa4d585589ac86c3c51b6267f7d2ca7b2d21a805777ac2c450e30809caa3",
+    "slip/slip_embedding.py": "03e41c01e76c19ca3aef1dc039cac4e3664cbca279f806a67a30757afa61dfb0",
+    "slip/slip_resources.py": "f425c303841ccf4f001bf689af06ddd31c2d09490480377c09a0899c23618cc8",
+    "independent/test_source_printing.py": "677cfc99b398a519353cc50dd0729f12a16b10ac31e9cfbd1848a0e6e841abe9"
+  },
+  "source_lines": {
+    "slip/slip_core.py": 1000,
+    "slip/slip_library.py": 301,
+    "slip/slip_syntax.py": 284,
+    "slip/slip_embedding.py": 281,
+    "slip/slip_resources.py": 356,
+    "independent/test_source_printing.py": 118
+  },
+  "portable_code_cache": "not implemented in this increment yet"
+}

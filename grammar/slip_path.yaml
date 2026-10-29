@@ -56,6 +56,19 @@ rules:
       - { rule: actual_path }
       - optional: { rule: metadata_block }
 
+  embedded_grouped_path:
+    ast: { tag: "get-path" }
+    sequence:
+      - { rule: group_segment }
+      - one_or_more:
+          ast: { promote: true }
+          choice:
+            - { rule: query_segment }
+            - sequence:
+                - { rule: separator }
+                - { rule: path_component }
+      - optional: { rule: metadata_block }
+
 
   embedded_del_path:
     ast: { tag: "del-path" }
@@ -125,12 +138,22 @@ rules:
     ast: { tag: "name", leaf: true }
     # Match '<letters>://', optionally followed by URL content excluding '#' and structural separators.
     # Allow scheme-only like 'file://'.
-    regex: '[A-Za-z]+://[^#\s;,()\[\]\{\}]*'
+    # Keep assignment and POST suffixes outside the atomic locator.
+    regex: '[A-Za-z]+://(?:(?!<-|:(?:$|[\s;,#]))[^#\s;,()\[\]\{\}])*'
 
   actual_path:
     ast: { promote: true }
     choice:
-      - { rule: url_segment } # scheme URLs are a single, atomic segment
+      - sequence:
+          - { rule: url_segment }
+          - zero_or_more:
+              ast: { promote: true }
+              choice:
+                - { rule: query_segment }
+                - { rule: group_segment }
+                - sequence:
+                    - { literal: ".", ast: { discard: true } }
+                    - { rule: path_component }
       - sequence:
           - { rule: root_segment }
           - optional: { rule: component_chain }
@@ -283,10 +306,23 @@ rules:
   slice_start_expr:
     ast: { tag: "start-expr" }
     sequence:
-      - subgrammar:
-          file: "slip_grammar.yaml"
-          rule: "expression_list"
-          placeholder: { ast: { tag: "expr", leaf: true }, regex: "[^\\]:]+" }
+      - ast: { tag: "expr" }
+        sequence:
+          - { rule: ws_opt_path }
+          - { rule: slice_bound_term }
+          - zero_or_more:
+              ast: { promote: true }
+              sequence:
+                - { rule: ws_opt_path }
+                - { rule: slice_bound_term }
+          - { rule: ws_opt_path }
+
+  slice_bound_term:
+    ast: { promote: true }
+    subgrammar:
+      file: "slip_grammar.yaml"
+      rule: "value_term"
+      placeholder: { ast: { tag: "expr", leaf: true }, regex: "[^\\]:]+" }
 
   slice_end_expr:
     ast: { tag: "end-expr" }

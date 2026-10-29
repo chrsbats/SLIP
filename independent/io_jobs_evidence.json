@@ -1,0 +1,176 @@
+{
+  "objective": "Synchronous interpreter with Runner-owned background I/O jobs",
+  "independent_increment_complete": true,
+  "whole_interpreter_acceptance": false,
+  "runtime_lines": {
+    "slip/slip_core.py": 1029,
+    "slip/slip_library.py": 364,
+    "slip/slip_syntax.py": 294,
+    "slip/slip_embedding.py": 300,
+    "slip/slip_resources.py": 388,
+    "slip/slip_cache.py": 181,
+    "slip/slip_jobs.py": 101
+  },
+  "source_sha256": {
+    "slip/slip_core.py": "4987c0dd388cb0ad2b73b312eeb58331dbdaead945bda52abbed6328563cf374",
+    "slip/slip_library.py": "c75aa98f1c3ed1c29912dc8aff2d0df87696d4922fdddb26363978b6015b3ab7",
+    "slip/slip_syntax.py": "26c18d6790222a173125ce34fd66dd1104901f50d5a480a22b5d21ec296c9b1c",
+    "slip/slip_embedding.py": "0d3c915220df06b948764e3c766816e777092e28f8204b58b5725b64424909c2",
+    "slip/slip_resources.py": "9117cbe6ea9967c6d6d63b9440f681c459f7a7a99e452f045e61d8533642c4bf",
+    "slip/slip_cache.py": "9d8d74e8a195a0fc49bcfbfd4d4d2e4b8c7d2bead4fd7d53566b6c7e8dbc2857",
+    "slip/slip_jobs.py": "8f8136d839c65a37c53516f9f2908902cde6bea0c1d61fd3ab32fb29d6d51c3d",
+    "independent/test_bind_once.py": "7e61f4eb23cf4a15e864b8f3c5d20d34443811e31705ba30c422fb7443077117",
+    "independent/test_code_cache.py": "868d462a26dec364417ac08669be56500142476915becadb10803afc928b13c6",
+    "independent/test_documented_library.py": "389c66e873da7b9fbc52439694fa6f3965cf381b98ae814063c93436b697e13f",
+    "independent/test_documented_metaprogramming.py": "785071b389b4f3387ac17bd46d45faf4942ba9bc5309bae1d5b803bee7e46243",
+    "independent/test_documented_scripts.py": "4e843a5acac89218d8eb03a1252898dfe024ab821358b6d6393e64d4094ab48f",
+    "independent/test_embedding.py": "a8af569d8e7fa5801db6d2a5780ae44c9c808c80d47cae34ebfd5be302425cc5",
+    "independent/test_file_resources.py": "0d60dafbf2b2102fd0d800bb96d8a1da5d74ea9d5b3d8eebd80ca2169e384539",
+    "independent/test_host_views.py": "aea9720d1e2632cd9a418769fb99d94db48a4c9d757d2b20389afbf28ca02788",
+    "independent/test_http_resources.py": "9c8bce37dc42ef8ee0b373ddec4d288e3c80a0ce520adf21778c023b502749a9",
+    "independent/test_io_jobs.py": "8354ab031590790bbdf6bb9b1bf2381e54bf0a16e76b2a4282cfe611869b126c",
+    "independent/test_pop_core.py": "1129e1c4a7de83f8a3971c5fed2dd526cde4d632549b117a6b9614aa6922f38e",
+    "independent/test_scope_functions.py": "5917fa18971ced45cc45cefe60ea71d43539922b4e3b723a5e8267f6e5e08a7e",
+    "independent/test_simple_model.py": "57267c68a535e7836ed513241109a8d9462e12519c696a8450dae86ff2f10ac7",
+    "independent/test_source_printing.py": "22811e7b55647009464024e654dce0426c743126b274e0ddb736524668361b33",
+    "independent/test_sync_execution.py": "33d740a4dfb523d0b53c940f09e5cb49d03dfb0ecae0fb656bb2402b0e7e7ebd",
+    "independent/test_value_operations.py": "629768f392525e6beaa43fa3e91de2fd7de5a6035881dcf39e555ee2f578da27",
+    "independent/benchmark_transition.py": "72858694d60d6ecce567b1a0ce2ac1f272407805d5d6e381d7fb87ae8a5191cd",
+    "independent/benchmark_core.py": "677d4301df99b77b4f4241b1bcd4628c8c3148e520274c3d64bbca9a1a3198d7",
+    "pyproject.toml": "6b7e1baa9949f98c98032ef84e0b58712776fd31482880bee786d586635a34fe",
+    "uv.lock": "039a49cc70ab6740954229f40d67cbdb3d9363f485d18dced0a80458ccb6a80e",
+    "plan/SPEC.md": "b13d168086b95b1ebe1b560f19646fa96bd5d9a44f6ccfd0ee3009806081c2ce",
+    "AGENTS.md": "fc9c1fd6308a034d313545451c613bcd84643dfc5f82f928301396f1ffe60183",
+    "docs/03 SLIP Advanced.md": "b834f6ad367268c53c6c4cd0cd267dc526a82df74d6bf52804b1277ee76e0b36",
+    "docs/Appendix A - StdLib Reference.md": "bd7ed50c5fc3277d54441f8bc2fac2cfcdd8776e0ce522699042dd87104c68c0",
+    "grammar/slip_grammar.yaml": "cec2a68e029c8c654fcabcfaf7183d268eba6b19fd2dac79b8a5f4080bdf7161",
+    "grammar/slip_path.yaml": "223437614aa984f8b63706b7ccfc9b57d3371cff6da18fd81704f9a3f80ab746",
+    "grammar/slip_sig.yaml": "c8e109f161394599096249cd00fe45647587b450bed0d418eecb615e53e3f70a"
+  },
+  "dependencies": {
+    "koine": "0.11.2",
+    "httpx": "0.28.1",
+    "safer-yaml": "0.1.1",
+    "etcher": "0.2.0"
+  },
+  "tests": {
+    "tests": 324,
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "junit_path": "/tmp/opencode/slip-io-jobs-tests.xml",
+    "junit_sha256": "32c4eb8f6f9ca5cb37c8ef0cd706fc9fc3b8ae4b81a9d22208bbe0bc5b5bbcac",
+    "command": "uv run pytest --confcutdir=independent independent -q --tb=short -W error::RuntimeWarning --junitxml=/tmp/opencode/slip-io-jobs-tests.xml"
+  },
+  "checks": {
+    "scoped_flake8": "passed",
+    "pseudocode_ast": "Module(body=[], type_ignores=[])",
+    "async_functions_by_runtime_module": {
+      "slip_core.py": [],
+      "slip_library.py": [],
+      "slip_syntax.py": [],
+      "slip_embedding.py": [],
+      "slip_resources.py": [
+        "request_http"
+      ],
+      "slip_cache.py": [],
+      "slip_jobs.py": [
+        "serve",
+        "call"
+      ]
+    },
+    "no_result_policing_or_coroutine_closing": true,
+    "real_socket_http_overlap_and_session_reuse": "passed in independent/test_io_jobs.py",
+    "fixed_concurrency_limit": 32,
+    "worker_reentry_and_operation_path_regressions": "7 reproduced failures then passing",
+    "source_cache_thread_process_contracts": "passed in full suite"
+  },
+  "fresh_probe": {
+    "mechanics_while_jobs_pending": [
+      93,
+      false
+    ],
+    "effects": [
+      {
+        "topics": [
+          "combat"
+        ],
+        "message": 93
+      }
+    ],
+    "native_results": [
+      7,
+      9
+    ],
+    "job_handle_identity_preserved": true,
+    "native_jobs_ran_on_separate_worker_thread": true,
+    "owned_client_loop_closed_and_thread_joined": true,
+    "legacy_modules_loaded": false
+  },
+  "reviews": {
+    "architecture": {
+      "session": "ses_e8a4172b1ffeYR66iXBfFwWd6Z",
+      "verdict": "approve after scoped corrections",
+      "findings_remaining": 0
+    },
+    "behavior": {
+      "session": "ses_e8a417291ffepxBkr3wNv1yD6r",
+      "verdict": "bounded approval after scoped corrections",
+      "findings_remaining": 0
+    },
+    "scope": "Independent source/test inspection; executable checks run by parent agent"
+  },
+  "measurements": {
+    "before_path": "independent/io_jobs_before.json",
+    "before_sha256": "6369a93cc5bdcd4e8247f707fd224bd2febbb9e1f21721383882183ea25fa086",
+    "after_path": "independent/io_jobs_after.json",
+    "after_sha256": "4560fed0b70135a4c5e65055027607ad84106ab602d04d8ed18af441ca0c3f95",
+    "comparison": "Real saved independent async checkpoint versus current sync core/I/O jobs; not frozen v0.2.1",
+    "warm_median_us": {
+      "sum": {
+        "async": 56708.91200134065,
+        "sync": 36850.58533543876
+      },
+      "sum-while": {
+        "async": 25507.05649991869,
+        "sync": 13557.570000557462
+      },
+      "calls": {
+        "async": 37668.88449899852,
+        "sync": 23726.727999019204
+      },
+      "query": {
+        "async": 253.94412872322724,
+        "sync": 201.07936708061104
+      },
+      "attack": {
+        "async": 66.0668725721662,
+        "sync": 50.408905727523994
+      },
+      "python-attack": {
+        "async": 1.665918359140282,
+        "sync": 1.6928109771851843
+      }
+    },
+    "runner_setup_median_ms": {
+      "async": {
+        "construct": 14.309076010249555,
+        "first_script": 2.9079649975756183,
+        "close": 0.017591999494470656
+      },
+      "sync": {
+        "construct": 49.918041011551395,
+        "first_script": 3.1358249980257824,
+        "close": 2.512844992452301
+      }
+    },
+    "non_loop_logical_profile_counts_equal": true,
+    "loop_timings_include_removal_of_cooperative_yields": true
+  },
+  "deferred": [
+    "local SLIP tasks/sleep/continuations",
+    "slip:// RPC transport and remote execution",
+    "remaining independent language/library/public API/diagnostics",
+    "legacy/package/consumer integration and frozen-release performance gates"
+  ]
+}

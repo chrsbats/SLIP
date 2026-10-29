@@ -1,0 +1,53 @@
+{
+  "scope": "independent HTTP resource boundary",
+  "python": "3.12.11",
+  "httpx": "0.28.1",
+  "source_sha256": {
+    "slip/slip_core.py": "a4749955c11226cc6c16b62cab0616b47b1389fdf8ff7d0d32100e648e5af6c5",
+    "slip/slip_library.py": "fe213cceb9b246c48fa7a1dc24f11c2666d377ac154ae67cb1316466c1485528",
+    "slip/slip_syntax.py": "4b453c85018de63a772b7041c7f408a31cc284ff2910df4f5762f967357ac636",
+    "slip/slip_embedding.py": "03e41c01e76c19ca3aef1dc039cac4e3664cbca279f806a67a30757afa61dfb0",
+    "slip/slip_resources.py": "66abfa471479c914be980b002cea59588d568402f582605780ad78a5f42526e1",
+    "grammar/slip_path.yaml": "223437614aa984f8b63706b7ccfc9b57d3371cff6da18fd81704f9a3f80ab746",
+    "independent/test_http_resources.py": "648bc9dada82a1a0d03e3032a1857adb37c5deb12138aa4b8405742d859975e1",
+    "independent/test_embedding.py": "26e2d70a5a32d9e1b8c34c81a80af148602940b013ffc20b0e769311799241a9",
+    "independent/test_pop_core.py": "8268348c5d9107469c3c0138913565437cf04194db7baa95d70659be58ed9a24"
+  },
+  "source_lines": {
+    "slip/slip_core.py": 1000,
+    "slip/slip_library.py": 297,
+    "slip/slip_syntax.py": 157,
+    "slip/slip_embedding.py": 281,
+    "slip/slip_resources.py": 356,
+    "grammar/slip_path.yaml": 320,
+    "independent/test_http_resources.py": 503,
+    "independent/test_embedding.py": 350,
+    "independent/test_pop_core.py": 346
+  },
+  "observations": {
+    "query": [
+      "A"
+    ],
+    "full_status": 422,
+    "protocol_capture": [
+      true,
+      true,
+      422
+    ],
+    "module_shadows": [
+      100,
+      7,
+      false
+    ],
+    "module_fetches": 1,
+    "injected_client_left_open": true
+  },
+  "pytest": {
+    "command": "uv run pytest --confcutdir=independent independent -q",
+    "passed": 174,
+    "seconds": 8.49
+  },
+  "scoped_lint_passed": true,
+  "legacy_runtime_loaded": false,
+  "performance_measured": false
+}

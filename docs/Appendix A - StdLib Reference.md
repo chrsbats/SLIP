@@ -1,5 +1,8 @@
 # Appendix A - StdLib Reference
 
+Local execution is synchronous. Explicit background I/O uses Runner-owned jobs.
+Local `task`/`sleep` suspension and resolver transaction authority are deferred.
+
 This appendix is a practical reference for the current SLIP standard library surface.
 
 It is not a tutorial. For a guided introduction, start with:
@@ -86,7 +89,7 @@ if [result.status = ok] [ result.value ]
 - Returns the SLIP type as a path literal.
 - Common results include `` `int` ``, `` `float` ``, `` `string` ``, `` `i-string` ``, `` `list` ``, `` `dict` ``, `` `scope` ``, `` `function` ``, `` `path` ``, `` `none` ``.
 - Because the result is a path literal, type guards should compare with backticked literals such as `` `string` ``, not quoted strings.
-- Raw single-quoted strings have type `` `string` ``; double-quoted interpolated strings have type `` `i-string` ``.
+- Single-quoted non-interpolated strings have type `` `string` ``; double-quoted interpolated strings have type `` `i-string` ``. Both decode escapes such as `\n` and `\\`.
 
 Example:
 
@@ -135,7 +138,7 @@ from `json` '{"name": "Karl", "hp": 120}'
 
 ### `to-path value`
 
-- Converts a raw string, interpolated string, or get-path literal to a path literal.
+- Converts a non-interpolated string, interpolated string, or get-path literal to a path literal.
 - URL-like and special path strings remain a single path segment; ordinary dotted or slash-separated strings become segmented paths.
 
 Example:
@@ -152,6 +155,7 @@ Example:
 
 - Calls `func` with a list of arguments.
 - Useful when arguments are already assembled as a list.
+- A callable value retains its target. A quoted get-path resolves in the call's current scope.
 
 Example:
 
@@ -478,6 +482,10 @@ for {i} 1 4 [ print i ]
 
 - Constructs a function.
 - Functions are generic containers: multiple definitions with the same name add implementations.
+- Captures known lexical callable bindings when the definition executes, in script order.
+- Parameters, locals, and data/member operands remain live. Names not yet bound retain runtime lookup.
+- Captures retain object identity: extending the same generic is visible; rebinding its name does not redirect an existing capture.
+- Preparation does not invoke captured functions. Expression-head functions are called and missing arguments are errors. Function arguments stay values at every arity; use `(time)` to supply a zero-argument call's result.
 
 ### `partial function args...`
 
@@ -488,6 +496,22 @@ for {i} 1 4 [ print i ]
 
 - Returns a function that applies `functions` from right to left.
 - `compose f g h` produces a function equivalent to `f(g(h(value)))`.
+
+### `call target`
+### `call target args`
+
+- Invokes the target through the ordinary call boundary. `args` is a list of
+  already-evaluated values; omitting it means zero arguments.
+- String and quoted-path targets resolve at the call. Native set/delete paths
+  retain their corresponding operations. Non-callable targets are errors.
+- Always invokes, never constructs a path. Use `to-path` for construction.
+
+### `core-function path`
+
+- Returns the callable at a quoted path without invoking it.
+- Useful when a function value is needed at an expression head, such as
+  ``alias: core-function `module.function` ``. Ordinary function arguments already
+  stay values; `return function` explicitly returns one.
 
 ### `return`
 ### `return value`
@@ -587,8 +611,8 @@ adapter: fn (sig description) [
 
 ### `resolver mapping`
 
-- Creates a resolver scope.
-- Resolvers are the authority roots for `this:` transactions.
+- Reserved for resolver authority roots and `this:` transactions.
+- Resolver/transaction execution is deferred in the synchronous rewrite.
 
 ### `inherit obj proto`
 
@@ -660,7 +684,7 @@ p.hp
 
 ## Host Command APIs
 
-### `|public`
+### `public function`
 
 - Marks a function or generic function as part of a host-visible public command API.
 - Intended for command API modules that re-export only player-facing operations.
@@ -671,11 +695,11 @@ Example:
 ```slip
 movement: import `file://movement.slip`
 
-take: movement.take |public
-put: movement.put |public
+take: public movement.take
+put: public movement.put
 ```
 
-### `|command`
+### `command function`
 
 - Adapts every method of a function to an entity-ID host command boundary.
 - Prototype-typed parameters become `` `id` `` parameters in projected signatures.
@@ -683,17 +707,24 @@ put: movement.put |public
 - Calls `host-object` with each complete ID unchanged before invoking the original generic function.
 - The original generic performs typed dispatch and evaluates its `|where` guards after hydration.
 - Is implemented in SLIP using `get-sig`, `sig`, closures, and `current-scope`.
+- Prepares hydration closures in the original definition environment once; calls
+  reuse bound code and invoke the original generic with hydrated argument values.
 - Use `|public` separately to expose the adapter to a host.
 
 ```slip
-take: take-method |command |public
+take: command take-method |public
 ```
 
 ## Testing Helpers
 
-### `|example { ... -> ... }`
+### `example function { ... -> ... }`
 
 - Attaches an example to a function implementation.
+- Like other helpers, reads its function as an ordinary argument value. A function
+  constructor/call result can also be piped to `example`.
+- Records sample values/types for explicit `test`/`test-all` execution. The current
+  Python interpreter retains the declared signature and method set; future typed
+  optimization may use the samples as implicit signatures.
 
 ### `test function`
 
@@ -780,14 +811,30 @@ http://api.example.com/data#(response-mode: `full`)
 
 ## Tasks And Time
 
+### Runner I/O jobs
+
+- `submit operation` / `submit operation args`
+  - Submits an HTTP locator or native async host operation to the Runner's worker.
+  - Returns a native pollable Future; it does not execute local SLIP Code.
+  - Quote the operation path, such as ``submit `https://example.test/data` `` or
+    ``submit `fetch` #['id:item-1']``. Args are supplied as a list.
+- `job-done job`
+  - Returns whether a submitted operation has finished, failed or been cancelled.
+- `job-result job`
+  - Returns the completed value or raises its error.
+  - A pending job raises immediately; it does not wait or resume a script.
+
+The Runner owns concurrency and cleanup. See
+[SLIP Advanced](<03 SLIP Advanced.md#background-io-jobs>).
+
 ### `task [code]`
 
-- Launches a background task.
-- Use this for background work, polling, maintenance jobs, and cron-like behavior.
+- Deferred. Raises an unsupported-operation error without running the body.
+- Use host scheduling for local work and `submit` for external I/O.
 
 ### `sleep seconds`
 
-- Async sleep helper.
+- Deferred. Raises an unsupported-operation error; the evaluator never suspends.
 
 ### `time`
 

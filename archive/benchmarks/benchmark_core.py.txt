@@ -1,0 +1,136 @@
+"""Matched construction timings for the independent interpreter only."""
+
+import argparse
+import copy
+import cProfile
+import hashlib
+import json
+import platform
+import pstats
+import statistics
+import sys
+import time
+from pathlib import Path
+
+DIRECTORY = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(DIRECTORY / "slip"))
+
+from slip_core import Scope, execute, invoke  # noqa: E402
+from slip_library import SOURCE, library_scope  # noqa: E402
+from slip_syntax import parse  # noqa: E402
+
+
+PROGRAM = """
+sum: fn {n} [total: 0; for {i} 0 n [total: + i]; total]
+sum-while: fn {n} [
+    i: 0; total: 0
+    while [i < n] [total: + i; i: + 1]
+    total
+]
+increment: fn {x} [x + 1]
+calls: fn {n} [
+    i: 0; total: 0
+    while [i < n] [total: increment total; i: + 1]
+    total
+]
+query: fn {players, limit} [players[.hp < limit].hp]
+"""
+
+
+def measure():
+    start = time.perf_counter()
+    library, program = parse(SOURCE), parse(PROGRAM)
+    parse_ms = (time.perf_counter() - start) * 1000
+    setup = []
+    for _ in range(7):
+        start = time.perf_counter()
+        scope = Scope(parent=library_scope())
+        execute(library, scope.root)
+        execute(program, scope)
+        setup.append((time.perf_counter() - start) * 1000)
+    players = [{"hp": i} for i in range(40)]
+    original = copy.deepcopy(players)
+    cases = [
+        ("sum", [1000], 499500),
+        ("sum-while", [1000], 499500),
+        ("calls", [1000], 1000),
+        ("query", [players, 20], list(range(20))),
+    ]
+    results = {}
+    for name, args, expected in cases:
+        function = scope[name]
+        for _ in range(3):
+            assert invoke(function, args, scope) == expected
+        start = time.perf_counter()
+        invoke(function, args, scope)
+        duration = time.perf_counter() - start
+        batch = max(1, round(0.1 / duration))
+        results[name] = {"batch": batch, "samples_ms": []}
+    for sample in range(7):
+        for offset in range(len(cases)):
+            name, args, expected = cases[(sample + offset) % len(cases)]
+            start = time.perf_counter()
+            for _ in range(results[name]["batch"]):
+                value = invoke(scope[name], args, scope)
+            elapsed = time.perf_counter() - start
+            assert value == expected
+            results[name]["samples_ms"].append(
+                elapsed * 1000 / results[name]["batch"]
+            )
+    for name, args, expected in cases:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        value = invoke(scope[name], args, scope)
+        profiler.disable()
+        assert value == expected
+        counts = {}
+        stats = pstats.Stats(profiler).stats
+        for (filename, _, function), entry in stats.items():
+            if filename == str(DIRECTORY / "slip" / "slip_core.py"):
+                counts[function] = counts.get(function, 0) + entry[1]
+        results[name]["profile_calls"] = counts
+        results[name]["median_ms"] = statistics.median(
+            results[name]["samples_ms"]
+        )
+    assert players == original
+    assert not any(name == "slip" or name.startswith("slip.")
+                   for name in sys.modules)
+    files = [DIRECTORY / "slip" / name for name in (
+        "slip_core.py", "slip_library.py", "slip_syntax.py",
+        "slip_embedding.py", "slip_resources.py", "slip_cache.py",
+        "slip_jobs.py",
+    )] + [DIRECTORY / "grammar" / "slip_path.yaml", Path(__file__)]
+    return {
+        "python": platform.python_version(),
+        "parse_ms": parse_ms,
+        "setup_ms": setup,
+        "source_sha256": {
+            str(path.relative_to(DIRECTORY)):
+                hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in files
+        },
+        "source_lines": {
+            str(path.relative_to(DIRECTORY)):
+                len(path.read_text().splitlines())
+            for path in files
+        },
+        "results": results,
+        "inputs_unchanged": players == original,
+        "legacy_modules_loaded": False,
+    }
+
+
+if __name__ == "__main__":
+    options = argparse.ArgumentParser()
+    options.add_argument("--output", type=Path, required=True)
+    output = options.parse_args().output
+    report = measure()
+    output.write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps({
+        "parse_ms": report["parse_ms"],
+        "setup_median_ms": statistics.median(report["setup_ms"]),
+        "workload_median_ms": {
+            name: value["median_ms"]
+            for name, value in report["results"].items()
+        },
+    }, indent=2))

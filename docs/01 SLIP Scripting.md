@@ -37,7 +37,7 @@ This script:
 ### Run a script file
 
 ```bash
-uv run python slip.py my-script.slip
+uv run python3 slip.py my-script.slip
 ```
 
 When you run a script file, SLIP evaluates the file from top to bottom.
@@ -45,7 +45,7 @@ When you run a script file, SLIP evaluates the file from top to bottom.
 ### Start the REPL
 
 ```bash
-uv run python slip.py
+uv run python3 slip.py
 ```
 
 The REPL is useful when you want to try small expressions before writing a full script.
@@ -123,7 +123,7 @@ missing: none
 
 SLIP has two string types:
 
-- **raw strings**: single quotes, no interpolation: `'...'`
+- **non-interpolated strings**: single quotes, type `string`: `'...'`
 - **i-strings**: double quotes, evaluate `{{...}}` as SLIP expressions: `"Hello {{name}}"`
 
 ```slip
@@ -142,7 +142,14 @@ item: #{ name: 'brass key' }
 "You take {{display-name item}}."
 ```
 
-Multi-line i-strings are automatically de-dented:
+Both quote styles recognize `\n` (newline), `\r` (carriage return), `\t` (tab),
+`\\` (backslash), `\'` and `\"` (quotes). For example, `'a\nb'` contains two
+lines. To write a literal backslash followed by `n`, use `'a\\nb'`.
+
+Physical line endings are normalized to newlines. Multiline strings in either
+quote style are automatically de-dented.
+One opening and closing framing newline is removed, so this has no surrounding
+blank lines:
 
 ```slip
 greeting: "
@@ -150,6 +157,10 @@ greeting: "
     Welcome back.
 "
 ```
+
+Explicit escapes are decoded after that layout cleanup: `"\nHello.\n"` retains
+both newlines. Spaces in single-line literals and remaining content indentation
+and blank lines are preserved.
 
 ### Lists and dicts
 
@@ -217,6 +228,96 @@ Call it:
 
 ```slip
 result: add-ten 5
+```
+
+The function's signature determines how many argument values are read. A piped
+call supplies the saved value first and reads one fewer value. Parentheses evaluate
+a nested expression as one argument:
+
+```slip
+four: fn {a, b, c, d} [a + b + c + d]
+twice: fn {x} [x * 2]
+four 1 2 (twice 3) 4
+-- => 13
+1 |four 2 (twice 3) 4
+-- => 13
+```
+
+Variadic functions consume the remaining call arguments up to a pipe or statement
+boundary; parentheses can explicitly bound an inner call. Functions are also
+ordinary argument values: use `example four description` when passing `four` to
+another function. Callers do not infer that intent from a following pipe's arity.
+
+A statement is an implicit evaluation group. A function at its head is called;
+missing arguments are errors, so both `add` and `(add)` fail. In argument position,
+functions remain values regardless of arity:
+
+```slip
+keep: fn {value} [return value]
+clock: keep time
+is-fn clock
+-- => true
+```
+
+`time` alone calls the clock; `keep time` passes the function, while `keep (time)`
+passes its result. Likewise, `add 1 (sub 1 2)` evaluates the subtraction first.
+`add 1 sub 1 2` passes the function `sub` as an argument to `add` and fails.
+Use `return function` when returning a callable value from a function body.
+
+A completed group supplies its result once, even when the result is a function.
+Use `call` to invoke that result explicitly:
+
+```slip
+make: fn {} [fn {} [7]]
+#[is-fn (make), is-fn ((make)), call (make)]
+-- => #[true, true, 7]
+```
+
+### When are function bindings chosen?
+
+A function captures known, lexically named functions and operators when its
+definition executes. A later shadow or rebind supplies behavior for subsequent
+definitions:
+
+```slip
+f: fn {x} [x + 1]
+/+: |core-sub
+g: fn {x} [x + 1]
+
+#[f 10, g 10]
+-- => #[11, 9]
+```
+
+Definitions bind in script order. Parsing the entire script does not bind its
+functions ahead of execution.
+
+Parameters and data operands are read when the function runs. Member access reads
+the current object, including a replacement object. Callable parameters use the
+function supplied for that invocation:
+
+```slip
+apply: fn {operation, value} [operation value]
+inc: fn {value} [value + 1]
+dec: fn {value} [value - 1]
+
+#[apply inc 10, apply dec 10]
+-- => #[11, 9]
+```
+
+Preparing a callable reference does not invoke it. Zero-argument functions run at
+expression heads and in explicit nested calls, and stay values in argument
+positions. Refs and cells retain live reads; a quoted path explicitly passed to
+`call` resolves at that call.
+
+Binding a piped callable captures both its target and accumulator-first calling
+mode:
+
+```slip
+target: core-function `core-add`
+op: |target
+target: core-function `core-sub`
+10 op 3
+-- => 13
 ```
 
 ### Code blocks
@@ -368,6 +469,18 @@ The “filter then pluck” version is equivalent:
 
 ```slip
 players[.hp < 50].hp: * 1.1
+```
+
+### Delete exactly the addressed entry
+
+`~path` removes that entry, or the entries selected by a query. Empty ancestor
+Scopes remain ordinary data; their names do not affect deletion:
+
+```slip
+obj: scope #{child: scope #{hp: 10}}
+~obj.child.hp
+len obj.child
+-- => 0
 ```
 
 ### Takeaway

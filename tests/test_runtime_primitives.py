@@ -1,242 +1,150 @@
-import pytest
-
 from slip import ScriptRunner
+from slip.slip_core import Path, PathLiteral
 
 
-@pytest.mark.asyncio
-async def test_if_with_code_variables_and_missing_else():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    # else/then as variables pointing to code blocks
-    res = await runner.handle_script("""
-    then-block: [ 't' ]
-    else-block: [ 'e' ]
-    if [false] then-block else-block
+def test_if_with_code_variables_and_missing_else(runner):
+    result = runner.handle_script("""
+        then-block: ['t']
+        else-block: ['e']
+        if [false] then-block else-block
     """)
-    assert res.status == "ok"
-    assert res.value == "e"
-
-    # Missing else returns none
-    res2 = await runner.handle_script("if [false] [1]")
-    assert res2.status == "ok"
-    assert res2.value is None
+    assert result.status == 'ok', result.error_message
+    assert result.value == 'e'
+    result = runner.handle_script('if [false] [1]')
+    assert result.status == 'ok', result.error_message
+    assert result.value is None
 
 
-@pytest.mark.asyncio
-async def test_foreach_over_mapping_keys_and_items():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    # Single-var mapping iteration yields keys
-    res = await runner.handle_script("""
-    d: #{ a: 1, b: 2 }
-    out: #[]
-    foreach {k} d [ out: add out #[ k ] ]
-    sort out
+def test_foreach_over_mapping_keys_and_items(runner):
+    result = runner.handle_script("""
+        d: #{a: 1, b: 2}
+        out: #[]
+        foreach {k} d [out: add out #[k]]
+        sort out
     """)
-    assert res.status == "ok"
-    assert res.value == ["a", "b"]
-
-    # Two-var mapping iteration yields pairs; pick value where key == 'a'
-    res2 = await runner.handle_script("""
-    d: #{ a: 1, b: 2 }
-    sum: 0
-    foreach {k, v} d [
-      if [eq k 'a'] [
-        sum: v
-      ] [
-        none
-      ]
-    ]
-    sum
+    assert result.status == 'ok', result.error_message
+    assert result.value == ['a', 'b']
+    result = runner.handle_script("""
+        d: #{a: 1, b: 2}
+        sum: 0
+        foreach {k, v} d [if [eq k 'a'] [sum: v] [none]]
+        sum
     """)
-    assert res2.status == "ok"
-    assert res2.value == 1
+    assert result.status == 'ok', result.error_message
+    assert result.value == 1
 
 
-@pytest.mark.asyncio
-async def test_small_math_family_is_available():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    res = await runner.handle_script("""
-    #[
-      floor 1.7,
-      ceil 1.2,
-      trunc -1.7,
-      round 1.6,
-      round 1.234 2,
-      sqrt 9,
-      abs -4
-    ]
+def test_small_math_family_is_available(runner):
+    result = runner.handle_script("""
+        #[floor 1.7, ceil 1.2, trunc -1.7, round 1.6,
+          round 1.234 2, sqrt 9, abs -4]
     """)
+    assert result.status == 'ok', result.error_message
+    assert result.value == [1, 2, -1, 2, 1.23, 3.0, 4]
 
-    assert res.status == "ok", res.error_message
-    assert res.value == [1, 2, -1, 2, 1.23, 3.0, 4]
+
+def test_runner_local_randomness_is_repeatable_and_isolated(runner):
+    source = 'seed-random 42; #[random, random, random-int 1 6]'
+    with ScriptRunner() as second:
+        one = runner.handle_script(source)
+        two = second.handle_script(source)
+        replay = runner.handle_script(source)
+        for result in (one, two, replay):
+            assert result.status == 'ok', result.error_message
+        assert one.value == two.value == replay.value
+        runner.handle_script('random')
+        following = second.handle_script('random')
+        replay = runner.handle_script(
+            'seed-random 42; #[random, random, random-int 1 6, random]',
+        )
+        assert following.status == replay.status == 'ok'
+        assert following.value == replay.value[-1]
 
 
-@pytest.mark.asyncio
-async def test_runner_local_randomness_is_repeatable_and_isolated():
-    first = ScriptRunner()
-    second = ScriptRunner()
-
-    first_sequence = await first.handle_script("""
-    seed-random 42
-    #[random, random, random-int 1 6]
+def test_random_ranges_and_seed_return_value(runner):
+    result = runner.handle_script("""
+        seeded: seed-random 7
+        values: #[random-int 1 1, random-int -2 2, random]
+        #[seeded, values]
     """)
-    second_sequence = await second.handle_script("""
-    seed-random 42
-    #[random, random, random-int 1 6]
-    """)
-    replay = await first.handle_script("""
-    seed-random 42
-    #[random, random, random-int 1 6]
-    """)
-
-    assert first_sequence.status == "ok", first_sequence.error_message
-    assert second_sequence.status == "ok", second_sequence.error_message
-    assert replay.status == "ok", replay.error_message
-    assert first_sequence.value == second_sequence.value == replay.value
-
-    await first.handle_script("random")
-    second_next = await second.handle_script("random")
-    replay_next = await first.handle_script("seed-random 42\n#[random, random, random-int 1 6, random]")
-    assert second_next.value == replay_next.value[-1]
-
-
-@pytest.mark.asyncio
-async def test_random_ranges_and_seed_return_value():
-    result = await ScriptRunner().handle_script("""
-    seeded: seed-random 7
-    values: #[random-int 1 1, random-int -2 2, random]
-    #[seeded, values]
-    """)
-
-    assert result.status == "ok", result.error_message
+    assert result.status == 'ok', result.error_message
     assert result.value[0] is None
     assert result.value[1][0] == 1
     assert -2 <= result.value[1][1] <= 2
     assert 0 <= result.value[1][2] < 1
 
 
-@pytest.mark.asyncio
-async def test_imported_module_shares_runner_random_stream(tmp_path):
-    (tmp_path / "random-value.slip").write_text(
-        "value: random\n",
-        encoding="utf-8",
-    )
-    runner = ScriptRunner()
+def test_imported_module_shares_runner_random_stream(tmp_path, runner):
+    (tmp_path / 'random-value.slip').write_text('value: random')
     runner.source_dir = str(tmp_path)
-
-    imported = await runner.handle_script("""
-    seed-random 91
-    module: import `file://random-value.slip`
-    #[module.value, random]
+    imported = runner.handle_script("""
+        seed-random 91
+        module: import `file://random-value.slip`
+        #[module.value, random]
     """)
-    direct = await runner.handle_script("""
-    seed-random 91
-    #[random, random]
-    """)
-
-    assert imported.status == "ok", imported.error_message
-    assert direct.status == "ok", direct.error_message
+    direct = runner.handle_script('seed-random 91; #[random, random]')
+    assert imported.status == 'ok', imported.error_message
+    assert direct.status == 'ok', direct.error_message
     assert imported.value == direct.value
 
 
-@pytest.mark.asyncio
-async def test_return_multiple_values_explains_parentheses():
-    runner = ScriptRunner()
+def test_return_multiple_values_explains_parentheses(runner):
+    result = runner.handle_script('f: fn {} [return 1 = 1]; f')
+    assert result.status == 'err'
+    assert 'return takes at most one value' in result.error_message
+    assert 'wrap complex return expressions in parentheses' \
+        in result.error_message
 
-    res = await runner.handle_script("""
-    f: fn {} [ return 1 = 1 ]
-    f
+
+def test_get_body_returns_code_for_typed_method(runner):
+    result = runner.handle_script("""
+        add: fn {a: int, b: int} [a + b]
+        body: get-body add {a: int, b: int}
+        is-code body
     """)
-
-    assert res.status == "err"
-    assert "return takes at most one value" in (res.error_message or "")
-    assert "wrap complex return expressions in parentheses" in (res.error_message or "")
+    assert result.status == 'ok', result.error_message
+    assert result.value is True
 
 
-@pytest.mark.asyncio
-async def test_get_body_returns_code_for_typed_method():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    res = await runner.handle_script("""
-    add: fn {a: int, b: int} [ a + b ]
-    body: get-body add {a: int, b: int}
-    is-code body
+def test_test_and_test_all_helpers(runner):
+    result = runner.handle_script("""
+        good: fn {a, b} [a + b] |example {a: 2, b: 3 -> 5}
+        bad: fn {x} [x + 1] |example {x: 2 -> 4}
+        passed: test good
+        failed: do [test bad]
+        #[passed, failed.status, failed.error.code]
     """)
-    assert res.status == "ok"
-    assert res.value is True
-
-
-@pytest.mark.asyncio
-async def test_test_and_test_all_helpers():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    # One passing, one failing function
-    res = await runner.handle_script("""
-    good: fn {a, b} [ a + b ] |example { a: 2, b: 3 -> 5 }
-    bad: fn {x} [ x + 1 ] |example { x: 2 -> 4 }
-    passed: test good
-    failed: do [ test bad ]
-    #[ passed, failed.status, failed.error.code ]
+    assert result.status == 'ok', result.error_message
+    assert result.value == [1, PathLiteral(Path(['err'])),
+                            PathLiteral(Path(['test-failed']))]
+    result = runner.handle_script("""
+        out: do [test-all]
+        (out.error.data.passed >= 1) and (
+            out.error.data.passed + out.error.data.failed >= 1
+        )
     """)
-    assert res.status == "ok"
-    assert res.value == [1, "`err`", "`test-failed`"]
+    assert result.status == 'ok', result.error_message
+    assert result.value is True
 
-    # test-all over current scope finds at least the two above
-    res2 = await runner.handle_script("""
-    out: do [ test-all ]
-    (out.error.data.passed >= 1) and \
-      (out.error.data.passed + out.error.data.failed >= 1)
+
+def test_run_with_accepts_grouped_current_scope(runner):
+    result = runner.handle_script('run-with [a: 123] (current-scope); a')
+    assert result.status == 'ok', result.error_message
+    assert result.value == 123
+
+
+def test_get_body_missing_sig_errors_cleanly(runner):
+    result = runner.handle_script("""
+        add: fn {a: int, b: int} [a + b]
+        probe: do [get-body add {a: string, b: string}]
+        probe.status
     """)
-    assert res2.status == "ok"
-    assert res2.value is True
+    assert result.status == 'ok', result.error_message
+    assert result.value == PathLiteral(Path(['err']))
 
 
-@pytest.mark.asyncio
-async def test_run_with_accepts_zero_arity_callable_target_current_scope():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    # Pass the zero-arity callable 'current-scope' as the target scope to run-with.
-    res = await runner.handle_script("""
-    run-with [ a: 123 ] current-scope
-    a
-    """)
-    assert res.status == "ok"
-    assert res.value == 123  # 'a' bound into current scope by run-with
-
-
-@pytest.mark.asyncio
-async def test_get_body_missing_sig_errors_cleanly():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    # Define a typed method, then request a mismatched signature body and expect an error
-    res = await runner.handle_script("""
-    add: fn {a: int, b: int} [ a + b ]
-    probe: do [ get-body add {a: string, b: string} ]
-    probe.status
-    """)
-    assert res.status == "ok"
-    assert res.value == "`err`"
-
-
-@pytest.mark.asyncio
-async def test_friendly_callable_name_prints_kebab_for_stdlib_method():
-    runner = ScriptRunner()
-    await runner._initialize()
-
-    # Force an error while passing a StdLib method as an argument so the stacktrace prints it.
-    # 'str-join' is a StdLib method exposed to SLIP; calling 'add 1 str-join' will error.
-    res = await runner.handle_script("add 1 str-join")
-    assert res.status == "err"
-    # Ensure the stacktrace is present and shows 'str-join' (kebab-cased friendly name)
-    em = res.error_message or ""
-    assert "SLIP stacktrace:" in em
-    assert "str-join" in em
+def test_friendly_callable_name_prints_kebab_for_stdlib_method(runner):
+    result = runner.handle_script('add 1 str-join')
+    assert result.status == 'err'
+    assert 'SLIP stacktrace:' in result.error_message
+    assert 'str-join' in result.error_message

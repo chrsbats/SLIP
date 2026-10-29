@@ -1,0 +1,483 @@
+import pytest
+
+from slip import ScriptRunner
+from slip.slip_datatypes import GetPath, Name, PipedCallable
+
+
+@pytest.mark.asyncio
+async def test_functions_capture_operators_at_definition_in_script_order():
+    result = await ScriptRunner().handle_script("""
+f: fn {x} [x + 1]
+/+: |core-sub
+g: fn {x} [x + 1]
+#[f 10, g 10]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [11, 9]
+
+
+@pytest.mark.asyncio
+async def test_unrelated_source_edit_keeps_forward_names_dynamic():
+    result = await ScriptRunner().handle_script("""
+f: fn {a, b} [target a b]
+target: core-add
+unrelated: [0]
+unrelated[0][0]: 1
+before: f 10 3
+target: core-sub
+#[before, f 10 3]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [13, 7]
+
+
+@pytest.mark.asyncio
+async def test_pipe_binding_captures_its_callable_target():
+    result = await ScriptRunner().handle_script("""
+target: core-add
+op: |target
+target: core-sub
+10 op 3
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 13
+
+
+@pytest.mark.asyncio
+async def test_captured_prefix_call_and_explicit_late_bound_path():
+    result = await ScriptRunner().handle_script("""
+target: core-add
+captured: fn {a, b} [target a b]
+late: fn {a, b} [call `target` #[a, b]]
+target: core-sub
+#[captured 10 3, late 10 3]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [13, 7]
+
+
+@pytest.mark.asyncio
+async def test_quoted_operator_path_stays_late_bound_next_to_captured_use():
+    result = await ScriptRunner().handle_script("""
+op: |core-add
+probe: fn {x} [first: x op 1; #[first, x `op` 1]]
+/op: |core-sub
+probe 10
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [11, 9]
+
+
+@pytest.mark.asyncio
+async def test_explicit_pipes_in_function_bodies_capture_the_target():
+    result = await ScriptRunner().handle_script("""
+target: core-add
+captured: fn {a, b} [a |target b]
+target: core-sub
+captured 10 3
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 13
+
+
+@pytest.mark.asyncio
+async def test_callable_parameters_and_local_shadowing_are_per_invocation():
+    result = await ScriptRunner().handle_script("""
+apply: fn {f, x} [f x]
+inc: fn {x} [x + 1]
+dec: fn {x} [x - 1]
+local: fn {x} [inc: fn {y} [y * 2]; inc x]
+#[apply inc 10, apply dec 10, local 10, inc 10]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [11, 9, 20, 11]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binding", ["{target}", "vars"])
+async def test_scope_binders_can_shadow_a_captured_callable(binding):
+    result = await ScriptRunner().handle_script(f"""
+target: core-add
+probe: fn {{vars}} [
+    answer: 0
+    foreach {binding} #[core-sub] [answer: target 10 3]
+    answer
+]
+probe {{target}}
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 7
+
+
+@pytest.mark.asyncio
+async def test_local_derived_callable_is_read_once_after_shadowing_capture():
+    result = await ScriptRunner().handle_script("""
+target: core-add
+probe: fn {} [
+    target: cell {} [emit 'read' 'target'; core-sub]
+    target 10 3
+]
+probe
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 7
+    assert result.side_effects == [{"topics": ["read"], "message": "target"}]
+
+
+@pytest.mark.asyncio
+async def test_piped_callable_values_work_as_higher_order_arguments():
+    result = await ScriptRunner().handle_script("""
+operation: |core-abs
+apply: fn {f, value} [f value]
+#[apply operation -2, map operation #[-3, 4], call operation #[-5]]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [2, [3, 4], 5]
+
+
+@pytest.mark.asyncio
+async def test_prepared_operands_read_current_frames_and_replacement_objects():
+    runner = ScriptRunner()
+    result = await runner.handle_script("""
+calculate: fn {obj, extra} [obj.stats.weight + extra]
+""")
+    assert result.status == "ok", result.error_message
+    function = runner.root_scope["calculate"]
+    obj = {"stats": {"weight": 4}}
+    for weight, extra in ((4, 1), (8, 2)):
+        obj["stats"]["weight"] = weight
+        assert await runner.evaluator.call(
+            function, [obj, extra], runner.root_scope,
+        ) == weight + extra
+    obj = {"stats": {"weight": 20}}
+    assert await runner.evaluator.call(
+        function, [obj, 3], runner.root_scope,
+    ) == 23
+
+
+@pytest.mark.asyncio
+async def test_preparation_and_foreach_lookahead_do_not_read_host_properties():
+    class Object:
+        reads = 0
+
+        @property
+        def visible(self):
+            self.reads += 1
+            return True
+
+    obj = Object()
+    runner = ScriptRunner()
+    runner.root_scope["obj"] = obj
+    result = await runner.handle_script("""
+observe: fn {} [
+    foreach {i} #[1, 2, 3] [if [obj.visible] [emit 'visible' i]]
+]
+""")
+    assert result.status == "ok", result.error_message
+    assert obj.reads == 0
+    result = await runner.handle_script("observe")
+    assert result.status == "ok", result.error_message
+    assert obj.reads == 3
+    assert [effect["message"] for effect in result.side_effects] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_refs_and_cells_remain_live_inside_prepared_functions():
+    result = await ScriptRunner().handle_script("""
+state: #{hp: 60}
+hp: ref `state.hp`
+wounded: cell {value: `state.hp`} [value < 50]
+observe: fn {} [#[hp, wounded]]
+before: observe
+state.hp: 40
+#[before, observe]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [[60, False], [40, True]]
+
+
+@pytest.mark.asyncio
+async def test_preparation_does_not_invoke_zero_arity_functions():
+    runner = ScriptRunner()
+    result = await runner.handle_script("""
+answer: fn {} [emit 'answer' 42; 42]
+use-answer: fn {} [answer]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.side_effects == []
+    result = await runner.handle_script("use-answer")
+    assert result.status == "ok", result.error_message
+    assert result.value == 42
+    assert result.side_effects == [{"topics": ["answer"], "message": 42}]
+
+
+@pytest.mark.asyncio
+async def test_zero_arity_argument_keeps_existing_return_value_semantics():
+    result = await ScriptRunner().handle_script("is-none return")
+    assert result.status == "ok", result.error_message
+    assert result.value is True
+
+
+@pytest.mark.asyncio
+async def test_captured_generic_retains_shared_method_identity():
+    result = await ScriptRunner().handle_script("""
+describe: fn {x: `int`} ['int']
+saved: fn {x} [describe x]
+describe: fn {x: `string`} ['string']
+#[saved 1, saved 'a']
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == ["int", "string"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    "#{value: target 10 3}",
+    "task [return (target 10 3)]",
+])
+async def test_call_local_shadowing_reaches_child_scopes(body):
+    result = await ScriptRunner().handle_script(f"""
+target: core-add
+probe: fn {{}} [target: core-sub; {body}]
+probe
+""")
+    assert result.status == "ok", result.error_message
+    if body.startswith("task"):
+        assert await result.slip_result == 7
+    else:
+        assert result.value == {"value": 7}
+
+
+@pytest.mark.asyncio
+async def test_local_operator_shadowing_reaches_dict_construction():
+    result = await ScriptRunner().handle_script("""
+op: |core-add
+probe: fn {} [op: |core-sub; #{value: 10 op 3}]
+probe
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == {"value": 7}
+
+
+@pytest.mark.asyncio
+async def test_example_method_synthesis_preserves_definition_time_capture():
+    result = await ScriptRunner().handle_script("""
+f: fn {x} [x + 1] |example {x: 1 -> 2}
+/+: |core-sub
+f 10
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 11
+
+
+@pytest.mark.asyncio
+async def test_callables_inside_dynamic_indices_are_captured():
+    result = await ScriptRunner().handle_script("""
+selector: core-add
+choose: fn {xs} [xs[(selector 1 1)]]
+selector: core-sub
+choose #[10, 20, 30]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 30
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body, expected", [
+    ("xs[(selector 1 1)]: 99; xs", [10, 20, 99]),
+    ("~xs[(selector 1 1)]; xs", [10, 20]),
+    ("#{(selector 1 1): 99}", {"2": 99}),
+    ("[xs[(selector 1 1)], spare]: #[99, 0]; xs", [10, 20, 99]),
+])
+async def test_mutation_targets_and_dict_keys_capture_executable_calls(
+    body, expected,
+):
+    result = await ScriptRunner().handle_script(f"""
+selector: core-add
+change: fn {{xs}} [{body}]
+selector: core-sub
+change #[10, 20, 30]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+
+
+@pytest.mark.asyncio
+async def test_foreach_live_member_operator_accumulates_with_one_read():
+    class Operators:
+        reads = 0
+
+        @property
+        def plus(self):
+            self.reads += 1
+            return PipedCallable(lambda a, b: a + b, "add")
+
+    operators = Operators()
+    runner = ScriptRunner()
+    runner.root_scope["ops"] = operators
+    result = await runner.handle_script("""
+total: 0
+foreach {i} #[1, 2, 3] [total ops.plus i]
+total
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 6
+    assert operators.reads == 3
+
+
+@pytest.mark.asyncio
+async def test_filter_operators_retain_definition_time_capture():
+    result = await ScriptRunner().handle_script("""
+choose: fn {xs} [xs[.hp > 1]]
+/>: |core-lt
+selected: choose #[#{hp: 0}, #{hp: 2}]
+selected.hp
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [2]
+
+
+@pytest.mark.asyncio
+async def test_unselected_invalid_pipe_is_not_executed_during_preparation():
+    result = await ScriptRunner().handle_script("""
+f: fn {} [if [false] [1 |+ 2]; 42]
+f
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 42
+
+
+@pytest.mark.asyncio
+async def test_interpolation_captures_calls_and_reads_current_parameters():
+    result = await ScriptRunner().handle_script("""
+target: core-add
+describe: fn {x} ["answer {{target x 1}}"]
+target: core-sub
+#[describe 10, describe 20]
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == ["answer 11", "answer 21"]
+
+
+@pytest.mark.asyncio
+async def test_attached_where_guard_captures_known_calls():
+    result = await ScriptRunner().handle_script("""
+accept: core-gt
+choose: fn {x} ['accepted'] |where [accept x 0]
+accept: core-lt
+choose 10
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_prepared_function_body_remains_editable_source_code():
+    runner = ScriptRunner()
+    result = await runner.handle_script("calculate: fn {x} [x + 1]")
+    assert result.status == "ok", result.error_message
+    function = runner.root_scope["calculate"]
+    method = function.methods[0]
+    assert await runner.evaluator.call(
+        function, [10], runner.root_scope,
+    ) == 11
+    method.body[0][1].segments[0].text = "-"
+    assert await runner.evaluator.call(
+        function, [10], runner.root_scope,
+    ) == 9
+    method.body[0] = [GetPath([Name("x")]), GetPath([Name("*")]), 3]
+    assert await runner.evaluator.call(
+        function, [10], runner.root_scope,
+    ) == 30
+
+
+@pytest.mark.asyncio
+async def test_editing_nested_dictionary_syntax_refreshes_execution():
+    runner = ScriptRunner()
+    result = await runner.handle_script("build: fn {} [#{value: 1}]")
+    assert result.status == "ok", result.error_message
+    function = runner.root_scope["build"]
+    assert await runner.evaluator.call(function, [], runner.root_scope) == {
+        "value": 1,
+    }
+    function.methods[0].body[0][0][1][0][1] = 2
+    assert await runner.evaluator.call(function, [], runner.root_scope) == {
+        "value": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_known_calls_and_operands_skip_symbolic_resolution(monkeypatch):
+    runner = ScriptRunner()
+    result = await runner.handle_script("calculate: fn {a, b} [a + b]")
+    assert result.status == "ok", result.error_message
+
+    def unexpected(*args):
+        raise AssertionError("prepared expression entered symbolic resolution")
+
+    monkeypatch.setattr(runner.evaluator.path_resolver, "read", unexpected)
+    for a, b in ((2, 3), (20, 30)):
+        assert await runner.evaluator.call(
+            runner.root_scope["calculate"], [a, b], runner.root_scope,
+        ) == a + b
+
+
+@pytest.mark.asyncio
+async def test_cached_module_captures_use_each_runners_live_host_data(
+    tmp_path, monkeypatch,
+):
+    from slip import slip_file
+
+    monkeypatch.setenv("SLIP_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(slip_file, "_compiled_slip_cache", {})
+    module = tmp_path / "commands.slip"
+    module.write_text(
+        "lookup: fn {object-id: `string`} ["
+        "obj: host-object object-id; obj.value] |public\n"
+    )
+    commands = []
+    worlds = []
+    for label in ("first", "second"):
+        world = {"id:item": {"value": label}}
+        worlds.append(world)
+        runner = ScriptRunner(host_data=world.__getitem__)
+        commands.append(await runner.import_public_module(
+            f"file://{module.as_posix()}"
+        ))
+        slip_file._compiled_slip_cache.clear()
+
+    payload = {"function": "lookup", "arguments": {"object-id": "id:item"}}
+    for index, label in ((0, "first"), (1, "second"), (0, "replacement")):
+        if label == "replacement":
+            worlds[index]["id:item"] = {"value": label}
+        result = await commands[index].run_json_command(payload)
+        assert result.status == "ok", result.error_message
+        assert result.value == label
+
+
+@pytest.mark.asyncio
+async def test_example_methods_keep_initially_forward_names_dynamic():
+    result = await ScriptRunner().handle_script('''
+f: fn {a, b} [target a b] |example {a: 1, b: 2 -> 3}
+target: core-add
+before: f 10 3
+target: core-sub
+#[before, f 10 3]
+''')
+    assert result.status == 'ok', result.error_message
+    assert result.value == [13, 7]
+
+
+@pytest.mark.asyncio
+async def test_example_method_guards_keep_forward_names_dynamic():
+    runner = ScriptRunner()
+    result = await runner.handle_script('''
+choose: fn {x} [x] |where [check x] |example {x: 1 -> 1}
+check: fn {x} [true]
+''')
+    assert result.status == 'ok', result.error_message
+    function = runner.root_scope['choose']
+    assert await runner.evaluator.call(function, [7], runner.root_scope) == 7
+    runner.root_scope['check'] = runner.root_scope['core-not']
+    with pytest.raises(TypeError, match='No matching method'):
+        await runner.evaluator.call(function, [7], runner.root_scope)

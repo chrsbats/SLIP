@@ -1,0 +1,158 @@
+{
+  "python": "3.12.11",
+  "parse_ms": 203.74156802427024,
+  "setup_ms": [
+    0.9315939387306571,
+    0.5063279531896114,
+    0.5635250126942992,
+    0.41721598245203495,
+    0.457175076007843,
+    0.35946303978562355,
+    0.45867799781262875
+  ],
+  "source_sha256": {
+    "slip/slip_core.py": "d0d1c2a1620de63d5c3c6e5187365b32207812f77c743d4a83564e67b876284c",
+    "slip/slip_library.py": "3fb0d86c2865e4e00c4c1359185edde77e7c4b4048d46642ad16b98882160e71",
+    "slip/slip_syntax.py": "845cdd419ed10baffe5f593f67b63995eecf95a457be0692f1688533a1b14083",
+    "independent/benchmark_core.py": "1a6fc223543bbf17f76d255b68e5cf72cd8096880274b0e8ede21a6be04e52eb"
+  },
+  "source_lines": {
+    "slip/slip_core.py": 804,
+    "slip/slip_library.py": 272,
+    "slip/slip_syntax.py": 150,
+    "independent/benchmark_core.py": 135
+  },
+  "results": {
+    "sum": {
+      "batch": 2,
+      "samples_ms": [
+        74.7636589803733,
+        55.813482496887445,
+        51.18727748049423,
+        54.059930494986475,
+        50.850944535341114,
+        54.16764446999878,
+        53.347704000771046
+      ],
+      "profile_calls": {
+        "specificity": 5,
+        "__call__": 17023,
+        "evaluate": 13023,
+        "invoke": 12018,
+        "bind": 1003,
+        "targets": 3008,
+        "argument": 9018,
+        "read": 23044,
+        "run_with": 1000,
+        "while_loop": 1001,
+        "__setitem__": 3007,
+        "<genexpr>": 21,
+        "shape": 9018,
+        "__getitem__": 12014,
+        "execute": 8007,
+        "__init__": 1002,
+        "conditional": 1002,
+        "is_function": 23044,
+        "arity": 2,
+        "current_scope": 1
+      },
+      "median_ms": 54.059930494986475
+    },
+    "sum-while": {
+      "batch": 3,
+      "samples_ms": [
+        28.827243639777105,
+        25.106696994043887,
+        27.114792338882882,
+        27.857352669040363,
+        24.352601651723187,
+        27.0951659961914,
+        27.103843982331455
+      ],
+      "profile_calls": {
+        "specificity": 1,
+        "__call__": 7007,
+        "evaluate": 6007,
+        "invoke": 7005,
+        "bind": 1,
+        "targets": 2002,
+        "argument": 3003,
+        "read": 9011,
+        "while_loop": 1001,
+        "__setitem__": 2002,
+        "<genexpr>": 6,
+        "shape": 5005,
+        "__getitem__": 5004,
+        "execute": 3002,
+        "__init__": 1,
+        "is_function": 9011,
+        "arity": 1
+      },
+      "median_ms": 27.103843982331455
+    },
+    "calls": {
+      "batch": 2,
+      "samples_ms": [
+        43.90038503333926,
+        39.469455485232174,
+        39.541606965940446,
+        41.3807780132629,
+        40.31565197510645,
+        38.81644847569987,
+        41.04735900182277
+      ],
+      "profile_calls": {
+        "specificity": 1001,
+        "__call__": 10007,
+        "evaluate": 7007,
+        "invoke": 8005,
+        "bind": 1001,
+        "targets": 2002,
+        "argument": 4003,
+        "read": 12011,
+        "while_loop": 1001,
+        "__setitem__": 2002,
+        "<genexpr>": 6006,
+        "shape": 6005,
+        "__getitem__": 5004,
+        "execute": 4002,
+        "__init__": 1001,
+        "is_function": 12011,
+        "arity": 1001
+      },
+      "median_ms": 40.31565197510645
+    },
+    "query": {
+      "batch": 414,
+      "samples_ms": [
+        0.25382702877736035,
+        0.24879970059140724,
+        0.2557224951738465,
+        0.26376688895648087,
+        0.24223242265482745,
+        0.25396080685392525,
+        0.23932260875072744
+      ],
+      "profile_calls": {
+        "specificity": 2,
+        "evaluate": 41,
+        "invoke": 41,
+        "bind": 1,
+        "__call__": 83,
+        "targets": 41,
+        "argument": 40,
+        "read": 121,
+        "<genexpr>": 9,
+        "shape": 41,
+        "__getitem__": 122,
+        "execute": 41,
+        "__init__": 41,
+        "is_function": 121,
+        "arity": 1
+      },
+      "median_ms": 0.25382702877736035
+    }
+  },
+  "inputs_unchanged": true,
+  "legacy_modules_loaded": false
+}

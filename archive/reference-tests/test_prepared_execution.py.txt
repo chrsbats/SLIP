@@ -1,0 +1,641 @@
+import copy
+
+import pytest
+
+from benchmarks import python_overhead
+from slip import ScriptRunner
+from slip.slip_datatypes import Scope
+
+
+@pytest.mark.asyncio
+async def test_bound_expression_is_source_order_functions_and_live_getters():
+    runner = ScriptRunner()
+    result = await runner.handle_script("calculate: fn {x, y} [x + y * 2]")
+    assert result.status == "ok", result.error_message
+    function = runner.root_scope["calculate"]
+    method = function.methods[0]
+    terms = runner.evaluator._program(method.body[0], method)
+
+    assert isinstance(terms, list) and len(terms) == 5
+    scope = Scope(bindings={"x": 4, "y": 5})
+    assert callable(terms[0]) and terms[0](scope) == 4
+    assert terms[1] is runner.root_scope["+"]
+    assert callable(terms[2]) and terms[2](scope) == 5
+    assert terms[3] is runner.root_scope["*"]
+    assert terms[4] == 2
+    for x, y in ((10, 5), (3, 4)):
+        assert await runner.evaluator.call(
+            function, [x, y], runner.root_scope,
+        ) == (x + y) * 2
+        assert runner.evaluator._program(method.body[0], method) is terms
+
+
+@pytest.mark.asyncio
+async def test_bound_closure_and_slip_control_helper_use_native_scopes():
+    result = await ScriptRunner().handle_script("""
+make-adder: fn {n} [fn {x} [x + n]]
+add-ten: make-adder 10
+total: 0
+for {i} 0 3 [total: total + (add-ten i)]
+total
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 33
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [
+    "loop-sum", "function-calls", "traverse-objects",
+])
+async def test_prepared_calls_do_not_enter_metadata_or_legacy_invocation(
+    name, monkeypatch,
+):
+    runner, _ = await python_overhead.prepare()
+    _, args, expected = python_overhead.make_cases()[name]
+
+    def rejected_path(*args, **kwargs):
+        raise AssertionError("prepared execution entered the old pipeline")
+
+    for method in (
+        "_bound_read", "_bound_pipe", "_bound_arguments", "_raw_operand",
+        "_invoke", "_call_value", "_call_slip", "_call_method",
+    ):
+        monkeypatch.setattr(
+            runner.evaluator, method, rejected_path, raising=False,
+        )
+    assert await runner.evaluator.call(
+        runner.root_scope[name], args, runner.root_scope,
+    ) == expected
+
+
+@pytest.mark.asyncio
+async def test_explicit_pipe_keeps_its_mode_after_local_callable_shadowing():
+    result = await ScriptRunner().handle_script("""
+target: core-add
+probe: fn {x} [target: core-sub; x |target 3]
+probe 10
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 7
+
+
+@pytest.mark.asyncio
+async def test_grouped_argument_does_not_consume_a_following_operator_alias():
+    result = await ScriptRunner().handle_script("""
+keep-right: fn {left, right} [right]
+payload: #{op: 99}
+op: |core-len
+0 |keep-right (payload) op
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 1
+
+
+@pytest.mark.asyncio
+async def test_captured_python_calls_reuse_adapters_and_keep_value_identity(
+    monkeypatch,
+):
+    from slip.slip_datatypes import NativeFunction
+
+    def increment(value):
+        return value + 1
+
+    runner = ScriptRunner()
+    runner.root_scope["host-increment"] = increment
+    runner.root_scope["same-function"] = lambda value: value is increment
+    loaded = await runner.handle_script("""
+invoke-host: fn {value} [host-increment value]
+inspect-host: fn {} [same-function host-increment]
+""")
+    assert loaded.status == "ok", loaded.error_message
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("a captured native callable rebuilt its adapter")
+
+    monkeypatch.setattr(NativeFunction, "__init__", unexpected)
+    for value in (1, 10):
+        assert await runner.evaluator.call(
+            runner.root_scope["invoke-host"], [value], runner.root_scope,
+        ) == value + 1
+        assert await runner.evaluator.call(
+            runner.root_scope["inspect-host"], [], runner.root_scope,
+        ) is True
+
+
+@pytest.mark.asyncio
+async def test_lazy_branch_lookup_observes_a_shadow_created_by_condition():
+    result = await ScriptRunner().handle_script("""
+branch: core-add
+probe: fn {} [if (branch: [7]; true) branch [0]]
+probe
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 7
+
+
+@pytest.mark.asyncio
+async def test_lazy_branch_lookup_observes_replaced_unconsumed_source():
+    from slip.slip_datatypes import Code
+
+    runner = ScriptRunner()
+    calls = []
+
+    def replace_branch():
+        calls.append("condition")
+        runner.root_scope["probe"].methods[0].body[0][2] = Code([[9]])
+        return True
+
+    runner.root_scope["replace-branch"] = replace_branch
+    result = await runner.handle_script(
+        "probe: fn {} [if (replace-branch) [1] [0]]; probe"
+    )
+    assert result.status == "ok", result.error_message
+    assert result.value == 9
+    assert calls == ["condition"]
+
+
+@pytest.mark.asyncio
+async def test_replaced_binding_map_can_shadow_captured_prefix_and_pipe():
+    runner = ScriptRunner()
+    calls = []
+
+    def replace(*, scope):
+        calls.append("replace")
+        scope.bindings = dict(scope.bindings)
+        scope.bindings["target"] = scope.parent["core-sub"]
+
+    runner.root_scope["replace-bindings"] = replace
+    result = await runner.handle_script("""
+target: core-add
+probe: fn {} [replace-bindings; #[target 10 3, 10 |target 3]]
+probe
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == [7, 7]
+    assert calls == ["replace"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grow, expected", [(False, 5), (True, 6)])
+async def test_current_expression_resize_preserves_single_head_effect(
+    grow, expected,
+):
+    from slip.slip_datatypes import GetPath, Name
+
+    runner = ScriptRunner()
+    calls = []
+
+    def edit_current():
+        calls.append("head")
+        expression = runner.root_scope["probe"].methods[0].body[0]
+        if grow:
+            expression.extend([GetPath([Name("+")]), 1])
+        else:
+            del expression[1:]
+        return 5
+
+    runner.root_scope["edit-current"] = edit_current
+    expression = "(edit-current)" if grow else "(edit-current) + 1"
+    result = await runner.handle_script(
+        f"probe: fn {{}} [{expression}]; probe"
+    )
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert calls == ["head"]
+
+
+@pytest.mark.asyncio
+async def test_slip_control_helper_reuses_bound_code_across_call_frames(
+    monkeypatch,
+):
+    from slip import slip_prepare
+
+    runner = ScriptRunner()
+    result = await runner.handle_script("""
+exercise: fn {offset} [
+    total: 0
+    for {i} 0 3 [total: total + offset + i]
+    total
+]
+""")
+    assert result.status == "ok", result.error_message
+    function = runner.root_scope["exercise"]
+    assert await runner.evaluator.call(function, [10], runner.root_scope) == 33
+
+    def unexpected(*args):
+        raise AssertionError("unchanged literal Code rebuilt its operands")
+
+    monkeypatch.setattr(slip_prepare, "operand", unexpected)
+    monkeypatch.setattr(runner.evaluator, "_expand_code_literal", unexpected)
+    assert await runner.evaluator.call(function, [20], runner.root_scope) == 63
+
+
+@pytest.mark.asyncio
+async def test_prepared_filters_and_vector_updates_keep_their_operations(
+    monkeypatch,
+):
+    from slip import slip_prepare
+
+    runner = ScriptRunner()
+    loaded = await runner.handle_script("""
+choose: fn {xs, limit} [xs[.hp > limit].hp]
+bump: fn {xs} [xs.hp[< 50]: + 1; xs.hp]
+""")
+    assert loaded.status == "ok", loaded.error_message
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("a retained path reinterpreted its source")
+
+    monkeypatch.setattr(slip_prepare, "operand", unexpected)
+    for name in (
+        "_get_path", "_get_segment_key", "_apply_segments",
+        "_normalize_relative_predicate_terms", "_predicate_matches",
+    ):
+        monkeypatch.setattr(
+            runner.evaluator.path_resolver, name, unexpected, raising=False,
+        )
+    for hp in (10, 30):
+        values = [{"hp": hp}, {"hp": 60}]
+        assert await runner.evaluator.call(
+            runner.root_scope["choose"], [values, 50], runner.root_scope,
+        ) == [60]
+        assert await runner.evaluator.call(
+            runner.root_scope["bump"], [values], runner.root_scope,
+        ) == [hp + 1, 60]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolves_prototype_once_per_candidate(monkeypatch):
+    runner = ScriptRunner()
+    loaded = await runner.handle_script("""
+Player: scope #{}
+describe: fn {x: Player} [1]
+describe: fn {x} [0]
+""")
+    assert loaded.status == "ok", loaded.error_message
+    function = runner.root_scope["describe"]
+    annotation = function.methods[0].signature._parameters[0].annotation
+    reads = []
+    original = runner.evaluator.path_resolver.get
+
+    async def observe(path, scope):
+        if path is annotation:
+            reads.append(path)
+        return await original(path, scope)
+
+    monkeypatch.setattr(runner.evaluator.path_resolver, "get", observe)
+    assert await runner.evaluator.call(
+        function, [Scope(parent=runner.root_scope["Player"])],
+        runner.root_scope,
+    ) == 1
+    assert len(reads) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_primitives_do_not_read_bindings(monkeypatch):
+    runner = ScriptRunner()
+    loaded = await runner.handle_script("""
+describe: fn {x: `int`} [1]
+describe: fn {x: `string`} [2]
+""")
+    assert loaded.status == "ok", loaded.error_message
+    reads = []
+    original = runner.evaluator.path_resolver.get
+
+    async def observe(path, scope):
+        reads.append(path)
+        return await original(path, scope)
+
+    monkeypatch.setattr(runner.evaluator.path_resolver, "get", observe)
+    assert await runner.evaluator.call(
+        runner.root_scope["describe"], [3], runner.root_scope,
+    ) == 1
+    assert reads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operator, left', [
+    ('and', 'true'), ('or', 'false'),
+])
+async def test_logical_rhs_growth_consumes_appended_effect_once(
+    operator, left,
+):
+    from slip.slip_datatypes import GetPath, Group, Name
+
+    runner = ScriptRunner()
+    calls = []
+
+    def edit_current():
+        calls.append('head')
+        source = runner.root_scope['probe'].methods[0].body[0]
+        source.extend([
+            GetPath([Name('+')]), Group([[GetPath([Name('later')])]]),
+        ])
+        return 5
+
+    def later():
+        calls.append('tail')
+        return 1
+
+    runner.root_scope['edit-current'] = edit_current
+    runner.root_scope['later'] = later
+    result = await runner.handle_script(
+        f'probe: fn {{}} [{left} {operator} (edit-current) + 1]; probe'
+    )
+    assert result.status == 'ok', result.error_message
+    assert result.value == 7
+    assert calls == ['head', 'tail']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('same_expression', [False, True])
+async def test_template_edit_refreshes_unconsumed_copy_operations(
+    same_expression,
+):
+    from slip.slip_datatypes import Group
+
+    runner = ScriptRunner()
+    calls = []
+
+    def edit_template():
+        calls.append('edit')
+        code = runner.root_scope['probe'].methods[0].body[0][0]
+        if same_expression:
+            code.nodes[0][2] = Group([[9]])
+        else:
+            code.nodes[1][0] = Group([[9]])
+        return 0
+
+    runner.root_scope['edit-template'] = edit_template
+    expression = '(inject (edit-template)) + (2)' if same_expression else (
+        '(inject (edit-template)); (2)'
+    )
+    result = await runner.handle_script(
+        f'probe: fn {{}} [[{expression}]]; run probe'
+    )
+    assert result.status == 'ok', result.error_message
+    assert result.value == 9
+    assert calls == ['edit']
+
+
+@pytest.mark.asyncio
+async def test_effectful_index_refreshes_unread_path_steps():
+    runner = ScriptRunner()
+    runner.root_scope['items'] = [{'old': 1, 'new': 9}]
+    calls = []
+
+    def edit_field():
+        calls.append('index')
+        path = runner.root_scope['probe'].methods[0].body[0][0]
+        path.segments[-1].text = 'new'
+        return 0
+
+    runner.root_scope['edit-field'] = edit_field
+    result = await runner.handle_script(
+        'probe: fn {} [items[(edit-field)].old]; probe'
+    )
+    assert result.status == 'ok', result.error_message
+    assert result.value == 9
+    assert calls == ['index']
+
+
+@pytest.mark.asyncio
+async def test_prepared_indexed_mutations_reuse_live_address_operations(
+    monkeypatch,
+):
+    from slip import slip_prepare
+
+    runner = ScriptRunner()
+    result = await runner.handle_script('''
+change: fn {xs, i, v} [
+    xs[i]: v
+    xs[i]: + 1
+    answer: xs[i]
+    ~xs[i]
+    #[answer, xs]
+]
+''')
+    assert result.status == 'ok', result.error_message
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('a retained mutation reinterpreted its address')
+
+    monkeypatch.setattr(slip_prepare, 'operand', unexpected)
+    monkeypatch.setattr(
+        runner.evaluator.path_resolver, '_get_segment_key', unexpected,
+        raising=False,
+    )
+    for values, index in (([1, 2], 0), ([3, 4, 5], 2)):
+        expected = values[:index] + values[index + 1:]
+        assert await runner.evaluator.call(
+            runner.root_scope['change'], [values, index, 10],
+            runner.root_scope,
+        ) == [11, expected]
+
+
+@pytest.mark.asyncio
+async def test_rhs_can_replace_the_current_mutation_path_segments():
+    from slip.slip_datatypes import Index, Name
+
+    runner = ScriptRunner()
+    runner.root_scope['xs'] = [1, 2]
+    calls = []
+
+    def edit_target():
+        calls.append('rhs')
+        target = runner.root_scope['probe'].methods[0].body[0][0]
+        target.segments = [Name('xs'), Index([1])]
+        return 9
+
+    runner.root_scope['edit-target'] = edit_target
+    result = await runner.handle_script(
+        'probe: fn {} [xs[0]: (edit-target); xs]; probe'
+    )
+    assert result.status == 'ok', result.error_message
+    assert result.value == [1, 9]
+    assert calls == ['rhs']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('delete', [False, True])
+async def test_index_can_replace_the_path_with_an_unread_suffix(delete):
+    from slip.slip_datatypes import Index, Name
+
+    runner = ScriptRunner()
+    runner.root_scope['xs'] = [{'old': 1, 'new': 9}]
+    calls = []
+
+    def edit_target():
+        calls.append('index')
+        target = runner.root_scope['probe'].methods[0].body[0][0]
+        path = target.path if delete else target
+        path.segments = [Name('xs'), Index([0]), Name('new')]
+        return 0
+
+    runner.root_scope['edit-target'] = edit_target
+    expression = '~xs[(edit-target)].old' if delete else (
+        'xs[(edit-target)].old'
+    )
+    result = await runner.handle_script(
+        f'probe: fn {{}} [{expression}]; probe'
+    )
+    assert result.status == 'ok', result.error_message
+    assert result.value == (None if delete else 9)
+    assert runner.root_scope['xs'] == ([{'old': 1}] if delete else [
+        {'old': 1, 'new': 9},
+    ])
+    assert calls == ['index']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('append', [False, True])
+async def test_repeated_template_edits_keep_the_original_source(append):
+    from slip.slip_datatypes import Group
+
+    runner = ScriptRunner()
+    calls = []
+
+    def source():
+        return runner.root_scope['probe'].methods[0].body[0][0]
+
+    def first():
+        calls.append('first')
+        source().nodes[2][0] = Group([[3]])
+        return 0
+
+    def second():
+        calls.append('second')
+        source().nodes[2] = [Group([[9]])]
+        if append:
+            source().nodes.append([Group([[11]])])
+        return 0
+
+    runner.root_scope['first-edit'] = first
+    runner.root_scope['second-edit'] = second
+    result = await runner.handle_script(
+        'probe: fn {} [[(inject (first-edit)); '
+        '(inject (second-edit)); (2)]]; run probe'
+    )
+    assert result.status == 'ok', result.error_message
+    assert result.value == (11 if append else 9)
+    assert calls == ['first', 'second']
+
+
+@pytest.mark.asyncio
+async def test_code_literal_results_keep_independent_expression_lists():
+    runner = ScriptRunner()
+    result = await runner.handle_script("make-code: fn {} [[1]]")
+    assert result.status == "ok", result.error_message
+    function = runner.root_scope["make-code"]
+    first = await runner.evaluator.call(function, [], runner.root_scope)
+    second = await runner.evaluator.call(function, [], runner.root_scope)
+    first[0][0] = 2
+    assert second[0][0] == 1
+
+
+@pytest.mark.asyncio
+async def test_in_block_edit_refreshes_a_statement_before_it_is_consumed():
+    result = await ScriptRunner().handle_script("""
+probe: fn {x} [
+    body: get-body probe {x}
+    body[2][0]: 7
+    1
+]
+probe 0
+""")
+    assert result.status == "ok", result.error_message
+    assert result.value == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression, expected", [
+    ("(edit-next; 1)", 7),
+    ("#[(edit-next), 1]", [None, 7]),
+    ("#{first: edit-next, second: 1}", {"first": None, "second": 7}),
+])
+async def test_nested_consumption_observes_edits_without_repeating_effects(
+    expression, expected,
+):
+    runner = ScriptRunner()
+    calls = []
+
+    def edit_next():
+        calls.append("edit")
+        node = runner.root_scope["probe"].methods[0].body[0][0]
+        if isinstance(node, tuple):
+            node[1][1][1] = 7
+        else:
+            node.nodes[1][0] = 7
+
+    runner.root_scope["edit-next"] = edit_next
+    result = await runner.handle_script(
+        f"probe: fn {{}} [{expression}]; probe"
+    )
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert calls == ["edit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression, expected", [
+    ("(1)", 7),
+    ("#[1]", [7]),
+    ("u8#[1]", b"\x07"),
+    ("#{value: 1}", {"value": 7}),
+])
+async def test_earlier_argument_edit_invalidates_a_nested_consumer_on_entry(
+    expression, expected,
+):
+    runner = ScriptRunner()
+    calls = []
+
+    def edit_next():
+        calls.append("edit")
+        node = runner.root_scope["probe"].methods[0].body[0][2]
+        if isinstance(node, tuple):
+            node[1][0][1] = 7
+        else:
+            node.nodes[0][0] = 7
+        return 0
+
+    runner.root_scope["edit-next"] = edit_next
+    result = await runner.handle_script(
+        "keep-right: fn {left, right} [right]; "
+        f"probe: fn {{}} [keep-right (edit-next) {expression}]; probe"
+    )
+    assert result.status == "ok", result.error_message
+    assert result.value == expected
+    assert calls == ["edit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [
+    "loop-sum", "function-calls", "traverse-objects",
+])
+async def test_production_workloads_execute_prepared_call_lists(
+    name, monkeypatch,
+):
+    from slip import slip_prepare
+
+    runner, _ = await python_overhead.prepare()
+    _, args, expected = python_overhead.make_cases()[name]
+    original = copy.deepcopy(args)
+
+    def source_interpretation(*args, **kwargs):
+        raise AssertionError("prepared execution reentered source reduction")
+
+    for method in (
+        "_interpret_expr", "_eval_prefix", "_reduce_tail", "_read_term",
+        "_prepared_operand",
+    ):
+        monkeypatch.setattr(
+            runner.evaluator, method, source_interpretation, raising=False,
+        )
+    monkeypatch.setattr(slip_prepare, "operand", source_interpretation)
+    for _ in range(2):
+        assert await runner.evaluator.call(
+            runner.root_scope[name], args, runner.root_scope,
+        ) == expected
+    assert args == original
+    assert runner.evaluator.side_effects == []
+    assert runner.evaluator.call_stack == []
