@@ -458,11 +458,14 @@ wheels = [
 
 [[package]]
 name = "python-ulid"
-version = "3.1.0"
+version = "3.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/40/7e/0d6c82b5ccc71e7c833aed43d9e8468e1f2ff0be1b3f657a6fcafbb8433d/python_ulid-3.1.0.tar.gz", hash = "sha256:ff0410a598bc5f6b01b602851a3296ede6f91389f913a5d5f8c496003836f636", size = 93175, upload-time = "2025-08-18T16:09:26.305Z" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/ae/7a7184c95e6217361c23b8ee49a8aa3efa197f6b96f9c2ab75709b753ca3/python_ulid-3.2.1.tar.gz", hash = "sha256:b1f0d75b49a2dcb5ebca902c05c71080f87845a0e4ed10bc7c8c8a0c0eb2679d", size = 96662, upload-time = "2026-07-19T22:21:19.345Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/a0/4ed6632b70a52de845df056654162acdebaf97c20e3212c559ac43e7216e/python_ulid-3.1.0-py3-none-any.whl", hash = "sha256:e2cdc979c8c877029b4b7a38a6fba3bc4578e4f109a308419ff4d3ccf0a46619", size = 11577, upload-time = "2025-08-18T16:09:25.047Z" },
+    { url = "https://files.pythonhosted.org/packages/82/c8/bec7e80617a3b7b65578a343ab04e3d78277683d1b057738bd484822cb21/python_ulid-3.2.1-py3-none-any.whl", hash = "sha256:07aa5eb92cdd21195a922f87f4ec5b1fce6448f92e4bfa2d7b7b77345677655a", size = 12945, upload-time = "2026-07-19T22:21:18.226Z" },
 ]
 
 [[package]]
